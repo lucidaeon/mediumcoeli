@@ -1,0 +1,60 @@
+{
+  "chart_id": "anna_freud",
+  "name": "Anna Freud",
+  "iso_ut": "1895-12-03 14:15:00",
+  "notes": "Gregorian, Vienna CET",
+  "source": "NASA JPL HORIZONS VECTORS, geometric heliocentric J2000/ICRF (CENTER='500@10', VEC_CORR='NONE', OUT_UNITS='AU-D'). x_au/y_au/z_au are barycentric-body minus barycentric-Sun at the requested UT instant. Apply precession+nutation to obtain ecliptic-of-date.",
+  "bodies": {
+    "Earth": {
+      "x_au": 0.2936117560954468,
+      "y_au": 0.8629284971341865,
+      "z_au": 0.3743695330040418
+    },
+    "Moon": {
+      "x_au": 0.2936543187881933,
+      "y_au": 0.8651651997187253,
+      "z_au": 0.3755669307650795
+    },
+    "Mercury": {
+      "x_au": -0.3308548010747047,
+      "y_au": -0.276079536616762,
+      "z_au": -0.1130101139994951
+    },
+    "Venus": {
+      "x_au": -0.3427195206462301,
+      "y_au": 0.5676058987577626,
+      "z_au": 0.2768798865544474
+    },
+    "Mars": {
+      "x_au": -1.111236314919685,
+      "y_au": -1.009618156316851,
+      "z_au": -0.4327218947467183
+    },
+    "Jupiter": {
+      "x_au": -2.742849951824901,
+      "y_au": 4.108088749642555,
+      "z_au": 1.828226858028238
+    },
+    "Saturn": {
+      "x_au": -7.267783302760054,
+      "y_au": -6.256513812985161,
+      "z_au": -2.270945286448251
+    },
+    "Uranus": {
+      "x_au": -11.54054494362257,
+      "y_au": -13.56808888241876,
+      "z_au": -5.778815844716436
+    },
+    "Neptune": {
+      "x_au": 6.171611657597336,
+      "y_au": 27.08724955029142,
+      "z_au": 10.93355126585724
+    },
+    "Pluto": {
+      "x_au": 13.48933036287335,
+      "y_au": 44.46474051929794,
+      "z_au": 9.807745979106897
+    }
+  },
+  "skipped": {}
+}

@@ -1,0 +1,55 @@
+{
+  "chart_id": "unix_overflow_2038",
+  "name": "UNIX 32-bit Overflow",
+  "iso_ut": "2038-01-19 03:14:07",
+  "notes": "UNIX 32-bit overflow moment, London UTC",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), topocentric lat=51.5 lon_e=-0.1667 elev_km=0.011",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 299.1281857,
+      "latitude_deg": -0.0016636
+    },
+    "Moon": {
+      "longitude_deg": 92.8278499,
+      "latitude_deg": -2.1317368
+    },
+    "Mercury": {
+      "longitude_deg": 283.9050243,
+      "latitude_deg": -0.8950729
+    },
+    "Venus": {
+      "longitude_deg": 276.7255816,
+      "latitude_deg": 6.3548795
+    },
+    "Mars": {
+      "longitude_deg": 54.2522902,
+      "latitude_deg": 2.097365
+    },
+    "Jupiter": {
+      "longitude_deg": 114.1684868,
+      "latitude_deg": 0.3942822
+    },
+    "Saturn": {
+      "longitude_deg": 165.7379558,
+      "latitude_deg": 1.9765159
+    },
+    "Uranus": {
+      "longitude_deg": 111.8496173,
+      "latitude_deg": 0.502484
+    },
+    "Neptune": {
+      "longitude_deg": 26.3607048,
+      "latitude_deg": -1.7126924
+    },
+    "Pluto": {
+      "longitude_deg": 321.6748344,
+      "latitude_deg": -8.9277727
+    }
+  },
+  "skipped": {},
+  "observer": {
+    "lat_deg": 51.5,
+    "lon_e_deg": -0.1667,
+    "elev_km": 0.011
+  }
+}

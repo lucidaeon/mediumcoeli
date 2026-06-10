@@ -1,0 +1,37 @@
+{
+  "chart_id": "vettius_valens",
+  "name": "Vettius Valens",
+  "iso_ut": "0120-02-08 16:10:38",
+  "notes": "Julian calendar, LMT Antioch (36\u00b009'25\" E)",
+  "source": "NASA JPL HORIZONS VECTORS, geometric heliocentric J2000/ICRF (CENTER='500@10', VEC_CORR='NONE', OUT_UNITS='AU-D'). x_au/y_au/z_au are barycentric-body minus barycentric-Sun at the requested UT instant. Apply precession+nutation to obtain ecliptic-of-date.",
+  "bodies": {
+    "Earth": {
+      "x_au": -0.9571270817398203,
+      "y_au": 0.2425781177861706,
+      "z_au": 0.1063748301230021
+    },
+    "Moon": {
+      "x_au": -0.9585238293851003,
+      "y_au": 0.2405651172252545,
+      "z_au": 0.1057447628308348
+    },
+    "Mercury": {
+      "x_au": -0.3972905934588445,
+      "y_au": -0.1235471130340993,
+      "z_au": -0.02229478409771724
+    },
+    "Venus": {
+      "x_au": 0.2409433442493348,
+      "y_au": -0.6225573842116517,
+      "z_au": -0.2916545729167536
+    }
+  },
+  "skipped": {
+    "Mars": "",
+    "Jupiter": "",
+    "Saturn": "",
+    "Uranus": "",
+    "Neptune": "",
+    "Pluto": ""
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "chart_id": "william_lilly",
+  "name": "William Lilly",
+  "iso_ut": "1602-05-11 02:05:19",
+  "notes": "1602-05-11 Gregorian (= 1602-05-01 Julian), LMT Diseworth, England",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 49.9869292,
+      "latitude_deg": 6.31e-05
+    },
+    "Moon": {
+      "longitude_deg": 284.8008569,
+      "latitude_deg": 2.6436601
+    },
+    "Mercury": {
+      "longitude_deg": 34.2665189,
+      "latitude_deg": -2.4632962
+    },
+    "Venus": {
+      "longitude_deg": 49.155113,
+      "latitude_deg": -0.600087
+    },
+    "Mars": {
+      "longitude_deg": 156.5497511,
+      "latitude_deg": 1.6267354
+    },
+    "Jupiter": {
+      "longitude_deg": 193.493659,
+      "latitude_deg": 1.5257059
+    },
+    "Uranus": {
+      "longitude_deg": 40.0319253,
+      "latitude_deg": -0.3928873
+    },
+    "Neptune": {
+      "longitude_deg": 149.6093436,
+      "latitude_deg": 0.7421755
+    }
+  },
+  "skipped": {
+    "Saturn": "",
+    "Pluto": ""
+  }
+}

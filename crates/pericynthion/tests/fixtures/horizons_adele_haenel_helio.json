@@ -1,0 +1,60 @@
+{
+  "chart_id": "adele_haenel",
+  "name": "Ad\u00e8le Haenel",
+  "iso_ut": "1989-02-11 15:20:00",
+  "notes": "Gregorian, Paris CET",
+  "source": "NASA JPL HORIZONS VECTORS, geometric heliocentric J2000/ICRF (CENTER='500@10', VEC_CORR='NONE', OUT_UNITS='AU-D'). x_au/y_au/z_au are barycentric-body minus barycentric-Sun at the requested UT instant. Apply precession+nutation to obtain ecliptic-of-date.",
+  "bodies": {
+    "Earth": {
+      "x_au": -0.7888165281437398,
+      "y_au": 0.5445004646924793,
+      "z_au": 0.2360793264671294
+    },
+    "Moon": {
+      "x_au": -0.7868163275619947,
+      "y_au": 0.5457459492381825,
+      "z_au": 0.2368363354788556
+    },
+    "Mercury": {
+      "x_au": -0.3870936982073418,
+      "y_au": -0.1584953639787237,
+      "z_au": -0.04449996629861541
+    },
+    "Venus": {
+      "x_au": 0.2765953264355183,
+      "y_au": -0.6073641518831607,
+      "z_au": -0.2907299088261565
+    },
+    "Mars": {
+      "x_au": 0.2050782125392741,
+      "y_au": 1.399752205799911,
+      "z_au": 0.6364622849699729
+    },
+    "Jupiter": {
+      "x_au": 1.861369252521377,
+      "y_au": 4.324750330621365,
+      "z_au": 1.808430455164836
+    },
+    "Saturn": {
+      "x_au": 1.140386672556291,
+      "y_au": -9.204743257971673,
+      "z_au": -3.85049961667312
+    },
+    "Uranus": {
+      "x_au": 0.6566554030013246,
+      "y_au": -17.68545306984501,
+      "z_au": -7.754982751405874
+    },
+    "Neptune": {
+      "x_au": 5.405605034379628,
+      "y_au": -27.4679840971809,
+      "z_au": -11.37737042097543
+    },
+    "Pluto": {
+      "x_au": -20.74069339442528,
+      "y_au": -21.1956730163847,
+      "z_au": -0.3648639386836818
+    }
+  },
+  "skipped": {}
+}

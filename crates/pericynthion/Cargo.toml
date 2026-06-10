@@ -1,0 +1,37 @@
+[package]
+name = "pericynthion"
+version = "0.0.0"
+description = "Astrological ephemeris computation library. Pure Rust NASA JPL DE441 reader."
+keywords = ["astrology", "chart", "natal", "ephemeris"]
+categories = ["algorithms", "mathematics"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "docs/pericynthion.md"
+
+[lib]
+name = "pericynthion"
+
+[features]
+default = []
+serde = ["dep:serde"]
+# Unverified house systems (Koch, Campanus, Alcabitius, Morinus, Meridian,
+# Equal-from-MC, Horizontal, Topocentric/Polich-Page, Krusinski-Pisa-Goeldi,
+# Sripati). Compiled and tested only under this flag. Each system graduates
+# out of the gate when refchart oracle data is captured.
+noref-houses = []
+
+[dependencies]
+thiserror.workspace = true
+memmap2.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+approx.workspace = true
+proptest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempdir = "0.3"

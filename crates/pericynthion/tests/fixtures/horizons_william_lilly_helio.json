@@ -1,0 +1,53 @@
+{
+  "chart_id": "william_lilly",
+  "name": "William Lilly",
+  "iso_ut": "1602-05-11 02:05:19",
+  "notes": "1602-05-11 Gregorian (= 1602-05-01 Julian), LMT Diseworth, England",
+  "source": "NASA JPL HORIZONS VECTORS, geometric heliocentric J2000/ICRF (CENTER='500@10', VEC_CORR='NONE', OUT_UNITS='AU-D'). x_au/y_au/z_au are barycentric-body minus barycentric-Sun at the requested UT instant. Apply precession+nutation to obtain ecliptic-of-date.",
+  "bodies": {
+    "Earth": {
+      "x_au": -0.5724137563044432,
+      "y_au": -0.7648817609520139,
+      "z_au": -0.3324829136511205
+    },
+    "Moon": {
+      "x_au": -0.5714745059700854,
+      "y_au": -0.7672562242372933,
+      "z_au": -0.3333788219413621
+    },
+    "Mercury": {
+      "x_au": -0.1138707806880861,
+      "y_au": -0.4041300915323721,
+      "z_au": -0.2036619590553603
+    },
+    "Venus": {
+      "x_au": 0.4289284124642403,
+      "y_au": 0.5399134853398027,
+      "z_au": 0.2149081899066662
+    },
+    "Mars": {
+      "x_au": -1.529938352072925,
+      "y_au": -0.4925501018203864,
+      "z_au": -0.1830318860758593
+    },
+    "Jupiter": {
+      "x_au": -4.917641309988165,
+      "y_au": -2.188636752579804,
+      "z_au": -0.8181157431480959
+    },
+    "Uranus": {
+      "x_au": 13.88206084801431,
+      "y_au": 12.82085993894667,
+      "z_au": 5.418906194099923
+    },
+    "Neptune": {
+      "x_au": -27.76630667120936,
+      "y_au": 10.62882220562156,
+      "z_au": 5.040862517757049
+    }
+  },
+  "skipped": {
+    "Saturn": "",
+    "Pluto": ""
+  }
+}

@@ -1,0 +1,25 @@
+[package]
+name = "blackmoon"
+version = "0.0.0"
+description = "Command-line astrology data-format converter built on astrogram."
+keywords = ["astrology", "chart", "natal", "sfcht"]
+categories = ["command-line-utilities", "data-structures", "encoding"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "docs/blackmoon.md"
+
+[[bin]]
+name = "blackmoon"
+path = "src/main.rs"
+
+[dependencies]
+astrogram.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+anyhow.workspace = true
+reqwest.workspace = true
+scraper.workspace = true

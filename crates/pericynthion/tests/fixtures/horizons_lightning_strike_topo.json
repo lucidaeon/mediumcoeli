@@ -1,0 +1,55 @@
+{
+  "chart_id": "lightning_strike",
+  "name": "Lightning Strike",
+  "iso_ut": "1955-11-13 06:04:00",
+  "notes": "Gregorian, Universal City CA, PST",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), topocentric lat=34.1389 lon_e=-118.3525 elev_km=0.165",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 230.0815403,
+      "latitude_deg": -0.0011142
+    },
+    "Moon": {
+      "longitude_deg": 216.0958568,
+      "latitude_deg": -3.7494819
+    },
+    "Mercury": {
+      "longitude_deg": 217.7969095,
+      "latitude_deg": 1.4347497
+    },
+    "Venus": {
+      "longitude_deg": 248.9367596,
+      "latitude_deg": -0.5003476
+    },
+    "Mars": {
+      "longitude_deg": 199.7780414,
+      "latitude_deg": 0.9202711
+    },
+    "Jupiter": {
+      "longitude_deg": 149.613217,
+      "latitude_deg": 0.8119188
+    },
+    "Saturn": {
+      "longitude_deg": 233.3610487,
+      "latitude_deg": 1.9519221
+    },
+    "Uranus": {
+      "longitude_deg": 122.3259412,
+      "latitude_deg": 0.5620541
+    },
+    "Neptune": {
+      "longitude_deg": 208.7883578,
+      "latitude_deg": 1.6764005
+    },
+    "Pluto": {
+      "longitude_deg": 148.5325216,
+      "latitude_deg": 10.5160274
+    }
+  },
+  "skipped": {},
+  "observer": {
+    "lat_deg": 34.1389,
+    "lon_e_deg": -118.3525,
+    "elev_km": 0.165
+  }
+}

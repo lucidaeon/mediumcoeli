@@ -1,0 +1,30 @@
+[package]
+name = "astrogram"
+version = "0.0.0"
+description = "Astrology data-format conversion library."
+keywords = ["astrology", "chart", "nata", "sfcht"]
+categories = ["data-structures", "encoding", "parser-implementations"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "docs/astrogram.md"
+
+[lib]
+name = "astrogram"
+
+[features]
+default = []
+
+[dependencies]
+thiserror.workspace = true
+encoding_rs.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+roxmltree.workspace = true
+scraper.workspace = true
+reqwest = { workspace = true }
+
+[dev-dependencies]

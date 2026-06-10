@@ -1,0 +1,33 @@
+{
+  "chart_id": "vettius_valens",
+  "name": "Vettius Valens",
+  "iso_ut": "0120-02-08 16:10:38",
+  "notes": "Julian calendar, LMT Antioch (36\u00b009'25\" E)",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 318.4756869,
+      "latitude_deg": 8.49e-05
+    },
+    "Moon": {
+      "longitude_deg": 211.6262226,
+      "latitude_deg": 5.2673412
+    },
+    "Mercury": {
+      "longitude_deg": 299.1649545,
+      "latitude_deg": 2.4372861
+    },
+    "Venus": {
+      "longitude_deg": 295.4891402,
+      "latitude_deg": -0.6394377
+    }
+  },
+  "skipped": {
+    "Mars": "",
+    "Jupiter": "",
+    "Saturn": "",
+    "Uranus": "",
+    "Neptune": "",
+    "Pluto": ""
+  }
+}

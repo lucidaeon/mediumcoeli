@@ -1,0 +1,50 @@
+{
+  "chart_id": "adele_haenel",
+  "name": "Ad\u00e8le Haenel",
+  "iso_ut": "1989-02-11 15:20:00",
+  "notes": "Gregorian, Paris CET",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 322.8886381,
+      "latitude_deg": 0.0002451
+    },
+    "Moon": {
+      "longitude_deg": 35.6826585,
+      "latitude_deg": 4.6141782
+    },
+    "Mercury": {
+      "longitude_deg": 297.8143,
+      "latitude_deg": 1.4871638
+    },
+    "Venus": {
+      "longitude_deg": 309.9133728,
+      "latitude_deg": -0.8694591
+    },
+    "Mars": {
+      "longitude_deg": 43.369293,
+      "latitude_deg": 1.1333675
+    },
+    "Jupiter": {
+      "longitude_deg": 56.9302483,
+      "latitude_deg": -0.719106
+    },
+    "Saturn": {
+      "longitude_deg": 280.187542,
+      "latitude_deg": 0.6874451
+    },
+    "Uranus": {
+      "longitude_deg": 273.9986876,
+      "latitude_deg": -0.2288084
+    },
+    "Neptune": {
+      "longitude_deg": 281.3913509,
+      "latitude_deg": 0.9040014
+    },
+    "Pluto": {
+      "longitude_deg": 225.1826318,
+      "latitude_deg": 15.9214133
+    }
+  },
+  "skipped": {}
+}

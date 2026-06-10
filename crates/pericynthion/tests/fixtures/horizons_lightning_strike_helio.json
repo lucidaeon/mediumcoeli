@@ -1,0 +1,60 @@
+{
+  "chart_id": "lightning_strike",
+  "name": "Lightning Strike",
+  "iso_ut": "1955-11-13 06:04:00",
+  "notes": "Gregorian, Universal City CA, PST",
+  "source": "NASA JPL HORIZONS VECTORS, geometric heliocentric J2000/ICRF (CENTER='500@10', VEC_CORR='NONE', OUT_UNITS='AU-D'). x_au/y_au/z_au are barycentric-body minus barycentric-Sun at the requested UT instant. Apply precession+nutation to obtain ecliptic-of-date.",
+  "bodies": {
+    "Earth": {
+      "x_au": 0.626792434119021,
+      "y_au": 0.7025603660476369,
+      "z_au": 0.3046898219221848
+    },
+    "Moon": {
+      "x_au": 0.6246618752483144,
+      "y_au": 0.7011664815388453,
+      "z_au": 0.3039101305355762
+    },
+    "Mercury": {
+      "x_au": -0.3931455858923626,
+      "y_au": -0.0526129577029013,
+      "z_au": 0.01272369794698697
+    },
+    "Venus": {
+      "x_au": 0.07173264710271858,
+      "y_au": -0.6583489806045922,
+      "z_au": -0.3006267947887839
+    },
+    "Mars": {
+      "x_au": -1.645386734319631,
+      "y_au": -0.08813759818096785,
+      "z_au": 0.00422517276544159
+    },
+    "Jupiter": {
+      "x_au": -4.073516794472265,
+      "y_au": 3.138860122309882,
+      "z_au": 1.444877901456531
+    },
+    "Saturn": {
+      "x_au": -5.793660393517688,
+      "y_au": -7.547195941888257,
+      "z_au": -2.867470251797236
+    },
+    "Uranus": {
+      "x_au": -9.307504350366505,
+      "y_au": 14.6993529521048,
+      "z_au": 6.570028934995716
+    },
+    "Neptune": {
+      "x_au": -26.57774319719626,
+      "y_au": -13.72845867522055,
+      "z_au": -4.957625400226465
+    },
+    "Pluto": {
+      "x_au": -28.89564096493093,
+      "y_au": 14.34275067154377,
+      "z_au": 13.17870592944283
+    }
+  },
+  "skipped": {}
+}

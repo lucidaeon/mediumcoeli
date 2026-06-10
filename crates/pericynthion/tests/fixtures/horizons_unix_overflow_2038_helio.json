@@ -1,0 +1,60 @@
+{
+  "chart_id": "unix_overflow_2038",
+  "name": "UNIX 32-bit Overflow",
+  "iso_ut": "2038-01-19 03:14:07",
+  "notes": "UNIX 32-bit overflow moment, London UTC",
+  "source": "NASA JPL HORIZONS VECTORS, geometric heliocentric J2000/ICRF (CENTER='500@10', VEC_CORR='NONE', OUT_UNITS='AU-D'). x_au/y_au/z_au are barycentric-body minus barycentric-Sun at the requested UT instant. Apply precession+nutation to obtain ecliptic-of-date.",
+  "bodies": {
+    "Earth": {
+      "x_au": -0.4710552211449704,
+      "y_au": 0.7925432042991551,
+      "z_au": 0.3435332241850954
+    },
+    "Moon": {
+      "x_au": -0.4711820810866864,
+      "y_au": 0.7949070253783858,
+      "z_au": 0.3444857251575794
+    },
+    "Mercury": {
+      "x_au": -0.16167162689202,
+      "y_au": -0.3918725027661882,
+      "z_au": -0.1925971921720733
+    },
+    "Venus": {
+      "x_au": -0.4389363726471425,
+      "y_au": 0.5077908126025774,
+      "z_au": 0.2562765065719966
+    },
+    "Mars": {
+      "x_au": 0.04336472198797169,
+      "y_au": 1.423069641103692,
+      "z_au": 0.6515676163833622
+    },
+    "Jupiter": {
+      "x_au": -2.176612497619447,
+      "y_au": 4.356249744511008,
+      "z_au": 1.920174859635839
+    },
+    "Saturn": {
+      "x_au": -8.804970550186779,
+      "y_au": 2.693280574679133,
+      "z_au": 1.491744190764382
+    },
+    "Uranus": {
+      "x_au": -6.91502905987103,
+      "y_au": 15.88131069490306,
+      "z_au": 7.053280041768922
+    },
+    "Neptune": {
+      "x_au": 26.3862768696363,
+      "y_au": 13.07831966689622,
+      "z_au": 4.696241624046119
+    },
+    "Pluto": {
+      "x_au": 29.84158976601312,
+      "y_au": -19.17448230871875,
+      "z_au": -14.97514484407451
+    }
+  },
+  "skipped": {}
+}

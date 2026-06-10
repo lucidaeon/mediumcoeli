@@ -1,0 +1,50 @@
+{
+  "chart_id": "anna_freud",
+  "name": "Anna Freud",
+  "iso_ut": "1895-12-03 14:15:00",
+  "notes": "Gregorian, Vienna CET",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 251.2067849,
+      "latitude_deg": 0.0002486
+    },
+    "Moon": {
+      "longitude_deg": 87.582475,
+      "latitude_deg": 4.7084568
+    },
+    "Mercury": {
+      "longitude_deg": 241.7847484,
+      "latitude_deg": 0.2576063
+    },
+    "Venus": {
+      "longitude_deg": 204.4975111,
+      "latitude_deg": 2.2746811
+    },
+    "Mars": {
+      "longitude_deg": 233.9724113,
+      "latitude_deg": 0.1129428
+    },
+    "Jupiter": {
+      "longitude_deg": 129.0449692,
+      "latitude_deg": 0.5177063
+    },
+    "Saturn": {
+      "longitude_deg": 223.6269947,
+      "latitude_deg": 2.1756239
+    },
+    "Uranus": {
+      "longitude_deg": 231.5118903,
+      "latitude_deg": 0.2881928
+    },
+    "Neptune": {
+      "longitude_deg": 76.8029756,
+      "latitude_deg": -1.4891277
+    },
+    "Pluto": {
+      "longitude_deg": 71.7706304,
+      "latitude_deg": -10.7779001
+    }
+  },
+  "skipped": {}
+}

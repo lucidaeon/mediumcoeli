@@ -1,0 +1,29 @@
+FROM rust:alpine AS deps
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY crates/pericynthion/Cargo.toml crates/pericynthion/Cargo.toml
+COPY crates/astrogram/Cargo.toml  crates/astrogram/Cargo.toml
+COPY crates/blackmoon/Cargo.toml  crates/blackmoon/Cargo.toml
+COPY crates/starcat/Cargo.toml    crates/starcat/Cargo.toml
+RUN mkdir -p \
+        crates/pericynthion/src \
+        crates/astrogram/src \
+        crates/blackmoon/src \
+        crates/starcat/src \
+ && echo '' > crates/pericynthion/src/lib.rs \
+ && echo '' > crates/astrogram/src/lib.rs \
+ && echo 'fn main(){}' > crates/blackmoon/src/main.rs \
+ && echo 'fn main(){}' > crates/starcat/src/main.rs
+RUN cargo build --release --locked --bin blackmoon
+
+FROM deps AS builder
+COPY crates/ crates/
+RUN touch crates/astrogram/src/lib.rs \
+          crates/blackmoon/src/main.rs \
+ && cargo build --release --locked --bin blackmoon
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /build/target/release/blackmoon /usr/local/bin/blackmoon
+ENTRYPOINT ["blackmoon"]

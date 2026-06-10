@@ -1,0 +1,36 @@
+[package]
+name = "starcat"
+version = "0.0.0"
+description = "Command-line astrological ephemeris: Compute Natal Charts"
+keywords = ["astrology", "divination", "ephemeris"]
+categories = ["command-line-utilities"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "docs/starcat.md"
+
+[[bin]]
+name = "starcat"
+path = "src/main.rs"
+
+[features]
+default = ["page"]
+# `--page` renderer. Pulls in `tabled` (+ papergrid + tabled_derive)
+# transitively. On by default; opt out with `--no-default-features`.
+page = ["dep:tabled"]
+# Expose the unverified house systems from pericynthion as additional
+# `--house <slug>` choices. Off by default; flip on with
+# `--features noref-houses`. 
+noref-houses = ["pericynthion/noref-houses"]
+
+[dependencies]
+pericynthion = { workspace = true, features = ["serde"] }
+clap.workspace = true
+clap_complete.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tabled = { workspace = true, optional = true }

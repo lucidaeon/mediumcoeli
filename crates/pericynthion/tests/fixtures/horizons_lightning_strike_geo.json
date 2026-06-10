@@ -1,0 +1,50 @@
+{
+  "chart_id": "lightning_strike",
+  "name": "Lightning Strike",
+  "iso_ut": "1955-11-13 06:04:00",
+  "notes": "Gregorian, Universal City CA, PST",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric",
+  "bodies": {
+    "Sun": {
+      "longitude_deg": 230.0821878,
+      "latitude_deg": -0.0001577
+    },
+    "Moon": {
+      "longitude_deg": 216.1084404,
+      "latitude_deg": -3.4601315
+    },
+    "Mercury": {
+      "longitude_deg": 217.7970541,
+      "latitude_deg": 1.4355259
+    },
+    "Venus": {
+      "longitude_deg": 248.9375988,
+      "latitude_deg": -0.499752
+    },
+    "Mars": {
+      "longitude_deg": 199.777861,
+      "latitude_deg": 0.9206918
+    },
+    "Jupiter": {
+      "longitude_deg": 149.6128747,
+      "latitude_deg": 0.8121187
+    },
+    "Saturn": {
+      "longitude_deg": 233.3611742,
+      "latitude_deg": 1.9520386
+    },
+    "Uranus": {
+      "longitude_deg": 122.3258251,
+      "latitude_deg": 0.5621318
+    },
+    "Neptune": {
+      "longitude_deg": 208.7884182,
+      "latitude_deg": 1.6764586
+    },
+    "Pluto": {
+      "longitude_deg": 148.5324986,
+      "latitude_deg": 10.5160948
+    }
+  },
+  "skipped": {}
+}
