@@ -50,7 +50,8 @@ use pericynthion::coords::obliquity::mean_obliquity_rad;
 use pericynthion::coords::sidereal_time::gast_rad;
 use pericynthion::ephemeris::Ephemeris;
 use pericynthion::houses::{
-    HouseCusps, equal_as_rad, placidus_rad, porphyry_rad, regiomontanus_rad, whole_sign_rad,
+    HouseCusps, alcabitius_rad, equal_as_rad, placidus_rad, porphyry_rad, regiomontanus_rad,
+    whole_sign_rad,
 };
 use pericynthion::jpl::{discover, header::parse as parse_header, reader::EphemerisFile};
 use pericynthion::time::calendar::{Calendar, CivilDate, civil_to_jd};
@@ -103,6 +104,7 @@ enum HouseSystem {
     WholeSign,
     Regiomontanus,
     Porphyry,
+    Alcabitius,
 }
 
 struct BodyRef {
@@ -643,6 +645,57 @@ const VETTIUS_VALENS: Chart = Chart {
     true_nn_deg: Some(dms(LEO, 5.0, 13.0, 11.0)),  // Nn Leo⌖05°13'11" R
 };
 
+// ── Anna Freud — Alcabitius promotion chart ───────────────────────────────────
+//
+// Source: docs/ref_anna_freud_alcabitius.md
+// Civil: 1895-12-03 15:15 CET (UTC+1) → UT 14:15:00.
+// Refchart resolved coords: 48°N13' 16°E20'.
+// Refchart: DeltaT = −5 s; JDE = 2413531.093693; LST = 20:08:57; Ob 23°27'10".
+// House system: Alcabitius. Tolerance: 5′ (ΔT-model offset accounts for ~3′).
+const ANNA_FREUD_ALCABITIUS: Chart = Chart {
+    id: "anna_freud_alcabitius",
+    mode: Mode::Geocentric,
+    civil: CivilDate {
+        year: 1895,
+        month: 12,
+        day: 3,
+        hour: 14, // UT = local CET 15:15 − 1h
+        minute: 15,
+        second: 0.0,
+    },
+    calendar: Calendar::Gregorian,
+    lat_deg: dms(0.0, 48.0, 13.0, 0.0), // 48°N13'
+    lon_deg: dms(0.0, 16.0, 20.0, 0.0), // 16°E20'
+    delta_t_s: -5.0,
+    jde: 2_413_531.093_693,
+    lst_hours: 20.0 + 8.0 / 60.0 + 57.0 / 3600.0, // 20:08:57
+    obliquity_deg: dms(0.0, 23.0, 27.0, 10.0),    // 23°27'10"
+    ac_deg: dms(TAU, 28.0, 12.0, 47.0),           // Tau⌖28°12'47"
+    mc_deg: dms(AQU, 0.0, 3.0, 6.0),              // Aqu⌖00°03'06"
+    ic_deg: dms(LEO, 0.0, 3.0, 6.0),              // Leo⌖00°03'06"  (= MC+180)
+    ds_deg: dms(SCO, 28.0, 12.0, 47.0),           // Sco⌖28°12'47"  (= ASC+180)
+    vx_deg: dms(LIB, 25.0, 14.0, 20.0),           // Lib⌖25°14'20"
+    ax_deg: dms(ARI, 25.0, 14.0, 20.0),           // Ari⌖25°14'20"  (= Vx+180)
+    house_system: HouseSystem::Alcabitius,
+    house_cusps_deg: [
+        dms(TAU, 28.0, 12.0, 47.0), // H1  Tau⌖28°12'47"
+        dms(GEM, 19.0, 0.0, 53.0),  // H2  Gem⌖19°00'53"
+        dms(CAN, 9.0, 19.0, 21.0),  // H3  Can⌖09°19'21"
+        dms(LEO, 0.0, 3.0, 6.0),    // H4  Leo⌖00°03'06"
+        dms(VIR, 8.0, 30.0, 52.0),  // H5  Vir⌖08°30'52"
+        dms(LIB, 19.0, 33.0, 35.0), // H6  Lib⌖19°33'35"
+        dms(SCO, 28.0, 12.0, 47.0), // H7  Sco⌖28°12'47"
+        dms(SAG, 19.0, 0.0, 53.0),  // H8  Sag⌖19°00'53"
+        dms(CAP, 9.0, 19.0, 21.0),  // H9  Cap⌖09°19'21"
+        dms(AQU, 0.0, 3.0, 6.0),    // H10 Aqu⌖00°03'06"
+        dms(PIS, 8.0, 30.0, 52.0),  // H11 Pis⌖08°30'52"
+        dms(ARI, 19.0, 33.0, 35.0), // H12 Ari⌖19°33'35"
+    ],
+    bodies: &[],
+    fortune_deg: None,
+    true_nn_deg: None,
+};
+
 // All charts under test.
 const CHARTS: &[&Chart] = &[
     &LIGHTNING_STRIKE,
@@ -1158,6 +1211,7 @@ fn cusps_for(chart: &Chart) -> Option<HouseCusps> {
             let mc = mc_rad(ramc, eps);
             Some(porphyry_rad(ac, mc))
         }
+        HouseSystem::Alcabitius => alcabitius_rad(ramc, eps, lat),
     }
 }
 
@@ -1202,6 +1256,10 @@ fn cusps_william_lilly() {
 #[test]
 fn cusps_vettius_valens() {
     run_cusps_chart(&VETTIUS_VALENS);
+}
+#[test]
+fn cusps_anna_freud_alcabitius() {
+    run_cusps_chart(&ANNA_FREUD_ALCABITIUS);
 }
 
 // =============================================================================

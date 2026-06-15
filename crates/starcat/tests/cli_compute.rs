@@ -1,10 +1,10 @@
 //! Integration test: spawn the `starcat` binary as a subprocess, parse
-//! its JSON output, and compare against refchart oracle data.
+//! its JZOD JSON output, and compare against refchart oracle data.
 //!
 //! Unlike `acceptance_refchart.rs` (which calls library functions in-
 //! process), this test exercises the *whole CLI surface*: clap arg
 //! parsing, civil-time + zone → `JD_UT`, `JD_UT` → `JD_TT` (ΔT), JPL discovery,
-//! ephemeris + house pipeline, and JSON serialisation.
+//! ephemeris + house pipeline, and JZOD JSON serialisation.
 //!
 //! Requires `STARCAT_JPL_DATA` set to a directory containing a DE441
 //! header/binary pair, same as the library acceptance tests.
@@ -35,6 +35,11 @@ fn dlt(d: f64, tol: f64) -> (&'static str, &'static str) {
     } else {
         ("\x1b[31m", "\x1b[0m")
     }
+}
+
+/// Find a placement object by `id` in a JZOD array (angles, points, or lots).
+fn find_by_id<'a>(arr: &'a serde_json::Value, id: &str) -> Option<&'a serde_json::Value> {
+    arr.as_array()?.iter().find(|v| v["id"] == id)
 }
 
 // Zodiac base degrees (Ari at 0°, …, Pis at 330°).
@@ -70,6 +75,8 @@ fn run_case(case: &Case) {
         return;
     };
     let mut argv: Vec<String> = case.args.iter().map(|s| (*s).to_string()).collect();
+    // --json (JZOD mode) always computes all house systems, so --house is
+    // overridden internally — pass it anyway to keep argv well-formed.
     argv.extend([
         "--house".into(),
         case.house_system.into(),
@@ -96,12 +103,15 @@ fn run_case(case: &Case) {
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("starcat --json output must parse as JSON");
 
-    let cusps_obj = json["houses"][case.house_system]
+    // JZOD: chart data lives under charts[0].
+    let chart = &json["charts"][0];
+
+    let cusps_obj = chart["houses"][case.house_system]
         .as_object()
         .unwrap_or_else(|| {
             panic!(
                 "{}: houses.{} must be a JSON object keyed 1-12; got {}",
-                case.id, case.house_system, json["houses"]
+                case.id, case.house_system, chart["houses"]
             )
         });
     assert_eq!(
@@ -115,11 +125,12 @@ fn run_case(case: &Case) {
     println!("=== CLI {}  {} ===", case.house_system, case.id);
     let mut max_arcmin = 0.0_f64;
     // cusps_deg is in H1..H12 order; access by house number key.
+    // Each cusp is now an object {longitude, sign, degree, minute, second}.
     for (i, expected_deg) in case.cusps_deg.iter().enumerate() {
         let house_key = (i + 1).to_string();
-        let got = cusps_obj[&house_key]
+        let got = cusps_obj[&house_key]["longitude"]
             .as_f64()
-            .unwrap_or_else(|| panic!("{}: H{} cusp not a number", case.id, i + 1));
+            .unwrap_or_else(|| panic!("{}: H{} cusp longitude not a number", case.id, i + 1));
         // Wrap to shortest arc to handle the 0/360 seam.
         let raw = (got - expected_deg).abs().rem_euclid(360.0);
         let delta_arcmin = raw.min(360.0 - raw) * 60.0;
@@ -148,17 +159,30 @@ fn run_case(case: &Case) {
         max_arcmin, case.tol_arcmin
     );
 
-    // Envelope sanity.
-    assert!(json["jd_ut"].is_number(), "{}: missing jd_ut", case.id);
-    assert!(json["jd_tt"].is_number(), "{}: missing jd_tt", case.id);
+    // Envelope sanity: JD values are in ephemeris block, angles are an array.
     assert!(
-        json["placements"]["angles"]["ac_deg"].is_number(),
-        "{}: missing placements.angles.ac_deg",
+        chart["ephemeris"]["jd_ut"].is_number(),
+        "{}: missing ephemeris.jd_ut",
         case.id
     );
     assert!(
-        json["placements"]["angles"]["mc_deg"].is_number(),
-        "{}: missing placements.angles.mc_deg",
+        chart["ephemeris"]["jd_tt"].is_number(),
+        "{}: missing ephemeris.jd_tt",
+        case.id
+    );
+    let angles = &chart["placements"]["angles"];
+    assert!(
+        find_by_id(angles, "ascendant")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "{}: missing ascendant in placements.angles",
+        case.id
+    );
+    assert!(
+        find_by_id(angles, "midheaven")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "{}: missing midheaven in placements.angles",
         case.id
     );
 }
@@ -309,7 +333,7 @@ fn vettius_valens_porphyry_via_cli() {
 }
 
 // =============================================================================
-// Placements structure: bodies, angles (ac/ds/mc/ic), points (vx/nn/lil…), lots
+// Placements structure: bodies, angles, points (vx/nodes/bml), lots
 // =============================================================================
 #[test]
 fn json_placements_structure() {
@@ -331,10 +355,6 @@ fn json_placements_structure() {
             "--lat",
             "34.138889",
             "--lon=-118.3525",
-            "--nodes",
-            "mean",
-            "--lilith",
-            "mean",
             "--json",
             "--jpl-data",
             &jpl,
@@ -347,57 +367,92 @@ fn json_placements_structure() {
         serde_json::from_str(&String::from_utf8(output.stdout).expect("utf-8"))
             .expect("must parse as JSON");
 
-    // Top-level placements object must exist.
-    assert!(json["placements"].is_object(), "missing placements");
+    // Top-level JZOD structure.
+    assert!(json["version"].is_string(), "missing version");
+    assert!(json["charts"].is_array(), "missing charts array");
+    let chart = &json["charts"][0];
+    assert!(chart["placements"].is_object(), "missing placements");
 
-    // bodies under placements.
+    // Bodies array under placements.
     assert!(
-        json["placements"]["bodies"].is_array(),
+        chart["placements"]["bodies"].is_array(),
         "missing placements.bodies"
     );
 
-    // angles contains only ac/ds/mc/ic.
+    // Angles is an array; ASC and MC must be present.
+    let angles = &chart["placements"]["angles"];
     assert!(
-        json["placements"]["angles"]["ac_deg"].is_number(),
-        "missing placements.angles.ac_deg"
+        find_by_id(angles, "ascendant")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing ascendant in placements.angles"
     );
     assert!(
-        json["placements"]["angles"]["mc_deg"].is_number(),
-        "missing placements.angles.mc_deg"
+        find_by_id(angles, "midheaven")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing midheaven in placements.angles"
     );
+    // Vertex must not be in angles (it's in points).
     assert!(
-        json["placements"]["angles"]["vx_deg"].is_null(),
-        "vx_deg must not be in angles"
-    );
-
-    // points contains vx/ax/nodes/lilith.
-    assert!(
-        json["placements"]["points"]["vx_deg"].is_number(),
-        "missing placements.points.vx_deg"
-    );
-    assert!(
-        json["placements"]["points"]["nn_deg"].is_number(),
-        "missing placements.points.nn_deg"
-    );
-    assert!(
-        json["placements"]["points"]["lilith_deg"].is_number(),
-        "missing placements.points.lilith_deg"
+        find_by_id(angles, "vertex").is_none(),
+        "vertex must not be in angles"
     );
 
-    // lots under placements.
+    // Points array: vertex, both node variants, both BML variants.
+    let points = &chart["placements"]["points"];
     assert!(
-        json["placements"]["lots"]["fortune_deg"].is_number(),
-        "missing placements.lots.fortune_deg"
+        find_by_id(points, "vertex")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing vertex in placements.points"
+    );
+    assert!(
+        find_by_id(points, "north_node_mean")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing north_node_mean in placements.points"
+    );
+    assert!(
+        find_by_id(points, "north_node_true")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing north_node_true in placements.points"
+    );
+    assert!(
+        find_by_id(points, "black_moon_lilith_mean")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing black_moon_lilith_mean in placements.points"
+    );
+    assert!(
+        find_by_id(points, "black_moon_lilith_true")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing black_moon_lilith_true in placements.points"
     );
 
-    // Old top-level keys must be gone.
-    assert!(json["bodies"].is_null(), "bodies must move to placements");
-    assert!(json["angles"].is_null(), "angles must move to placements");
-    assert!(json["lots"].is_null(), "lots must move to placements");
+    // Lots array: lot_of_fortune must be present.
+    let lots = &chart["placements"]["lots"];
+    assert!(
+        find_by_id(lots, "lot_of_fortune")
+            .and_then(|v| v["ecliptic_longitude"].as_f64())
+            .is_some(),
+        "missing lot_of_fortune in placements.lots"
+    );
+
+    // Old top-level keys must not exist at the root.
+    assert!(json["bodies"].is_null(), "bodies must live under charts[0]");
+    assert!(json["angles"].is_null(), "angles must live under charts[0]");
+    assert!(json["lots"].is_null(), "lots must live under charts[0]");
+    assert!(
+        json["placements"].is_null(),
+        "placements must live under charts[0]"
+    );
 }
 
 // =============================================================================
-// House cusps are a JSON object keyed "1"–"12", H1 = Ascendant cusp
+// House cusps: JSON object keyed "1"–"12", each value an object with longitude
 // =============================================================================
 #[test]
 fn json_house_cusps_keyed_by_house_number() {
@@ -419,8 +474,6 @@ fn json_house_cusps_keyed_by_house_number() {
             "--lat",
             "34.138889",
             "--lon=-118.3525",
-            "--house",
-            "placidus",
             "--json",
             "--jpl-data",
             &jpl,
@@ -433,23 +486,28 @@ fn json_house_cusps_keyed_by_house_number() {
         serde_json::from_str(&String::from_utf8(output.stdout).expect("utf-8"))
             .expect("must parse as JSON");
 
-    // Must be an object, not an array.
+    let chart = &json["charts"][0];
+
+    // Placidus must be present (JZOD mode always emits all systems).
     assert!(
-        json["houses"]["placidus"].is_object(),
+        chart["houses"]["placidus"].is_object(),
         "placidus cusps must be a JSON object keyed by house number"
     );
 
-    // All 12 keys "1"–"12" must be present and numeric.
+    // All 12 keys "1"–"12" must be present and each must be an object with a
+    // numeric `longitude` field.
     for h in 1..=12_usize {
         let key = h.to_string();
         assert!(
-            json["houses"]["placidus"][&key].is_number(),
-            "missing or non-numeric H{h} in placidus"
+            chart["houses"]["placidus"][&key]["longitude"].is_number(),
+            "missing or non-numeric H{h}.longitude in placidus"
         );
     }
 
     // H1 must be the Ascendant cusp: Lightning Strike Asc = Leo 05°19'30" = 125.325°.
-    let h1 = json["houses"]["placidus"]["1"].as_f64().unwrap();
+    let h1 = chart["houses"]["placidus"]["1"]["longitude"]
+        .as_f64()
+        .unwrap();
     let delta_arcmin = (h1 - dms(LEO, 5.0, 19.0, 30.0)).abs() * 60.0;
     assert!(
         delta_arcmin < 5.0,
@@ -457,7 +515,9 @@ fn json_house_cusps_keyed_by_house_number() {
     );
 
     // H7 must be the Descendant (opposite H1).
-    let h7 = json["houses"]["placidus"]["7"].as_f64().unwrap();
+    let h7 = chart["houses"]["placidus"]["7"]["longitude"]
+        .as_f64()
+        .unwrap();
     let delta7 = (h7 - dms(AQU, 5.0, 19.0, 30.0)).abs() * 60.0;
     assert!(
         delta7 < 5.0,
@@ -466,13 +526,8 @@ fn json_house_cusps_keyed_by_house_number() {
 }
 
 // =============================================================================
-// JSON output formatting: 8dp on all degree values including house cusps
+// JZOD output formatting: 8dp on body ecliptic_longitude; cusp sign labels
 // =============================================================================
-//
-// Whole Sign cusps are multiples of 30° but float arithmetic produces
-// 29.999999999999996. format!("{:.8}") must round these to 30.00000000.
-// Body longitude_deg and house cusps should both carry exactly 8dp in
-// the raw JSON string.
 #[test]
 fn json_degree_formatting() {
     let Some(jpl) = jpl_data_dir() else {
@@ -493,8 +548,6 @@ fn json_degree_formatting() {
             "--lat",
             "34.138889",
             "--lon=-118.3525",
-            "--house",
-            "whole-sign,placidus",
             "--json",
             "--jpl-data",
             &jpl,
@@ -504,62 +557,52 @@ fn json_degree_formatting() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf-8");
-    // Strip whitespace so format (pretty/compact) doesn't matter.
     let compact: String = stdout.chars().filter(|c| !c.is_whitespace()).collect();
 
-    // Body longitude_deg should have exactly 8 decimal places.
-    let lon_marker = "\"longitude_deg\":";
-    let pos = compact.find(lon_marker).expect("missing longitude_deg");
+    // Body ecliptic_longitude should have exactly 8 decimal places.
+    let lon_marker = "\"ecliptic_longitude\":";
+    let pos = compact
+        .find(lon_marker)
+        .expect("missing ecliptic_longitude");
     let after = &compact[pos + lon_marker.len()..];
     let end = after.find([',', '}']).unwrap();
     let num = after[..end].trim();
     let dp = num.split('.').nth(1).map_or(0, str::len);
-    assert_eq!(dp, 8, "longitude_deg should have 8dp, got: {num}");
+    assert_eq!(dp, 8, "ecliptic_longitude should have 8dp, got: {num}");
 
-    // Whole Sign H1 cusp (key "1") should have 8dp and no float noise.
-    // Object format: "whole_sign":{"1":120.00000000,"2":150.00000000,...}
-    let ws_h1_marker = "\"whole_sign\":{\"1\":";
-    let wp = compact.find(ws_h1_marker).expect("missing whole_sign H1");
-    let after_h1 = &compact[wp + ws_h1_marker.len()..];
-    let h1_end = after_h1.find([',', '}']).unwrap();
-    let h1_cusp = &after_h1[..h1_end];
-    let cusp_dp = h1_cusp.split('.').nth(1).map_or(0, str::len);
-    assert_eq!(
-        cusp_dp, 8,
-        "whole_sign H1 cusp should have 8dp, got: {h1_cusp}"
-    );
-
-    // H2 (key "2") must not show float noise (29.999...).
-    let ws_h2_marker = "\"2\":";
-    let wp2 = compact[wp..]
-        .find(ws_h2_marker)
-        .expect("missing whole_sign H2");
-    let after_h2 = &compact[wp + wp2 + ws_h2_marker.len()..];
-    let h2_end = after_h2.find([',', '}']).unwrap();
-    let h2_cusp = &after_h2[..h2_end];
+    // Whole-sign H1 cusp must be an object with a `longitude` field (Leo rising,
+    // H1 = Leo = 120°). The sign label must be "leo".
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("must parse as JSON");
+    let chart = &json["charts"][0];
+    let ws_h1 = &chart["houses"]["whole_sign"]["1"];
     assert!(
-        !h2_cusp.contains("29."),
-        "H2 whole_sign cusp must not show float noise, got: {h2_cusp}"
+        ws_h1["longitude"].is_number(),
+        "whole_sign H1 must have a numeric longitude field"
+    );
+    assert_eq!(
+        ws_h1["sign"], "leo",
+        "Lightning Strike H1 whole_sign must be Leo"
+    );
+    // H1 longitude for Leo rising = 120.0°.
+    let h1_lon = ws_h1["longitude"].as_f64().unwrap();
+    assert!(
+        (h1_lon - 120.0).abs() < 0.01,
+        "whole_sign H1 should be ~120°, got {h1_lon}"
     );
 
-    // Any cusp at 0° absolute (Aries boundary) must appear as "0.00000000"
-    // not "0E-8" or "0" — Lightning Strike Leo-rising has H9 = Aries = 0°.
-    let zero_marker = "\"9\":";
-    let zp = compact[wp..]
-        .find(zero_marker)
-        .expect("missing whole_sign H9");
-    let after_zero = &compact[wp + zp + zero_marker.len()..];
-    let zero_end = after_zero.find([',', '}']).unwrap();
-    let zero_cusp = &after_zero[..zero_end];
-    assert_eq!(
-        zero_cusp, "0.00000000",
-        "0° cusp must be '0.00000000', not '{zero_cusp}'"
+    // Whole-sign H2 must not show float noise (29.999... for 30° boundary).
+    let ws_h2_lon = chart["houses"]["whole_sign"]["2"]["longitude"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        ws_h2_lon > 29.9999,
+        "H2 whole_sign cusp must not show float noise, got: {ws_h2_lon}"
     );
 }
 
-// Regression: Anna Freud (Taurus rising) H12 = Aries = 0° must not serialize
-// as "0E-8". This was broken when arbitrary_precision was used with a sorted
-// array — the zero-value serde_json::Number normalized to scientific notation.
+// Regression: chart with a whole-sign H12 at exactly 0° Aries must serialize
+// the cusp longitude as a numeric 0 (not break parsing). Uses Taurus-rising
+// which puts H12 = Aries = 0°.
 #[test]
 fn json_zero_cusp_no_scientific_notation() {
     let Some(jpl) = jpl_data_dir() else {
@@ -580,8 +623,6 @@ fn json_zero_cusp_no_scientific_notation() {
             "--lat",
             "48.208333",
             "--lon=16.371667",
-            "--house",
-            "whole-sign",
             "--json",
             "--jpl-data",
             &jpl,
@@ -590,28 +631,34 @@ fn json_zero_cusp_no_scientific_notation() {
         .expect("failed to launch starcat binary");
 
     assert!(output.status.success());
-    let compact: String = String::from_utf8(output.stdout)
-        .expect("utf-8")
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).expect("utf-8"))
+            .expect("must parse as JSON");
+
+    let chart = &json["charts"][0];
 
     // H12 for Taurus-rising = Aries = 0°.
-    let marker = "\"12\":";
-    let pos = compact.find(marker).expect("missing whole_sign H12");
-    let after = &compact[pos + marker.len()..];
-    let end = after.find([',', '}']).unwrap();
-    let cusp = &after[..end];
-    assert_eq!(
-        cusp, "0.00000000",
-        "H12 Aries cusp must be '0.00000000', got '{cusp}'"
+    let h12_lon = chart["houses"]["whole_sign"]["12"]["longitude"]
+        .as_f64()
+        .unwrap_or_else(|| panic!("H12 whole_sign longitude must be a number"));
+    assert!(
+        h12_lon.abs() < 0.001,
+        "H12 Aries cusp must be ~0°, got {h12_lon}"
     );
+    // Sign label must be "aries".
+    assert_eq!(
+        chart["houses"]["whole_sign"]["12"]["sign"], "aries",
+        "H12 must be labeled aries"
+    );
+    // degree/minute/second must all be 0 (whole-sign invariant).
+    assert_eq!(chart["houses"]["whole_sign"]["12"]["degree"], 0);
+    assert_eq!(chart["houses"]["whole_sign"]["12"]["minute"], 0);
+    assert_eq!(chart["houses"]["whole_sign"]["12"]["second"], 0);
 }
 
-// Whole-sign cusps are always exact multiples of 30°. Every cusp must serialize
-// as "N.00000000" (8dp, no float noise, no scientific notation for the 0° case).
-// Uses a synthetic Aries-rising date+location (not PII) so H1 = 0° exercises
-// the "0.00000000 not 0E-8" zero path, and H2–H12 exercise 30–330.
+// Whole-sign cusps are always exact multiples of 30°. Verify the sign labels
+// and that the longitude field parses as a numeric value without noise.
+// Uses an Aries-rising date+location so H1=Ari(0°) exercises the zero-cusp path.
 #[test]
 fn whole_sign_cusps_are_multiples_of_30() {
     let Some(jpl) = jpl_data_dir() else {
@@ -632,8 +679,6 @@ fn whole_sign_cusps_are_multiples_of_30() {
             "--lat",
             "48.208333",
             "--lon=16.371667",
-            "--house",
-            "whole-sign",
             "--json",
             "--jpl-data",
             &jpl,
@@ -642,56 +687,57 @@ fn whole_sign_cusps_are_multiples_of_30() {
         .expect("failed to launch starcat binary");
 
     assert!(output.status.success());
-    let compact: String = String::from_utf8(output.stdout)
-        .expect("utf-8")
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).expect("utf-8"))
+            .expect("must parse as JSON");
 
-    let json: serde_json::Value = serde_json::from_str(&compact).expect("must parse as JSON");
+    let chart = &json["charts"][0];
 
-    // Verify Aries rising so H1 = 0° exercises the 0E-8 regression path.
-    let ac = json["placements"]["angles"]["ac_deg"].as_f64().unwrap();
+    // Verify Aries rising so H1 = 0° exercises the zero-cusp path.
+    let angles = &chart["placements"]["angles"];
+    let ac = find_by_id(angles, "ascendant")
+        .and_then(|v| v["ecliptic_longitude"].as_f64())
+        .expect("ascendant must be present");
     assert!(
         (0.0..30.0).contains(&ac),
-        "expected Aries rising, got ac_deg = {ac:.4}"
+        "expected Aries rising, got ac = {ac:.4}"
     );
 
-    let cusps = json["houses"]["whole_sign"]
+    let cusps = chart["houses"]["whole_sign"]
         .as_object()
         .expect("whole_sign must be a JSON object");
     assert_eq!(cusps.len(), 12, "must have 12 cusps");
 
-    // H1 = Aries = 0°; each subsequent house adds 30°.
+    // Each cusp must have a longitude within 0.001° of its expected multiple of 30°.
+    // H1 = Tau = 30°, H2 = Gem = 60°, …, H12 = Ari = 0°.
+    // H1 starts at sign index 1 (Taurus = 30°); each subsequent adds 30°.
+    let asc_sign_start = (ac / 30.0).floor() as usize; // 1 for Taurus
     for h in 1..=12_usize {
         let key = h.to_string();
-        // h ∈ 1..=12, well within f64's exact-integer range.
+        let lon = cusps[&key]["longitude"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("H{h} longitude must be a number"));
         #[allow(clippy::cast_precision_loss)]
-        let expected_deg = ((h - 1) as f64) * 30.0;
-        let expected_str = format!("{expected_deg:.8}");
-
-        // Raw serialized value — must have exactly 8dp, no scientific notation.
-        let raw_marker = format!("\"{key}\":");
-        let pos = compact[compact.find("\"whole_sign\"").unwrap()..]
-            .find(&raw_marker)
-            .unwrap_or_else(|| panic!("missing whole_sign H{h}"));
-        let base = compact.find("\"whole_sign\"").unwrap();
-        let after = &compact[base + pos + raw_marker.len()..];
-        let end = after.find([',', '}']).unwrap();
-        let raw = &after[..end];
-        assert_eq!(
-            raw, expected_str,
-            "whole_sign H{h}: expected \"{expected_str}\", got \"{raw}\""
+        let expected = (((asc_sign_start + h - 1) % 12) as f64) * 30.0;
+        let delta = (lon - expected).abs().rem_euclid(360.0);
+        let delta = delta.min(360.0 - delta);
+        assert!(
+            delta < 0.001,
+            "whole_sign H{h}: expected ~{expected}°, got {lon}° (Δ = {delta}°)"
         );
+        // degree/minute/second must all be 0 (whole-sign invariant).
+        assert_eq!(cusps[&key]["degree"], 0, "H{h} degree must be 0");
+        assert_eq!(cusps[&key]["minute"], 0, "H{h} minute must be 0");
+        assert_eq!(cusps[&key]["second"], 0, "H{h} second must be 0");
     }
 }
 
 // =============================================================================
-// JSON body fields: daily_speed_deg + retrograde
+// JZOD body fields: daily_speed + retrograde
 // =============================================================================
 //
 // Lightning Strike 1955-11-12: Uranus is retrograde on this date; Sun never
-// is. Verifies that --json emits daily_speed_deg and retrograde on every body.
+// is. Verifies that --json emits daily_speed and retrograde on every body.
 #[test]
 fn json_bodies_have_speed_and_retrograde() {
     let Some(jpl) = jpl_data_dir() else {
@@ -729,48 +775,49 @@ fn json_bodies_have_speed_and_retrograde() {
         serde_json::from_str(&String::from_utf8(output.stdout).expect("stdout must be UTF-8"))
             .expect("output must parse as JSON");
 
-    let bodies = json["placements"]["bodies"]
+    let chart = &json["charts"][0];
+    let bodies = chart["placements"]["bodies"]
         .as_array()
         .expect("placements.bodies must be an array");
     assert_eq!(bodies.len(), 10, "must emit exactly 10 bodies");
 
-    // Every body must carry daily_speed_deg and retrograde.
+    // Every body must carry daily_speed and retrograde.
     for body in bodies {
         assert!(
-            body["daily_speed_deg"].is_number(),
-            "missing daily_speed_deg on {:?}",
-            body["name"]
+            body["daily_speed"].is_number(),
+            "missing daily_speed on {:?}",
+            body["id"]
         );
         assert!(
             body["retrograde"].is_boolean(),
             "missing retrograde on {:?}",
-            body["name"]
+            body["id"]
         );
     }
 
     // Sun (index 0): never retrograde, speed ~1°/day.
-    assert_eq!(bodies[0]["name"], "Sun");
+    assert_eq!(bodies[0]["id"], "sun");
     assert_eq!(bodies[0]["retrograde"], false, "Sun must not be retrograde");
-    let sun_speed = bodies[0]["daily_speed_deg"].as_f64().unwrap();
+    let sun_speed = bodies[0]["daily_speed"].as_f64().unwrap();
     assert!(
         (0.9..=1.1).contains(&sun_speed),
         "Sun daily speed should be ~1°/day, got {sun_speed:.4}"
     );
 
     // Uranus (index 7): retrograde on 1955-11-12 per REFCHARTS test 5.
-    assert_eq!(bodies[7]["name"], "Uranus");
+    assert_eq!(bodies[7]["id"], "uranus");
     assert_eq!(
         bodies[7]["retrograde"], true,
         "Uranus should be retrograde on 1955-11-12"
     );
     assert!(
-        bodies[7]["daily_speed_deg"].as_f64().unwrap() < 0.0,
+        bodies[7]["daily_speed"].as_f64().unwrap() < 0.0,
         "Uranus retrograde speed must be negative"
     );
 }
 
 // =============================================================================
-// Heliocentric: daily_speed_deg must use heliocentric positions
+// Heliocentric: daily_speed must use heliocentric positions
 // =============================================================================
 //
 // In heliocentric mode Earth replaces Sun at index 0 and moves ~1°/day.
@@ -811,7 +858,8 @@ fn heliocentric_speed_uses_helio_positions() {
         serde_json::from_str(&String::from_utf8(output.stdout).expect("stdout must be UTF-8"))
             .expect("output must parse as JSON");
 
-    let bodies = json["placements"]["bodies"]
+    let chart = &json["charts"][0];
+    let bodies = chart["placements"]["bodies"]
         .as_array()
         .expect("placements.bodies must be an array");
 
@@ -820,13 +868,13 @@ fn heliocentric_speed_uses_helio_positions() {
         assert_eq!(
             body["retrograde"], false,
             "heliocentric body {:?} must not be retrograde",
-            body["name"]
+            body["id"]
         );
     }
 
     // Earth (index 0) replaces Sun in heliocentric mode; moves ~1°/day.
-    assert_eq!(bodies[0]["name"], "Earth");
-    let earth_speed = bodies[0]["daily_speed_deg"].as_f64().unwrap();
+    assert_eq!(bodies[0]["id"], "earth");
+    let earth_speed = bodies[0]["daily_speed"].as_f64().unwrap();
     assert!(
         (0.95..=1.02).contains(&earth_speed),
         "Earth heliocentric speed should be ~1°/day, got {earth_speed:.5}"

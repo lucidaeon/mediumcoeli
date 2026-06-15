@@ -1,12 +1,12 @@
-#![cfg(feature = "noref-houses")]
 #![allow(clippy::similar_names)]
 
-//! Alcabitius house system — gated behind `noref-houses` until a refchart
-//! oracle is captured. See `docs/discovery/HOUSE_PROMOTION.md`.
+//! Alcabitius house system.
 //!
 //! Trisects the equatorial semi-arcs of the ASC point (DSA above the
 //! horizon, NSA below) and projects the resulting RA divisions back to
 //! the ecliptic.
+//!
+//! Oracle: `docs/ref_anna_freud_alcabitius.md`.
 
 use super::HouseCusps;
 use crate::coords::acds::ac_rad;

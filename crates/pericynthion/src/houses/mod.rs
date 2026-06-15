@@ -38,9 +38,7 @@ pub mod campanus;
 #[cfg(feature = "noref-houses")]
 pub use campanus::campanus_rad;
 
-#[cfg(feature = "noref-houses")]
 pub mod alcabitius;
-#[cfg(feature = "noref-houses")]
 pub use alcabitius::alcabitius_rad;
 
 #[cfg(feature = "noref-houses")]

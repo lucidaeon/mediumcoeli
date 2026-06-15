@@ -14,8 +14,8 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.0.0" }
-astrogram = { path = "crates/astrogram", version = "0.0.0" }
+pericynthion = { path = "crates/pericynthion", version = "0.0.1" }
+astrogram = { path = "crates/astrogram", version = "0.0.1" }
 
 # Errors
 thiserror = "2"
@@ -32,6 +32,7 @@ tabled = { version = "0.21", default-features = false, features = ["std", "macro
 # Serialization (optional in lib, default in bin)
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
+uuid = { version = "1", features = ["v4"] }
 
 # Encoding
 encoding_rs = "0.8"

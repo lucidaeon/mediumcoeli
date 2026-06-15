@@ -229,11 +229,35 @@ fn parse_sub_chart_at(bytes: &[u8], pos: usize) -> Result<(SubChart, usize), Par
 ///
 /// Currently infallible; returns `Ok` always. The `Result` wrapper exists
 /// for forwards-compatibility.
-#[allow(clippy::cast_possible_truncation)]
 pub fn write_file(charts: &[Chart]) -> Result<Vec<u8>, ParseError> {
+    write_file_with_description(charts, None)
+}
+
+/// Like [`write_file`] but honours an existing file description.
+///
+/// Pass the `description` field from the file's [`Header`] when overwriting an
+/// existing file. Empty strings and values that start with `"Blackmoon "` are
+/// treated as owned by Blackmoon and updated to the current version. Any other
+/// value is preserved unchanged.
+///
+/// # Errors
+///
+/// Currently infallible; returns `Ok` always. The `Result` wrapper exists
+/// for forwards-compatibility.
+#[allow(clippy::cast_possible_truncation)]
+pub fn write_file_with_description(
+    charts: &[Chart],
+    existing_description: Option<&str>,
+) -> Result<Vec<u8>, ParseError> {
     let mut buf = vec![0u8; HEADER_SIZE];
     buf[0..2].copy_from_slice(&3u16.to_le_bytes()); // version = 3
-    // description: bytes 2..82 — leave as zero (empty)
+    let blackmoon_desc = format!("Blackmoon {}", env!("CARGO_PKG_VERSION"));
+    let desc_str = match existing_description {
+        None | Some("") => blackmoon_desc.as_str(),
+        Some(s) if s.starts_with("Blackmoon ") => blackmoon_desc.as_str(),
+        Some(s) => s,
+    };
+    buf[2..82].copy_from_slice(&encode_cp1252_field(desc_str, 80));
     buf[82..84].copy_from_slice(&(charts.len() as u16).to_le_bytes());
     // +84: u16 trailing zero — already zeroed
 

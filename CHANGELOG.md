@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.1](https://github.com/lucidaeon/mediumcoeli/compare/0.0.0...0.0.1) — 2026-06-15
+
+### Added — `pericynthion`
+
+- **Alcabitius house system promoted to stable.** Refchart oracle captured
+  and acceptance test added to `acceptance_refchart.rs`. Removed
+  `#[cfg(feature = "noref-houses")]` gate — Alcabitius now compiles and
+  ships unconditionally.
+
+### Added — `starcat`
+
+- **JZOD output is now the default.** Running `starcat compute` with no output
+  flag emits JZOD-format JSON. `--text` and `--page` are the explicit opt-ins
+  and are mutually exclusive with each other and with `--jzod`.
+- **`--jzod` flag** (with `--json` as a visible alias) makes the default
+  explicit; it is a no-op when neither `--text` nor `--page` is given.
+- **`--page` flag** added as an explicit opt-in (previously the implicit
+  default when the `page` feature was enabled).
+- **Alcabitius** added to `HouseArg::ALL` and emitted in JZOD output alongside
+  the five previously promoted systems.
+- **UUID dependency** added; chart `uid` fields are now populated with v4 UUIDs.
+
+### Changed — `starcat`
+
+- JZOD mode computes all six promoted house systems unconditionally; `--house`
+  filtering applies only to `--text` and `--page` modes.
+- `--dm` coordinate format default now applies only when `--page` is explicitly
+  passed; `--text` and JZOD both default to `--dd`.
+
+### Added — `astrogram`
+
+- **`write_file_with_description`** — new public function on the `sfcht` module.
+  Writes a `.SFcht` file stamping `"Blackmoon <version>"` in the 80-byte file
+  description header field; preserves any existing description that was not
+  written by Blackmoon.
+
+### Changed — `blackmoon`
+
+- SFcht write path now reads the existing file's description header before
+  writing, passing it to `write_file_with_description` so hand-curated
+  descriptions are preserved across overwrite operations.
+
+### Changed — build / justfile
+
+- **`just docker build`** now loads a single-arch image into the local daemon
+  (`--load`) without pushing. BuildKit layer cache is populated for subsequent
+  multi-arch push.
+- **`just docker push`** added as the explicit gate for multi-arch
+  (`--platform`) buildx push to all configured registries.
+- Removed `just docker local`, `just docker tag`, and the old auto-push
+  behaviour from `just docker build`.
+
+---
+
 ## [0.0.0](https://github.com/lucidaeon/mediumcoeli/compare/0a080f3534e15c52e6e3493815eb85875f08e179...0.0.0)
 
 Initial public release. Four crates ship as one workspace:

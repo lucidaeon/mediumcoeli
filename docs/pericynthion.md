@@ -29,8 +29,6 @@ The single call most callers want: `coords::apparent::apparent_ecliptic_position
 
 **Data flows strictly downward** through the layers above — `chebyshev` knows nothing about `body`; `body` knows nothing about `coords`. This keeps each layer's tests focused on one physical phenomenon.
 
-**Oracles drive correctness.** Integration tests in `tests/acceptance_horizons.rs` compare results against NASA JPL HORIZONS fixtures at 0.5″ for planets and 5″ for the Moon (tightened from 20″ after the IAU 2000B upgrade). Hand-transcribed reference charts in `REFCHARTS.md` cross-check angles, lots, and house cusps for four anchor charts spanning 120 CE through the modern era.
+**Oracles drive correctness.** Integration tests in `tests/acceptance_horizons.rs` compare results against NASA JPL HORIZONS fixtures at 0.5″ for planets and 5″ for the Moon (tightened from 20″ after the IAU 2000B upgrade). Curated reference charts cross-check the angles, lots, and house cusps for anchor charts spanning from antiquity through the modern era.
 
 **Naming convention.** Every named chart point uses two-letter `UPPERlower` display labels and lowercase struct fields; Ascendant uses `ac` to dodge the Rust keyword `as`. Axis modules concatenate both endpoint codes (`acds`, `mcic`, `vxax`). For computation modes: `mean ≡ average`, `true ≡ apparent ≡ osculating`, `natural ≡ interpolated`.
-
-**v1 non-goals** (deferred to `backlog.md`): sidereal zodiacs, asteroids and dwarf planets beyond Pluto, the wider Hellenistic lot catalog, natural/interpolated Lilith, additional house systems (Koch, Campanus, Topocentric, Alcabitius), and a full IANA tzdb. The shipped surface is the v1 commitment.

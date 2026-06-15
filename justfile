@@ -49,15 +49,16 @@ publish CRATE='':
 	    cargo publish --dry-run -p "$crate"
 	done
 
-# Build multi-arch Docker images and push to all registries in one step.
-# Set DOCKER_AMD64_HOST=tcp://host:2375 to use a native amd64 remote builder
+# Build and tag Docker images into the local daemon (native arch only; BuildKit
+# cache is populated so a subsequent push reuses layers).
+# Set DOCKER_AMD64_HOST=tcp://host:2375 to wire a native amd64 remote builder
 # instead of QEMU emulation (faster, no OOM on heavy dep graphs).
-# just docker build                    → build+push both crates (amd64+arm64), tag latest
-# just docker build 0.0.1             → build+push both crates, tag 0.0.1
-# just docker build 0.0.1 starcat     → build+push one crate
-# just docker local                   → build native arch only, load into local daemon
-# just docker tag 0.0.1               → retag existing local image (single-arch only)
-# just docker push 0.0.1 starcat      → push already-tagged local image (single-arch only)
+# just docker build                    → build+tag both crates, tag latest
+# just docker build 0.0.1             → build+tag both crates, tag 0.0.1
+# just docker build 0.0.1 starcat     → build+tag one crate
+# just docker push                    → push latest to all registries (multi-arch)
+# just docker push 0.0.1             → push 0.0.1 to all registries (multi-arch)
+# just docker push 0.0.1 starcat     → push one crate
 docker ACTION TAG=tag CRATE='':
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -81,19 +82,20 @@ docker ACTION TAG=tag CRATE='':
 	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
 	            docker buildx build \
 	                "${builder_args[@]}" \
+	                "${tag_flags[@]}" \
+	                --load \
+	                -f "scripts/Dockerfile.$crate" .
+	            ;;
+	        push)
+	            tag_flags=()
+	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
+	            docker buildx build \
+	                "${builder_args[@]}" \
 	                --platform {{platforms}} \
 	                "${tag_flags[@]}" \
 	                --push \
 	                -f "scripts/Dockerfile.$crate" .
 	            ;;
-	        local)
-	            docker buildx build \
-	                -t "$crate:{{TAG}}" \
-	                --load \
-	                -f "scripts/Dockerfile.$crate" .
-	            ;;
-	        tag)   for r in {{registries}}; do docker tag "$crate:{{TAG}}" "$r/{{namespace}}/$crate:{{TAG}}"; done ;;
-	        push)  for r in {{registries}}; do docker push "$r/{{namespace}}/$crate:{{TAG}}"; done ;;
 	        *)     echo "unknown docker action: {{ACTION}}" >&2; exit 1 ;;
 	    esac
 	done

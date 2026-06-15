@@ -1,6 +1,6 @@
 [package]
 name = "starcat"
-version = "0.0.0"
+version = "0.0.1"
 description = "Command-line astrological ephemeris: Compute Natal Charts"
 keywords = ["astrology", "divination", "ephemeris"]
 categories = ["command-line-utilities"]
@@ -33,4 +33,5 @@ clap_complete.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 tabled = { workspace = true, optional = true }

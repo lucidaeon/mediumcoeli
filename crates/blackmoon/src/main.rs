@@ -847,7 +847,11 @@ fn write_file_target(
 ) -> Result<()> {
     match target {
         Target::Sfcht => {
-            let bytes = sfcht::write_file(charts)?;
+            let existing_desc = std::fs::read(path)
+                .ok()
+                .and_then(|b| sfcht::parse_file(&b).ok())
+                .map(|(hdr, _)| hdr.description);
+            let bytes = sfcht::write_file_with_description(charts, existing_desc.as_deref())?;
             std::fs::write(path, bytes)?;
         }
         Target::Zeus => {

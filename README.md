@@ -1,14 +1,16 @@
 # Medium Coeli
 
-Astrology software workspace. Two Rust projects share this repo as four crates:
-
-- **[Starcat](docs/starcat.md)** — ephemeris computation and presentation. Reads NASA JPL DE441 binary files and produces ecliptic-of-date apparent positions for Astrological placements. Supports multiple geographic coordinate systems, astronomical coordinate systems, and astrological house systems.
+Astrology software written in Rust.
 
 - **[Blackmoon](docs/blackmoon.md)** — chart data-format conversion. Reads and writes:
   - Solar Fire `.SFcht` files
   - Astrodatabank XML
   - Astrolog AAF
   - Zeus
+
+WARNING: This software is pre-release. It should only be used by those who have sucessfully restored databases from backups. It is recommended to backup your Astrology databases on at least one flash drive and one cloud drive. See your Astrology software user guide for information.
+
+- **[Starcat](docs/starcat.md)** — ephemeris computation and presentation. Reads NASA JPL DE441 binary files and produces ecliptic-of-date apparent positions for Astrological placements. Supports multiple geographic coordinate systems, astronomical coordinate systems, and astrological house systems.
 
 ## Quick Start
  - [Homebrew](https://brew.sh) recommended
@@ -65,6 +67,15 @@ starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:
 ╰───────────┴────────────┴───────────┴────────────╯
 ```
 
+## Docker users
+
+```
+docker run --rm --pull always -v "${STARCAT_JPL_DATA}":/jpl:ro lucidaeon/starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:00 --lat 48.208333 --lon=16.371667 --house=placidus
+```
+```
+docker run --rm --pull always -v "$(pwd)":/workspace:rw lucidaeon/blackmoon /workspace/adb_export_sample.xml  --output /workspace/now.sfcht
+```
+
 ## Shell completion
 
 ```
@@ -72,11 +83,6 @@ eval "$(starcat generate-completion)"
 eval "$(blackmoon --generate-completion)"
 ```
 
-## Docker users
-
-```
-docker run --rm --pull always -v "${STARCAT_JPL_DATA}":/jpl:ro lucidaeon/starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:00 --lat 48.208333 --lon=16.371667 --house=placidus
-```
 
 ## Common tasks
 
