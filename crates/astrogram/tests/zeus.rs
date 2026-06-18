@@ -47,7 +47,7 @@ fn blank_lines_are_skipped() {
 #[test]
 fn parses_single_minimal_record() {
     let input = record(
-        "Ada Lovelace",
+        "Amber Celeste",
         "1",
         "10.12.1815",
         "07:30:00",
@@ -62,7 +62,7 @@ fn parses_single_minimal_record() {
     );
     let charts = parse_file(&input).unwrap();
     assert_eq!(charts.len(), 1);
-    assert_eq!(charts[0].name, "Ada Lovelace");
+    assert_eq!(charts[0].name, "Amber Celeste");
 }
 
 // --- dates ---
@@ -97,10 +97,10 @@ fn julian_calendar_suffix_strips_cleanly() {
         "1",
         "08.02.0120JC",
         "18:35:01",
-        "+02:24:14",
+        "+02:24:28",
         "Antioch",
-        "N36.12.24",
-        "E036.09.26",
+        "N36.14.00",
+        "E036.07.00",
         "M",
         "B",
         "",
@@ -140,23 +140,23 @@ fn time_parses_to_hms() {
 
 #[test]
 fn positive_utc_offset_is_east_positive() {
-    // +02:24:14 → 2 + 24/60 + 14/3600 = 2.4038...
+    // +02:24:28 → 2 + 24/60 + 28/3600 = 2.4078...
     let input = record(
         "Test",
         "1",
         "01.01.2000",
         "12:00:00",
-        "+02:24:14",
+        "+02:24:28",
         "Antioch",
-        "N36.12.24",
-        "E036.09.26",
+        "N36.14.00",
+        "E036.07.00",
         "-",
         "B",
         "",
         "",
     );
     let charts = parse_file(&input).unwrap();
-    let expected = 2.0 + 24.0 / 60.0 + 14.0 / 3600.0;
+    let expected = 2.0 + 24.0 / 60.0 + 28.0 / 3600.0;
     assert!(
         (charts[0].tz_offset_hours - expected).abs() < 1e-9,
         "{}",
@@ -215,48 +215,48 @@ fn near_zero_utc_offset() {
 
 #[test]
 fn north_east_coordinates_are_positive() {
-    // N36.12.24, E036.09.26
+    // N36.14.00, E036.07.00
     let input = record(
         "Valens",
         "1",
         "08.02.0120JC",
         "18:35:01",
-        "+02:24:14",
+        "+02:24:28",
         "Antioch",
-        "N36.12.24",
-        "E036.09.26",
+        "N36.14.00",
+        "E036.07.00",
         "M",
         "B",
         "",
         "",
     );
     let charts = parse_file(&input).unwrap();
-    let expected_lat = 36.0 + 12.0 / 60.0 + 24.0 / 3600.0;
-    let expected_lon = 36.0 + 9.0 / 60.0 + 26.0 / 3600.0;
+    let expected_lat = 36.0 + 14.0 / 60.0;
+    let expected_lon = 36.0 + 7.0 / 60.0;
     assert!((charts[0].latitude.degrees() - expected_lat).abs() < 1e-9);
     assert!((charts[0].longitude.degrees() - expected_lon).abs() < 1e-9);
 }
 
 #[test]
 fn south_west_coordinates_are_negative() {
-    // S33.52.00, W070.40.00 (Santiago, Chile)
+    // S34.36.00, W058.22.48 (Buenos Aires, Argentina)
     let input = record(
         "Test",
         "1",
         "01.01.2000",
         "12:00:00",
         "-04:00:00",
-        "Santiago",
-        "S33.52.00",
-        "W070.40.00",
+        "Buenos Aires",
+        "S34.36.00",
+        "W058.22.48",
         "-",
         "AA",
         "",
         "",
     );
     let charts = parse_file(&input).unwrap();
-    let expected_lat = -(33.0 + 52.0 / 60.0);
-    let expected_lon = -(70.0 + 40.0 / 60.0);
+    let expected_lat = -(34.0 + 36.0 / 60.0);
+    let expected_lon = -(58.0 + 22.0 / 60.0 + 48.0 / 3600.0);
     assert!((charts[0].latitude.degrees() - expected_lat).abs() < 1e-9);
     assert!((charts[0].longitude.degrees() - expected_lon).abs() < 1e-9);
 }
@@ -525,62 +525,11 @@ fn acceptance_parses_full_zeus_specimen() {
     let text = std::fs::read_to_string(&path).expect("read specimen");
     let charts = parse_file(&text).unwrap();
 
+    // Structural only: the Zeus parser must read every record in the real
+    // specimen without error. Per-record value assertions are intentionally
+    // omitted — committed tests must not bake specimen-extracted data. Field-
+    // level coverage (hemispheres, event types, notes, LMT, Cyrillic, etc.)
+    // lives in the synthetic record() unit tests above.
     assert_eq!(charts.len(), 11, "expected 11 records in zeus.zdb");
-
-    // Vettius Valens (record 0)
-    let valens = &charts[0];
-    assert_eq!(valens.name, "Vettius Valens");
-    assert_eq!(valens.year, 120);
-    assert_eq!(valens.month, 2);
-    assert_eq!(valens.day, 8);
-    assert_eq!(valens.hour, 18);
-    assert_eq!(valens.minute, 35);
-    assert_eq!(valens.second, 1);
-    assert!((valens.latitude.degrees() - (36.0 + 12.0 / 60.0 + 24.0 / 3600.0)).abs() < 1e-9);
-    assert!((valens.longitude.degrees() - (36.0 + 9.0 / 60.0 + 26.0 / 3600.0)).abs() < 1e-9);
-    assert!((valens.tz_offset_hours - (2.0 + 24.0 / 60.0 + 14.0 / 3600.0)).abs() < 1e-9);
-    assert_eq!(valens.event_type, EventType::Male);
-    assert_eq!(valens.source_rating.as_deref(), Some("B"));
-    assert_eq!(valens.city.as_deref(), Some("Antioch, Turkey"));
-
-    // Record 1
-    let r1 = &charts[1];
-    assert_eq!(r1.year, 1984);
-    assert!((r1.latitude.degrees() - (39.0 + 43.0 / 60.0 + 46.0 / 3600.0)).abs() < 1e-9);
-    assert!((r1.longitude.degrees() - -(104.0 + 49.0 / 60.0 + 55.0 / 3600.0)).abs() < 1e-9);
-    assert!((r1.tz_offset_hours - -7.0).abs() < 1e-9);
-    assert_eq!(r1.event_type, EventType::Male);
-
-    // Record 2: Female with double-pipe notes
-    let r2 = &charts[2];
-    assert_eq!(r2.event_type, EventType::Female);
-    assert!(
-        r2.notes.as_ref().is_some_and(|n| n.contains("||")),
-        "record 2 notes should preserve || separators"
-    );
-
-    // William Lilly (record 3)
-    let lilly = &charts[3];
-    assert!(lilly.city.is_none(), "Lilly has empty location field");
-    let expected_tz = -(5.0 / 60.0 + 19.0 / 3600.0);
-    assert!((lilly.tz_offset_hours - expected_tz).abs() < 1e-9);
-
-    // Cyrillic location (records 4-10)
-    for chart in &charts[4..11] {
-        assert_eq!(
-            chart.city.as_deref(),
-            Some("Москва, Россия"),
-            "record should have Cyrillic city"
-        );
-    }
-
-    // Chart type variety
-    assert_eq!(charts[4].event_type, EventType::Unspecified); // Event, sex=-
-    assert_eq!(charts[5].event_type, EventType::Unspecified); // Event w Rect
-    assert_eq!(charts[6].event_type, EventType::Horary); // chart_type=2
-    assert_eq!(charts[7].event_type, EventType::Event); // chart_type=3
-    assert_eq!(charts[8].event_type, EventType::Event); // chart_type=4
-    assert_eq!(charts[9].event_type, EventType::Event); // chart_type=5
-
-    eprintln!("acceptance: 10 Zeus records verified");
+    eprintln!("acceptance: parsed {} Zeus records", charts.len());
 }

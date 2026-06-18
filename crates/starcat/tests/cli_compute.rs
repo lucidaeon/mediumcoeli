@@ -1,5 +1,5 @@
 //! Integration test: spawn the `starcat` binary as a subprocess, parse
-//! its JZOD JSON output, and compare against refchart oracle data.
+//! its JZOD JSON output, and compare against reference chart oracle data.
 //!
 //! Unlike `acceptance_refchart.rs` (which calls library functions in-
 //! process), this test exercises the *whole CLI surface*: clap arg
@@ -62,7 +62,7 @@ struct Case {
     args: &'static [&'static str],
     /// JSON key under `houses` — e.g. "placidus", "regiomontanus", "porphyry".
     house_system: &'static str,
-    /// Refchart cusps in 1-based natural order H1..H12, indexed 0..12.
+    /// Reference cusps in 1-based natural order H1..H12, indexed 0..12.
     cusps_deg: [f64; 12],
     /// Per-chart tolerance in arcmin (matches `angle_tol_arcmin` in
     /// `acceptance_refchart.rs`).
@@ -136,7 +136,7 @@ fn run_case(case: &Case) {
         let delta_arcmin = raw.min(360.0 - raw) * 60.0;
         let (c, r) = dlt(delta_arcmin, case.tol_arcmin);
         println!(
-            "  H{:>2}  starcat={:>10.4}°  refchart={:>10.4}°  Δ: {c}{:>6.2}{r}′",
+            "  H{:>2}  starcat={:>10.4}°  reference={:>10.4}°  Δ: {c}{:>6.2}{r}′",
             i + 1,
             got,
             expected_deg,
@@ -145,7 +145,7 @@ fn run_case(case: &Case) {
         max_arcmin = max_arcmin.max(delta_arcmin);
         assert!(
             delta_arcmin < case.tol_arcmin,
-            "{}/H{}: starcat {:.4}° vs refchart {:.4}° → Δ {:.2}′ exceeds {:.0}′",
+            "{}/H{}: starcat {:.4}° vs reference {:.4}° → Δ {:.2}′ exceeds {:.0}′",
             case.id,
             i + 1,
             got,
@@ -191,7 +191,7 @@ fn run_case(case: &Case) {
 // Test 5 — Lightning Strike + Placidus
 // =============================================================================
 //
-// 1955-11-12 22:04 PST, Universal City CA (refchart resolved coords
+// 1955-11-12 22:04 PST, Universal City CA (reference resolved coords
 // 34°N08'20" 118°W21'09" → 34.138889°, -118.3525°). PST = UTC−8.
 #[test]
 fn lightning_strike_placidus_via_cli() {
@@ -235,13 +235,13 @@ fn lightning_strike_placidus_via_cli() {
 // Test 1 — William Lilly + Regiomontanus
 // =============================================================================
 //
-// 1602-05-11 02:00 LMT Diseworth (refchart resolved coords 52°N47' 001°W11'
+// 1602-05-11 02:00 LMT Diseworth (reference resolved coords 52°N47' 001°W11'
 // → 52.7833°, -1.1833°). `--lmt` + `--lon` derives the LMT offset (≈ −4m44s)
 // from the longitude automatically, so civil-time + zone reproduces
-// refchart's resolved UT 02:04:44 exactly.
+// reference's resolved UT 02:04:44 exactly.
 //
 // Tolerance 30′ matches `angle_tol_arcmin("william_lilly")` in
-// `acceptance_refchart.rs` — refchart's ΔT model differs from SMH 2016 by
+// `acceptance_refchart.rs` — reference's ΔT model differs from SMH 2016 by
 // ~1 s at this epoch, but the Regiomontanus formula is lat/RAMC-sensitive
 // enough that the equator-trisection arc residual dominates.
 #[test]
@@ -286,14 +286,14 @@ fn william_lilly_regiomontanus_via_cli() {
 // Test 0 — Vettius Valens + Porphyry
 // =============================================================================
 //
-// 0120-02-08 18:35 LMT Antioch (refchart resolved coords 36°N14' east of
+// 0120-02-08 18:35 LMT Antioch (reference resolved coords 36°N14' east of
 // Greenwich — see acceptance_refchart.rs::VETTIUS_VALENS for the W↔E
 // transcription discussion). `--lmt --lon=+36.1167` derives LMT offset
-// +2h24m28s, reproducing refchart's UT 16:10:32.
+// +2h24m28s, reproducing reference's UT 16:10:32.
 //
 // Tolerance 120′ (2°) matches `angle_tol_arcmin("vettius_valens")` — the
 // year-120 chart sits on the bleeding edge of the ΔT-model divergence:
-// refchart +9340 s vs SMH 2016 +10570 s (1230 s gap).
+// reference +9340 s vs SMH 2016 +10570 s (1230 s gap).
 #[test]
 fn vettius_valens_porphyry_via_cli() {
     let case = Case {
@@ -804,7 +804,7 @@ fn json_bodies_have_speed_and_retrograde() {
         "Sun daily speed should be ~1°/day, got {sun_speed:.4}"
     );
 
-    // Uranus (index 7): retrograde on 1955-11-12 per REFCHARTS test 5.
+    // Uranus (index 7): retrograde on 1955-11-12 per reference chart set test 5.
     assert_eq!(bodies[7]["id"], "uranus");
     assert_eq!(
         bodies[7]["retrograde"], true,
@@ -822,7 +822,7 @@ fn json_bodies_have_speed_and_retrograde() {
 //
 // In heliocentric mode Earth replaces Sun at index 0 and moves ~1°/day.
 // No body should be retrograde (heliocentric view is always prograde).
-// REFCHARTS test 4 uses the UNIX 2038 timestamp as a heliocentric chart.
+// reference chart set test 4 uses the UNIX 2038 timestamp as a heliocentric chart.
 #[test]
 fn heliocentric_speed_uses_helio_positions() {
     let Some(jpl) = jpl_data_dir() else {

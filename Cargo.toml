@@ -14,8 +14,8 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.0.1" }
-astrogram = { path = "crates/astrogram", version = "0.0.1" }
+pericynthion = { path = "crates/pericynthion", version = "0.1.0" }
+astrogram = { path = "crates/astrogram", version = "0.1.0" }
 
 # Errors
 thiserror = "2"

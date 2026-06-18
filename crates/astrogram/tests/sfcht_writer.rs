@@ -91,9 +91,9 @@ fn single_chart_record_count_is_1() {
 // --- name round-trip ---
 
 #[test]
-fn round_trip_name() {
+fn name_round_trips() {
     let c = chart(
-        "Ada Lovelace",
+        "Amber Celeste",
         51.5,
         -0.117,
         1815,
@@ -110,13 +110,13 @@ fn round_trip_name() {
         None,
     );
     let (_, charts) = parse_file(&write_file(&[c]).unwrap()).unwrap();
-    assert_eq!(charts[0].name, "Ada Lovelace");
+    assert_eq!(charts[0].name, "Amber Celeste");
 }
 
 // --- date/time ---
 
 #[test]
-fn round_trip_date() {
+fn date_round_trips() {
     let c = chart(
         "Test",
         51.5,
@@ -142,18 +142,18 @@ fn round_trip_date() {
 }
 
 #[test]
-fn round_trip_ancient_year() {
+fn ancient_year_round_trips() {
     let c = chart(
         "Valens",
-        36.207,
-        36.157,
+        36.0 + 14.0 / 60.0,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
         18,
         35,
         1,
-        2.404,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         Some("Antioch"),
         None,
@@ -165,7 +165,7 @@ fn round_trip_ancient_year() {
 }
 
 #[test]
-fn round_trip_time() {
+fn time_round_trips() {
     let c = chart(
         "Test",
         51.5,
@@ -195,10 +195,10 @@ fn round_trip_time() {
 #[test]
 fn positive_longitude_round_trips() {
     // ISO 6709 +East stored as +West on disk; parse_file flips back
-    let lon = 36.0 + 9.0 / 60.0 + 26.0 / 3600.0;
+    let lon = 36.0 + 7.0 / 60.0;
     let c = chart(
         "Valens",
-        36.207,
+        36.0 + 14.0 / 60.0,
         lon,
         120,
         2,
@@ -206,7 +206,7 @@ fn positive_longitude_round_trips() {
         18,
         35,
         1,
-        2.404,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         None,
         None,
@@ -251,18 +251,18 @@ fn negative_longitude_round_trips() {
 
 #[test]
 fn positive_latitude_round_trips() {
-    let lat = 36.0 + 12.0 / 60.0 + 24.0 / 3600.0;
+    let lat = 36.0 + 14.0 / 60.0;
     let c = chart(
         "Valens",
         lat,
-        36.157,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
         18,
         35,
         1,
-        2.404,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         None,
         None,
@@ -309,11 +309,11 @@ fn negative_latitude_round_trips() {
 
 #[test]
 fn positive_tz_round_trips() {
-    let tz = 2.0 + 24.0 / 60.0 + 14.0 / 3600.0;
+    let tz = 2.0 + 24.0 / 60.0 + 28.0 / 3600.0;
     let c = chart(
         "Valens",
-        36.207,
-        36.157,
+        36.0 + 14.0 / 60.0,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
@@ -390,23 +390,23 @@ fn all_event_types_round_trip() {
 fn city_round_trips() {
     let c = chart(
         "Valens",
-        36.207,
-        36.157,
+        36.0 + 14.0 / 60.0,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
         18,
         35,
         1,
-        2.404,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
-        Some("Antioch, Turkey"),
+        Some("Antioch"),
         None,
         Some("B"),
         None,
     );
     let (_, charts) = parse_file(&write_file(&[c]).unwrap()).unwrap();
-    assert_eq!(charts[0].city.as_deref(), Some("Antioch, Turkey"));
+    assert_eq!(charts[0].city.as_deref(), Some("Antioch"));
 }
 
 #[test]
@@ -456,7 +456,7 @@ fn source_rating_round_trips() {
 }
 
 #[test]
-fn notes_round_trip() {
+fn notes_round_trips() {
     let c = chart(
         "Test",
         51.5,

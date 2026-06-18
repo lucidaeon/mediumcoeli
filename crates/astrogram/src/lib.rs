@@ -12,7 +12,7 @@
 //! - **Read:** Solar Fire `.SFcht` binary, Astrodatabank XML,
 //!   AAF (Astrolog Ascii Format), Zeus `.zdb`.
 //! - **Write:** Solar Fire `.SFcht` binary, Astrodatabank XML, Zeus `.zdb`.
-//! - **Extract** (authenticated web): `lunaastrology.com`, `astro.com`.
+//! - **Extract** (authenticated web): `lunaastrology.com`, `astro.com`, `astrotheoros.com`.
 //!
 //! Deferred formats (Quick\*Chart, Solar Fire text export, `JZOD`,
 //! `Nechepso`, `TimeCycles`, SQL/`SQLite`) and additional extractors are
@@ -42,13 +42,23 @@
 pub mod aaf;
 pub mod adbxml;
 /// astro.com HTTP API helpers.
-pub mod astro;
+pub mod astrocom;
+pub mod astrotheoros;
+pub mod capability;
 pub mod chart;
 pub mod consolidate;
 pub mod decision_log;
 pub mod error;
+pub mod format;
+/// JZOD v0.0.0 writer.
+pub mod jzod;
 pub mod luna;
 pub mod normalize;
+/// Raw key: value text writer (debug/inspection).
+pub mod raw;
 pub mod sfcht;
+#[cfg(test)]
+mod test_support;
+pub mod transcript;
 pub mod util;
 pub mod zeus;

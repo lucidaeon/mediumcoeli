@@ -106,9 +106,9 @@ fn output_has_at_least_16_semicolon_delimited_fields() {
 // --- name round-trip ---
 
 #[test]
-fn round_trip_name() {
+fn name_round_trips() {
     let c = chart(
-        "Ada Lovelace",
+        "Amber Celeste",
         51.5,
         -0.117,
         1815,
@@ -124,13 +124,13 @@ fn round_trip_name() {
         None,
     );
     let parsed = parse_file(&write_file(&[c])).unwrap();
-    assert_eq!(parsed[0].name, "Ada Lovelace");
+    assert_eq!(parsed[0].name, "Amber Celeste");
 }
 
 // --- date round-trip ---
 
 #[test]
-fn round_trip_date() {
+fn date_round_trips() {
     let c = chart(
         "Test",
         51.5,
@@ -155,19 +155,19 @@ fn round_trip_date() {
 }
 
 #[test]
-fn round_trip_ancient_year() {
+fn ancient_year_round_trips() {
     // 4-digit year, zero-padded
     let c = chart(
         "Valens",
-        36.207,
-        36.157,
+        36.0 + 14.0 / 60.0,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
         18,
         35,
         1,
-        2.404,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         None,
         Some("B"),
@@ -180,7 +180,7 @@ fn round_trip_ancient_year() {
 // --- time round-trip ---
 
 #[test]
-fn round_trip_time() {
+fn time_round_trips() {
     let c = chart(
         "Test",
         51.5,
@@ -208,9 +208,9 @@ fn round_trip_time() {
 
 #[test]
 fn north_east_coordinates_format_correctly() {
-    // Antioch: N36.12.24, E036.09.26
-    let lat = 36.0 + 12.0 / 60.0 + 24.0 / 3600.0;
-    let lon = 36.0 + 9.0 / 60.0 + 26.0 / 3600.0;
+    // Antioch: N36.14.00, E036.07.00
+    let lat = 36.0 + 14.0 / 60.0;
+    let lon = 36.0 + 7.0 / 60.0;
     let c = chart(
         "Valens",
         lat,
@@ -221,22 +221,22 @@ fn north_east_coordinates_format_correctly() {
         18,
         35,
         1,
-        2.0 + 24.0 / 60.0 + 14.0 / 3600.0,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         Some("Antioch"),
         Some("B"),
         None,
     );
     let out = write_file(&[c]);
-    assert!(out.contains("N36.12.24"), "lat not found in: {out}");
-    assert!(out.contains("E036.09.26"), "lon not found in: {out}");
+    assert!(out.contains("N36.14.00"), "lat not found in: {out}");
+    assert!(out.contains("E036.07.00"), "lon not found in: {out}");
 }
 
 #[test]
 fn south_west_coordinates_format_correctly() {
-    // Santiago: S33.52.00, W070.40.00
-    let lat = -(33.0 + 52.0 / 60.0);
-    let lon = -(70.0 + 40.0 / 60.0);
+    // Buenos Aires: S34.36.00, W058.22.48
+    let lat = -(34.0 + 36.0 / 60.0);
+    let lon = -(58.0 + 22.0 / 60.0 + 48.0 / 3600.0);
     let c = chart(
         "Test",
         lat,
@@ -249,19 +249,19 @@ fn south_west_coordinates_format_correctly() {
         0,
         -4.0,
         EventType::Unspecified,
-        Some("Santiago"),
+        Some("Buenos Aires"),
         Some("AA"),
         None,
     );
     let out = write_file(&[c]);
-    assert!(out.contains("S33.52.00"), "lat not found in: {out}");
-    assert!(out.contains("W070.40.00"), "lon not found in: {out}");
+    assert!(out.contains("S34.36.00"), "lat not found in: {out}");
+    assert!(out.contains("W058.22.48"), "lon not found in: {out}");
 }
 
 #[test]
-fn coordinates_round_trip() {
-    let lat = 36.0 + 12.0 / 60.0 + 24.0 / 3600.0;
-    let lon = 36.0 + 9.0 / 60.0 + 26.0 / 3600.0;
+fn coordinates_round_trips() {
+    let lat = 36.0 + 14.0 / 60.0;
+    let lon = 36.0 + 7.0 / 60.0;
     let c = chart(
         "Valens",
         lat,
@@ -272,7 +272,7 @@ fn coordinates_round_trip() {
         18,
         35,
         1,
-        2.0 + 24.0 / 60.0 + 14.0 / 3600.0,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         None,
         Some("B"),
@@ -295,12 +295,12 @@ fn coordinates_round_trip() {
 
 #[test]
 fn positive_utc_offset_formats_correctly() {
-    // +02:24:14
-    let tz = 2.0 + 24.0 / 60.0 + 14.0 / 3600.0;
+    // +02:24:28
+    let tz = 2.0 + 24.0 / 60.0 + 28.0 / 3600.0;
     let c = chart(
         "Test",
-        36.207,
-        36.157,
+        36.0 + 14.0 / 60.0,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
@@ -314,7 +314,7 @@ fn positive_utc_offset_formats_correctly() {
         None,
     );
     let out = write_file(&[c]);
-    assert!(out.contains("+02:24:14"), "offset not found in: {out}");
+    assert!(out.contains("+02:24:28"), "offset not found in: {out}");
 }
 
 #[test]

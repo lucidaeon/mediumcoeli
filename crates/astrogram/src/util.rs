@@ -18,6 +18,44 @@ pub fn utc_timestamp_from_secs(secs: u64) -> String {
     format!("{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z")
 }
 
+/// Format a UTC offset (decimal hours) as `+HH:MM` or `-HH:MM`.
+///
+/// Used wherever an offset needs display or serialisation (transcript,
+/// JZOD, raw dump).
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+pub fn format_utc_offset(hours: f64) -> String {
+    let sign = if hours < 0.0 { '-' } else { '+' };
+    let abs = hours.abs();
+    let h = abs.floor() as u32;
+    let m = ((abs - f64::from(h)) * 60.0).round() as u32;
+    format!("{sign}{h:02}:{m:02}")
+}
+
+/// Current wall-clock time as `YYYY-MM-DDTHH:MM:SSZ` (ISO 8601 extended).
+///
+/// Used in JZOD `ephemeris.calculated_at` fields.
+#[must_use]
+#[allow(clippy::cast_possible_wrap)]
+pub fn utc_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let hh = rem / 3_600;
+    let mm = (rem % 3_600) / 60;
+    let ss = rem % 60;
+    let (y, m, d) = days_to_ymd(days);
+    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
 /// Current wall-clock time as `YYYYMMDDThhmmssZ`.
 #[must_use]
 pub fn utc_timestamp() -> String {
@@ -48,6 +86,31 @@ pub fn expand_now(path: &Path, secs: u64) -> PathBuf {
     match path.parent() {
         Some(p) if p != Path::new("") => p.join(ext),
         _ => PathBuf::from(ext),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc_offset_positive_half_hour() {
+        assert_eq!(format_utc_offset(5.5), "+05:30");
+    }
+
+    #[test]
+    fn utc_offset_negative() {
+        assert_eq!(format_utc_offset(-8.0), "-08:00");
+    }
+
+    #[test]
+    fn utc_offset_zero() {
+        assert_eq!(format_utc_offset(0.0), "+00:00");
+    }
+
+    #[test]
+    fn utc_offset_whole_hour() {
+        assert_eq!(format_utc_offset(1.0), "+01:00");
     }
 }
 

@@ -54,11 +54,29 @@
 //! ```
 //! Then u32 `notes_length` + notes bytes.
 
+use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{
     Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, SubChart, Zodiac,
 };
 use crate::error::ParseError;
 use std::borrow::Cow;
+
+/// Fields recovered when reading a `.SFcht` file. `SFcht` is the canonical
+/// superset — it carries every lossy field.
+pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[
+    ChartField::SecondaryName,
+    ChartField::Region,
+    ChartField::SourceRating,
+    ChartField::HouseSystem,
+    ChartField::Zodiac,
+    ChartField::CoordinateSystem,
+    ChartField::SubCharts,
+    ChartField::Notes,
+    ChartField::EventType,
+]);
+
+/// Fields persisted when writing a `.SFcht` file. Identical to [`READ_CAPS`].
+pub const WRITE_CAPS: CapabilitySet = READ_CAPS;
 
 /// Size in bytes of the fixed `.SFcht` file header.
 pub const HEADER_SIZE: usize = 86;
@@ -496,4 +514,24 @@ fn parse_chart_at(bytes: &[u8], pos: usize) -> Result<(Chart, usize), ParseError
     };
 
     Ok((chart, q - pos))
+}
+
+#[cfg(test)]
+mod cap_roundtrip {
+    use super::*;
+    use crate::capability::ChartField;
+    use crate::test_support::{fully_populated, survivors};
+
+    #[test]
+    fn write_caps_match_roundtrip() {
+        let original = fully_populated();
+        let bytes = write_file(std::slice::from_ref(&original)).expect("write");
+        let (_, restored) = parse_file(&bytes).expect("parse");
+        let restored = &restored[0];
+        let mut got = survivors(&original, restored);
+        got.sort_by_key(|f| format!("{f:?}"));
+        let mut declared: Vec<ChartField> = WRITE_CAPS.fields().to_vec();
+        declared.sort_by_key(|f| format!("{f:?}"));
+        assert_eq!(got, declared, "sfcht WRITE_CAPS disagrees with round-trip");
+    }
 }

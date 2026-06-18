@@ -59,24 +59,24 @@ fn single_empty_batch_gives_empty_output() {
 
 #[test]
 fn single_chart_passes_through() {
-    let c = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let c = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let out = merge(&[vec![c.clone()]]);
     assert_eq!(out.len(), 1);
-    assert_eq!(out[0].name, "Ada");
+    assert_eq!(out[0].name, "Amber");
 }
 
 // --- deduplication: exact match ---
 
 #[test]
 fn identical_charts_in_same_batch_deduplicated() {
-    let c = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let c = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let out = merge(&[vec![c.clone(), c.clone()]]);
     assert_eq!(out.len(), 1);
 }
 
 #[test]
 fn identical_charts_across_batches_deduplicated() {
-    let c = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let c = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let out = merge(&[vec![c.clone()], vec![c.clone()]]);
     assert_eq!(out.len(), 1);
 }
@@ -85,9 +85,9 @@ fn identical_charts_across_batches_deduplicated() {
 
 #[test]
 fn first_seen_record_survives() {
-    let mut a = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let mut a = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     a.source_rating = Some("AA".to_string());
-    let mut b = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let mut b = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     b.source_rating = Some("B".to_string());
     let out = merge(&[vec![a], vec![b]]);
     assert_eq!(out.len(), 1);
@@ -98,16 +98,16 @@ fn first_seen_record_survives() {
 
 #[test]
 fn different_name_is_not_a_duplicate() {
-    let a = chart("Ada Lovelace", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
-    let b = chart("Ada Byron", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let a = chart("Amber Celeste", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let b = chart("Amber Cerise", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let out = merge(&[vec![a, b]]);
     assert_eq!(out.len(), 2);
 }
 
 #[test]
 fn name_match_is_case_sensitive() {
-    let a = chart("ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
-    let b = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let a = chart("amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let b = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let out = merge(&[vec![a, b]]);
     assert_eq!(out.len(), 2);
 }
@@ -230,22 +230,22 @@ fn reporting_no_dupes_empty_skipped() {
 
 #[test]
 fn reporting_returns_skipped_name() {
-    let c = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let c = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let (out, skipped) = merge_reporting(&[vec![c.clone(), c.clone()]]);
     assert_eq!(out.len(), 1);
-    assert_eq!(skipped, vec!["Ada"]);
+    assert_eq!(skipped, vec!["Amber"]);
 }
 
 #[test]
 fn reporting_multiple_skipped_names_in_order() {
-    let a = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let a = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let b = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
     let (out, skipped) = merge_reporting(&[
         vec![a.clone(), b.clone()],
         vec![a.clone(), b.clone()], // both duplicates
     ]);
     assert_eq!(out.len(), 2);
-    assert_eq!(skipped, vec!["Ada", "Bob"]);
+    assert_eq!(skipped, vec!["Amber", "Bob"]);
 }
 
 #[test]
@@ -405,19 +405,19 @@ fn group_candidates_preserves_input_order_within_a_group() {
 
 #[test]
 fn three_batches_with_overlaps() {
-    let ada = chart("Ada", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
+    let amber = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
     let bob = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
     let carol = chart("Carol", 48.9, 2.35, 1970, 7, 4, 0, 0, 0);
-    // Slightly rectified Ada (within 2h, same coords)
-    let ada2 = chart("Ada", 51.5, -0.117, 1815, 12, 10, 8, 15, 0);
+    // Slightly rectified Amber (within 2h, same coords)
+    let amber2 = chart("Amber", 51.5, -0.117, 1815, 12, 10, 8, 15, 0);
 
     let out = merge(&[
-        vec![ada.clone(), bob.clone()],
-        vec![ada2, carol.clone()],        // ada2 is a dupe of ada
+        vec![amber.clone(), bob.clone()],
+        vec![amber2, carol.clone()],      // amber2 is a dupe of amber
         vec![bob.clone(), carol.clone()], // both dupes
     ]);
     assert_eq!(out.len(), 3);
-    assert_eq!(out[0].name, "Ada");
+    assert_eq!(out[0].name, "Amber");
     assert_eq!(out[1].name, "Bob");
     assert_eq!(out[2].name, "Carol");
 }

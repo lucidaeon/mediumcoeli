@@ -1,11 +1,27 @@
+use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, EventType};
 use crate::luna::USER_AGENT;
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use std::time::Duration;
 
+/// Fields recovered when reading an astro.com account chart.
+///
+/// astro.com exports charts via AAF, which carries region (the country
+/// sub-locality field).  Event type is stored in the `ssx`/`btyp` form fields
+/// on write but the AAF export format does not return it — event type is always
+/// [`crate::chart::EventType::Unspecified`] on read.
+pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[ChartField::Region]);
+
+/// Fields persisted when writing an astro.com account chart.
+///
+/// The `ssx` form field carries [`crate::chart::EventType`] (male/female/event).
+/// Region is not a writable field — astro.com resolves the country via its own
+/// atlas from the city name; the `region` value in the source [`Chart`] is not sent.
+pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[ChartField::EventType]);
+
 /// Base URL for the astro.com web application.
-pub const ASTRO_URL: &str = "https://www.astro.com";
+pub const ASTROCOM_URL: &str = "https://www.astro.com";
 /// Login page URL — shows the register/login form; also sets a temporary `cid`.
 pub const LOGIN_PAGE: &str = "https://www.astro.com/cgi/scus.cgi?act=lgi";
 /// Login POST endpoint.
@@ -15,7 +31,7 @@ pub const AWD_URL: &str = "https://www.astro.com/cgi/awd.cgi";
 
 /// Errors specific to astro.com HTTP sessions.
 #[derive(Debug, thiserror::Error)]
-pub enum AstroError {
+pub enum AstrocomError {
     /// An HTTP request failed.
     #[error("HTTP: {0}")]
     Http(#[from] reqwest::Error),
@@ -43,19 +59,19 @@ pub enum AstroError {
 }
 
 /// Authenticated HTTP session for an astro.com account.
-pub struct AstroSession {
+pub struct AstrocomSession {
     client: Client,
     cid: String,
     delay: Duration,
 }
 
-impl AstroSession {
-    fn build_client(cid: &str) -> Result<Client, AstroError> {
+impl AstrocomSession {
+    fn build_client(cid: &str) -> Result<Client, AstrocomError> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::COOKIE,
             reqwest::header::HeaderValue::from_str(&format!("cid={cid}"))
-                .map_err(|e| AstroError::HttpClientBuild(e.to_string()))?,
+                .map_err(|e| AstrocomError::HttpClientBuild(e.to_string()))?,
         );
         headers.insert(
             reqwest::header::ACCEPT,
@@ -73,15 +89,15 @@ impl AstroSession {
             .http1_only()
             .timeout(Duration::from_secs(60))
             .build()
-            .map_err(|e| AstroError::HttpClientBuild(e.to_string()))
+            .map_err(|e| AstrocomError::HttpClientBuild(e.to_string()))
     }
 
     /// Build a session from a known `cid` cookie value.
     ///
     /// # Errors
-    /// - [`AstroError::HttpClientBuild`] if the `cid` value produces an invalid
+    /// - [`AstrocomError::HttpClientBuild`] if the `cid` value produces an invalid
     ///   cookie header or the `reqwest::Client` cannot be constructed.
-    pub fn from_cid(cid: &str, delay_ms: u64) -> Result<Self, AstroError> {
+    pub fn from_cid(cid: &str, delay_ms: u64) -> Result<Self, AstrocomError> {
         Ok(Self {
             client: Self::build_client(cid)?,
             cid: cid.to_string(),
@@ -97,23 +113,23 @@ impl AstroSession {
     ///   3. Extract real cid from redirect URL (`;;cid=<value>`) or hidden field.
     ///
     /// # Errors
-    /// - [`AstroError::HttpClientBuild`] if the anonymous `reqwest::Client`
+    /// - [`AstrocomError::HttpClientBuild`] if the anonymous `reqwest::Client`
     ///   cannot be constructed.
-    /// - [`AstroError::Http`] if the login GET or POST returns a network error
+    /// - [`AstrocomError::Http`] if the login GET or POST returns a network error
     ///   or a non-2xx status.
-    /// - [`AstroError::LoginFailed`] if the server responds with 2xx but no
+    /// - [`AstrocomError::LoginFailed`] if the server responds with 2xx but no
     ///   valid `cid` appears in the redirect URL or response body.
     ///
     /// # Panics
     /// Panics if the CSS selector literal `input[name="cid"]` is invalid —
     /// this is a compile-time constant and cannot happen in practice.
-    pub fn login(email: &str, pass: &str, delay_ms: u64) -> Result<Self, AstroError> {
+    pub fn login(email: &str, pass: &str, delay_ms: u64) -> Result<Self, AstrocomError> {
         let anon_client = Client::builder()
             .user_agent(USER_AGENT)
             .http1_only()
             .timeout(Duration::from_secs(60))
             .build()
-            .map_err(|e| AstroError::HttpClientBuild(e.to_string()))?;
+            .map_err(|e| AstrocomError::HttpClientBuild(e.to_string()))?;
 
         let page_html = anon_client
             .get(LOGIN_PAGE)
@@ -149,13 +165,13 @@ impl AstroSession {
                 .and_then(|n| n.value().attr("value"))
                 .filter(|v| !v.is_empty() && v.contains('-'))
                 .map(str::to_string)
-                .ok_or_else(|| AstroError::LoginFailed(final_url))?
+                .ok_or_else(|| AstrocomError::LoginFailed(final_url))?
         };
 
         Self::from_cid(&cid, delay_ms)
     }
 
-    fn get_text(&self, url: &str) -> Result<String, AstroError> {
+    fn get_text(&self, url: &str) -> Result<String, AstrocomError> {
         Ok(self.client.get(url).send()?.error_for_status()?.text()?)
     }
 
@@ -178,11 +194,11 @@ impl AstroSession {
     /// created, not edited, on write-back).
     ///
     /// # Errors
-    /// - [`AstroError::Http`] if the listing or AAF export request fails.
-    /// - [`AstroError::AafNotFound`] if the export response contains no `<pre>` block
+    /// - [`AstrocomError::Http`] if the listing or AAF export request fails.
+    /// - [`AstrocomError::AafNotFound`] if the export response contains no `<pre>` block
     ///   (session cookie may be expired).
-    /// - [`AstroError::AafParse`] if the extracted AAF text cannot be parsed.
-    pub fn fetch_charts(&self) -> Result<(Vec<crate::chart::Chart>, Vec<u32>), AstroError> {
+    /// - [`AstrocomError::AafParse`] if the extracted AAF text cannot be parsed.
+    pub fn fetch_charts(&self) -> Result<(Vec<crate::chart::Chart>, Vec<u32>), AstrocomError> {
         use crate::normalize::normalize_chart;
         use std::collections::HashMap;
 
@@ -195,9 +211,9 @@ impl AstroSession {
         self.sleep();
 
         let aaf_html = self.get_text(&format!("{AWD_URL}?lang=e&act=aaf"))?;
-        let aaf_text = extract_aaf(&aaf_html).ok_or(AstroError::AafNotFound)?;
-        let charts =
-            crate::aaf::parse_file(&aaf_text).map_err(|e| AstroError::AafParse(e.to_string()))?;
+        let aaf_text = extract_aaf(&aaf_html).ok_or(AstrocomError::AafNotFound)?;
+        let charts = crate::aaf::parse_file(&aaf_text)
+            .map_err(|e| AstrocomError::AafParse(e.to_string()))?;
 
         let (charts_out, nhor_ids_out) = charts
             .into_iter()
@@ -236,7 +252,7 @@ impl AstroSession {
         nhor_ids: &[u32],
         on_start: &dyn Fn(usize, usize, &str),
         on_result: &dyn Fn(&str),
-    ) -> Result<(), AstroError> {
+    ) -> Result<(), AstrocomError> {
         let new_charts: Vec<_> = charts
             .iter()
             .zip(nhor_ids.iter())
@@ -261,17 +277,51 @@ impl AstroSession {
     /// Create a single chart on astro.com.  Returns the `nhor` ID.
     ///
     /// # Errors
-    /// - [`AstroError::Http`] if any HTTP request fails.
-    /// - [`AstroError::NhorNotFound`] if the `nhor` ID cannot be extracted from
+    /// - [`AstrocomError::Http`] if any HTTP request fails.
+    /// - [`AstrocomError::NhorNotFound`] if the `nhor` ID cannot be extracted from
     ///   the create response URL or body.
-    pub fn create_one(&self, chart: &crate::chart::Chart) -> Result<u32, AstroError> {
-        let form_url = format!("{ASTRO_URL}/cgi/ade.cgi?lang=e");
-        let post_url = format!("{ASTRO_URL}/cgi/ade.cgi");
+    pub fn create_one(&self, chart: &crate::chart::Chart) -> Result<u32, AstrocomError> {
+        let form_url = format!("{ASTROCOM_URL}/cgi/ade.cgi?lang=e");
+        let post_url = format!("{ASTROCOM_URL}/cgi/ade.cgi");
 
         let form_html = self.get_text(&form_url)?;
         let sprev = extract_sprev(&form_html).unwrap_or_default();
 
-        let payload = create_payload(chart, &self.cid, &sprev);
+        // Resolve the city via the autocomplete API, mirroring the browser's JS flow:
+        // the user selects from autocomplete which sets `scit` to the label and `spli`
+        // to the atlas identifier.  Response format: "label|spli_value||count"
+        let city_q = chart.city.as_deref().unwrap_or("").trim();
+        let (scit_label, spli_val) = if city_q.is_empty() {
+            (chart.city.clone().unwrap_or_default(), None)
+        } else {
+            let ac_url = format!(
+                "{ASTROCOM_URL}/cgi/adejs.cgi?func=place_query&q={}&sctr=&lang=e",
+                urlencoding_simple(city_q)
+            );
+            let raw = self.get_text(&ac_url)?;
+            let first = raw.lines().next().unwrap_or("");
+            let mut parts = first.splitn(2, '|');
+            let label = parts.next().unwrap_or(city_q).trim().to_string();
+            let rest = parts.next().unwrap_or("");
+            let spli = rest.split("||").next().unwrap_or("").to_string();
+            if spli.is_empty() {
+                (city_q.to_string(), None)
+            } else {
+                (label, Some(spli))
+            }
+        };
+
+        // Build the payload matching what the browser submits after autocomplete:
+        // scit = autocomplete label, spli = atlas identifier, js = true, sprev = ""
+        let mut payload = create_payload(chart, &self.cid, &sprev);
+        if let Some(pos) = payload.iter().position(|(k, _)| k == "scit") {
+            payload[pos].1 = scit_label;
+        }
+        payload.push(("js".into(), "true".into()));
+        if let Some(ref spli) = spli_val {
+            payload.push(("spli".into(), spli.clone()));
+        }
+
         let resp = self
             .client
             .post(&post_url)
@@ -281,45 +331,52 @@ impl AstroSession {
         let final_url = resp.url().as_str().to_string();
         let body = resp.text()?;
 
-        let spli_opts = extract_spli_options(&body);
-        if !spli_opts.is_empty() {
-            let updated_sprev = extract_sprev(&body).unwrap_or_else(|| sprev.clone());
-            let mut sel = create_payload(chart, &self.cid, &updated_sprev);
-            sel.push(("spli".into(), spli_opts[0].clone()));
-            let resp2 = self
-                .client
-                .post(&post_url)
-                .form(&sel)
-                .send()?
-                .error_for_status()?;
-            let url2 = resp2.url().as_str().to_string();
-            let body2 = resp2.text()?;
-            return parse_nhor_from_url(&url2)
-                .or_else(|| parse_nhor_from_url(&body2))
-                .ok_or(AstroError::NhorNotFound);
+        if let Some(nhor) = parse_nhor_from_url(&final_url).or_else(|| parse_nhor_from_url(&body)) {
+            return Ok(nhor);
         }
 
-        parse_nhor_from_url(&final_url)
-            .or_else(|| parse_nhor_from_url(&body))
-            .ok_or(AstroError::NhorNotFound)
+        // Server returned the confirmation form (sprev now has embedded city data).
+        // Re-submit mirroring the form state the server returned.
+        let conf_sprev = extract_sprev(&body).unwrap_or_default();
+        let conf_spli = extract_spli_options(&body);
+        let conf_extset = extract_hidden_field(&body, "extset").unwrap_or_else(|| "close".into());
+        let mut confirm_payload = create_payload(chart, &self.cid, &conf_sprev);
+        if let Some(pos) = confirm_payload.iter().position(|(k, _)| k == "extset") {
+            confirm_payload[pos].1 = conf_extset;
+        }
+        if !conf_spli.is_empty() {
+            confirm_payload.push(("spli".into(), conf_spli[0].clone()));
+        }
+        confirm_payload.push(("js".into(), "true".into()));
+        let resp2 = self
+            .client
+            .post(&post_url)
+            .form(&confirm_payload)
+            .send()?
+            .error_for_status()?;
+        let url2 = resp2.url().as_str().to_string();
+        let body2 = resp2.text()?;
+        parse_nhor_from_url(&url2)
+            .or_else(|| parse_nhor_from_url(&body2))
+            .ok_or(AstrocomError::NhorNotFound)
     }
 
     /// Delete charts by nhor ID.  Verifies deletion and errors if any remain.
     ///
     /// # Errors
-    /// - [`AstroError::Http`] if any HTTP request fails.
-    /// - [`AstroError::UnidTokenNotFound`] if the `unid_token` is absent from
+    /// - [`AstrocomError::Http`] if any HTTP request fails.
+    /// - [`AstrocomError::UnidTokenNotFound`] if the `unid_token` is absent from
     ///   the listing page (session cookie may be expired).
-    /// - [`AstroError::DeleteVerifyFailed`] if any of the requested `nhor` IDs
+    /// - [`AstrocomError::DeleteVerifyFailed`] if any of the requested `nhor` IDs
     ///   are still present after deletion completes.
     pub fn delete_charts(
         &self,
         email: &str,
         pass: &str,
         nhor_ids: &[u32],
-    ) -> Result<(), AstroError> {
+    ) -> Result<(), AstrocomError> {
         let listing_html = self.get_text(&format!("{AWD_URL}?lang=e"))?;
-        let token = extract_unid_token(&listing_html).ok_or(AstroError::UnidTokenNotFound)?;
+        let token = extract_unid_token(&listing_html).ok_or(AstrocomError::UnidTokenNotFound)?;
 
         let mut params = format!(
             "{AWD_URL}?act=del&conf=1&lang=e&unid_token={}",
@@ -350,7 +407,7 @@ impl AstroSession {
         if still_present.is_empty() {
             Ok(())
         } else {
-            Err(AstroError::DeleteVerifyFailed(still_present))
+            Err(AstrocomError::DeleteVerifyFailed(still_present))
         }
     }
 }
@@ -437,7 +494,7 @@ pub fn delete_payload(email: &str, password: &str, nhor_ids: &[u32]) -> Vec<(Str
 }
 
 /// A chart entry from the astro.com account page.
-pub struct AstroListing {
+pub struct AstrocomListing {
     /// astro.com internal chart ID (`nhor` URL parameter).
     pub nhor_id: u32,
     /// Chart name as shown in the account listing.
@@ -450,7 +507,7 @@ pub struct AstroListing {
 /// chart row has an Edit link of the form:
 /// `<a href="/cgi/ade.cgi?&nhor=N&ract=..." title="edit birth data for Name">Edit</a>`
 #[must_use]
-pub fn parse_listing(html: &str) -> Vec<AstroListing> {
+pub fn parse_listing(html: &str) -> Vec<AstrocomListing> {
     let doc = Html::parse_document(html);
     let Ok(sel) = Selector::parse("a") else {
         return Vec::new();
@@ -471,7 +528,7 @@ pub fn parse_listing(html: &str) -> Vec<AstroListing> {
             if name.is_empty() {
                 return None;
             }
-            Some(AstroListing { nhor_id, name })
+            Some(AstrocomListing { nhor_id, name })
         })
         .collect()
 }
@@ -483,6 +540,19 @@ pub fn parse_listing(html: &str) -> Vec<AstroListing> {
 pub fn extract_sprev(html: &str) -> Option<String> {
     let doc = Html::parse_document(html);
     let sel = Selector::parse(r#"input[name="sprev"]"#).ok()?;
+    doc.select(&sel)
+        .next()?
+        .value()
+        .attr("value")
+        .map(String::from)
+}
+
+/// Extract the value of any `<input type="hidden" name="…">` field.
+#[must_use]
+pub fn extract_hidden_field(html: &str, name: &str) -> Option<String> {
+    let doc = Html::parse_document(html);
+    let selector = format!(r#"input[name="{name}"]"#);
+    let sel = Selector::parse(&selector).ok()?;
     doc.select(&sel)
         .next()?
         .value()
@@ -532,9 +602,9 @@ pub fn parse_nhor_from_url(url: &str) -> Option<u32> {
 /// | Input         | Output     |
 /// |---------------|------------|
 /// | `is_lmt=true` | `"lmt"`    |
-/// | `−8.0`        | `"h8w00"`  |
+/// | `−8.0`        | `"h8w"`    |
 /// | `+5.5`        | `"h5e30"`  |
-/// | `0.0`         | `"h0e00"`  |
+/// | `0.0`         | `"h0e"`    |
 #[must_use]
 pub fn offset_to_szon(offset: f64, is_lmt: bool) -> String {
     if is_lmt {
@@ -546,7 +616,11 @@ pub fn offset_to_szon(offset: f64, is_lmt: bool) -> String {
     let hours = total_mins / 60;
     let mins = total_mins % 60;
     let hemi = if offset < 0.0 { 'w' } else { 'e' };
-    format!("h{hours}{hemi}{mins:02}")
+    if mins == 0 {
+        format!("h{hours}{hemi}")
+    } else {
+        format!("h{hours}{hemi}{mins:02}")
+    }
 }
 
 /// Build the form payload for creating a new chart via `POST /cgi/ade.cgi`.
@@ -577,11 +651,13 @@ pub fn create_payload(chart: &Chart, cid: &str, sprev: &str) -> Vec<(String, Str
         ("sfnm".into(), first),
         ("snam".into(), last),
         ("ssx".into(), ssx.into()),
+        ("sown".into(), "n".into()),
         ("sday".into(), chart.day.to_string()),
         ("imon".into(), chart.month.to_string()),
         ("syar".into(), chart.year.to_string()),
         ("ihou".into(), chart.hour.to_string()),
         ("smin".into(), chart.minute.to_string()),
+        ("sctr".into(), String::new()),
         ("scit".into(), chart.city.clone().unwrap_or_default()),
         ("szon".into(), szon),
         ("lang".into(), "e".into()),

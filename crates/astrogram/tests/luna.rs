@@ -17,7 +17,7 @@ const LISTING_HTML: &str = r#"
 <tr data-chart-url="/radix-charts/view?uniwheel=2caebfdc-2e36-437f-835e-88d58aafdf87">
   <td><input type="checkbox"></td>
   <td data-sort="9"><span class="badge badge-primary">Natal</span></td>
-  <td><a class="font-lg" href="/radix-charts/view?...">Ada Lovelace</a></td>
+  <td><a class="font-lg" href="/radix-charts/view?...">Amber Celeste</a></td>
   <td data-sort="1815-12-10T13:00:00+00:00">1815 December 10</td>
   <td>London, UK</td>
 </tr>
@@ -42,7 +42,7 @@ fn listing_extracts_chart_ids() {
 #[test]
 fn listing_extracts_names() {
     let rows = parse_listing_page(LISTING_HTML);
-    assert_eq!(rows[0].name, "Ada Lovelace");
+    assert_eq!(rows[0].name, "Amber Celeste");
     assert_eq!(rows[1].name, "A Question");
 }
 
@@ -336,10 +336,10 @@ fn rodden_truncates_to_32_chars() {
 // --- full luna_chart_to_chart conversion ---
 
 #[test]
-fn full_conversion_ada_lovelace() {
+fn full_conversion_amber_celeste() {
     let c = LunaChart {
         chart_id: "2caebfdc-2e36-437f-835e-88d58aafdf87".to_string(),
-        name: "Ada Lovelace".to_string(),
+        name: "Amber Celeste".to_string(),
         chart_type: "natal".to_string(),
         date: "1815-12-10".to_string(),
         time: "13:00:00".to_string(),
@@ -356,7 +356,7 @@ fn full_conversion_ada_lovelace() {
         notes: String::new(),
     };
     let chart = luna_chart_to_chart(&c).unwrap();
-    assert_eq!(chart.name, "Ada Lovelace");
+    assert_eq!(chart.name, "Amber Celeste");
     assert_eq!((chart.year, chart.month, chart.day), (1815, 12, 10));
     assert_eq!((chart.hour, chart.minute, chart.second), (13, 0, 0));
     assert!((chart.latitude.degrees() - 51.507_217_8).abs() < 1e-6);
@@ -502,7 +502,7 @@ fn create_payload_contains_required_fields() {
         Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
     };
     let chart = Chart {
-        name: "Ada Lovelace".to_string(),
+        name: "Amber Celeste".to_string(),
         secondary_name: None,
         city: Some("London".to_string()),
         region: Some("UK".to_string()),
@@ -533,7 +533,7 @@ fn create_payload_contains_required_fields() {
     let payload = create_payload(&chart, &tokens);
     let map: std::collections::HashMap<_, _> = payload.iter().cloned().collect();
 
-    assert_eq!(map["name"], "Ada Lovelace");
+    assert_eq!(map["name"], "Amber Celeste");
     assert_eq!(map["type"], "natal");
     assert_eq!(map["primary_radix_chart[event_date]"], "1815-12-10");
     assert_eq!(map["primary_radix_chart[event_time]"], "13:00:00");
@@ -619,7 +619,7 @@ fn edit_payload_remaining_fields_match_create() {
 fn luna_chart_without_sidebar_has_correct_dedup_fields() {
     let c = LunaChart {
         chart_id: "2caebfdc-2e36-437f-835e-88d58aafdf87".to_string(),
-        name: "Ada Lovelace".to_string(),
+        name: "Amber Celeste".to_string(),
         chart_type: "natal".to_string(),
         date: "1815-12-10".to_string(),
         time: "13:00:00".to_string(),
@@ -637,7 +637,7 @@ fn luna_chart_without_sidebar_has_correct_dedup_fields() {
         notes: String::new(),
     };
     let chart = luna_chart_to_chart(&c).unwrap();
-    assert_eq!(chart.name, "Ada Lovelace");
+    assert_eq!(chart.name, "Amber Celeste");
     assert_eq!((chart.year, chart.month, chart.day), (1815, 12, 10));
     assert_eq!((chart.hour, chart.minute, chart.second), (13, 0, 0));
     assert!((chart.latitude.degrees() - 51.507_217_8).abs() < 1e-6);
@@ -667,12 +667,12 @@ fn clean_ascii_no_fetch_needed() {
 
 #[test]
 fn truncated_name_needs_fetch() {
-    assert!(needs_fetch_for_normalize("Ada Lovelace Very Long Nam…"));
+    assert!(needs_fetch_for_normalize("Amber Celeste Very Long Nam…"));
 }
 
 #[test]
 fn non_cp1252_char_needs_fetch() {
-    assert!(needs_fetch_for_normalize("Ada ★ Lovelace"));
+    assert!(needs_fetch_for_normalize("Amber ★ Celeste"));
 }
 
 // --- LunaSession compile check ---
@@ -722,9 +722,11 @@ fn fake_tokens() -> FormTokens {
 }
 
 #[test]
-fn delete_payload_starts_with_method_delete() {
+fn delete_payload_starts_with_method_post() {
+    // LUNA's delete route is reached by POSTing to /phenomena/delete/<uuid>;
+    // _method=POST tells CakePHP this is a normal POST (not a spoofed DELETE).
     let payload = delete_payload(&fake_tokens());
-    assert_eq!(payload[0], ("_method".to_string(), "DELETE".to_string()));
+    assert_eq!(payload[0], ("_method".to_string(), "POST".to_string()));
 }
 
 #[test]

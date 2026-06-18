@@ -1,5 +1,15 @@
+use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac};
 use thiserror::Error;
+
+/// Fields recovered when reading an AAF file.
+///
+/// AAF carries a region sub-locality (the 7th comma-separated field of the
+/// A-row).  Event type and source rating are not stored.
+pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[ChartField::Region]);
+
+/// AAF is a read-only format; nothing is written.
+pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[]);
 
 /// Errors that can arise while parsing AAF data.
 #[derive(Debug, Error)]

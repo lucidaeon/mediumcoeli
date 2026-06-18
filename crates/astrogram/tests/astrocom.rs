@@ -1,4 +1,4 @@
-use astrogram::astro::{
+use astrogram::astrocom::{
     create_payload, edit_payload, extract_aaf, offset_to_szon, parse_listing, parse_nhor_from_url,
 };
 use astrogram::chart::{
@@ -128,17 +128,17 @@ fn nhor_missing_returns_none() {
 
 #[test]
 fn negative_offset_is_west() {
-    assert_eq!(offset_to_szon(-8.0, false), "h8w00");
+    assert_eq!(offset_to_szon(-8.0, false), "h8w");
 }
 
 #[test]
 fn positive_offset_is_east() {
-    assert_eq!(offset_to_szon(1.0, false), "h1e00");
+    assert_eq!(offset_to_szon(1.0, false), "h1e");
 }
 
 #[test]
 fn zero_offset_is_east() {
-    assert_eq!(offset_to_szon(0.0, false), "h0e00");
+    assert_eq!(offset_to_szon(0.0, false), "h0e");
 }
 
 #[test]
@@ -183,8 +183,8 @@ fn create_payload_name_with_comma_splits() {
 #[test]
 fn create_payload_name_without_comma_goes_to_sfnm() {
     // astro.com requires sfnm non-empty; no-comma names go in first-name slot
-    let p = create_payload(&make_chart("Madonna"), "c", "tok");
-    assert_eq!(find_field(&p, "sfnm"), Some("Madonna"));
+    let p = create_payload(&make_chart("Indigo"), "c", "tok");
+    assert_eq!(find_field(&p, "sfnm"), Some("Indigo"));
     assert_eq!(find_field(&p, "snam"), Some(""));
 }
 

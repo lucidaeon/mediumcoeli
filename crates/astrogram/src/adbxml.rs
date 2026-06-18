@@ -17,9 +17,23 @@
 //! ADB exports do not carry house system or zodiac; all charts default to
 //! Placidus / Tropical / Geocentric.
 
+use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac};
 use crate::error::ParseError;
 use roxmltree::{Document, Node};
+
+/// Fields recovered when reading an Astrodatabank XML export.
+///
+/// `SourceRating` is excluded: the ADB format maps ratings through a numeric
+/// `rrc` code, so a free-text rating like `"AA Himself to Astrolabe"` is
+/// normalised to `"AA"` on the return trip and does not survive unmodified.
+/// Zodiac and coordinate system are not stored; the file always produces
+/// Tropical / Geocentric defaults and those values are dropped on the return trip.
+pub const READ_CAPS: CapabilitySet =
+    CapabilitySet::new(&[ChartField::Region, ChartField::Notes, ChartField::EventType]);
+
+/// Fields persisted when writing an Astrodatabank XML export. Identical to [`READ_CAPS`].
+pub const WRITE_CAPS: CapabilitySet = READ_CAPS;
 
 /// Parse an ADB XML export into a vec of canonical charts.
 ///
@@ -792,5 +806,25 @@ mod tests {
     #[test]
     fn xml_escape_plain_text_unchanged() {
         assert_eq!(xml_escape("hello world"), "hello world");
+    }
+}
+
+#[cfg(test)]
+mod cap_roundtrip {
+    use super::*;
+    use crate::capability::ChartField;
+    use crate::test_support::{fully_populated, survivors};
+
+    #[test]
+    fn write_caps_match_roundtrip() {
+        let original = fully_populated();
+        let text = write_file(std::slice::from_ref(&original));
+        let restored = parse_file(&text).expect("parse");
+        let restored = &restored[0];
+        let mut got = survivors(&original, restored);
+        got.sort_by_key(|f| format!("{f:?}"));
+        let mut declared: Vec<ChartField> = WRITE_CAPS.fields().to_vec();
+        declared.sort_by_key(|f| format!("{f:?}"));
+        assert_eq!(got, declared, "adbxml WRITE_CAPS disagrees with round-trip");
     }
 }

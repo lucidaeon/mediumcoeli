@@ -287,10 +287,11 @@ fn parses_north_lat_with_seconds() {
 
 #[test]
 fn parses_south_lat() {
-    // "33s52" = 33°52' S = -(33 + 52/60)
+    // Jakarta -6.21°, 106.85° (docs/ref_synthetics.md) → DMS 6°12'36"S, 106°51'E.
+    // ADB "6s1236" = 6°12'36" S = -(6 + 12/60 + 36/3600).
     let xml = wrap(&minimal_entry(
         12,
-        "Sydney",
+        "Coral",
         "m",
         1,
         2000,
@@ -300,13 +301,13 @@ fn parses_south_lat() {
         "2451545.0",
         "s",
         "UTC",
-        "33s52",
-        "151e12",
-        "Sydney",
-        "Australia",
+        "6s1236",
+        "106e51",
+        "Jakarta",
+        "Indonesia",
     ));
     let charts = parse_file(&xml).unwrap();
-    let expected = -(33.0 + 52.0 / 60.0);
+    let expected = -(6.0 + 12.0 / 60.0 + 36.0 / 3600.0);
     assert!(within(charts[0].latitude.degrees(), expected, 1e-4));
 }
 
@@ -448,22 +449,24 @@ fn rrc_maps_to_rating_strings() {
 
 #[test]
 fn ctimetype_l_sets_is_lmt() {
+    // Synthetic record (Lima -12.05°, -77.04° from docs/ref_synthetics.md →
+    // DMS 12°03'S, 77°02'24"W). ctimetype "l" must set is_lmt.
     let xml = wrap(&minimal_entry(
         30,
-        "LMT",
+        "Sienna",
         "m",
         1,
-        1494,
-        9,
-        12,
-        "22:00",
-        "2266996.417593",
+        2000,
+        1,
+        1,
+        "12:00",
+        "2451545.0",
         "l",
         "LMT",
-        "45n42",
-        "0w20",
-        "Cognac",
-        "France",
+        "12s03",
+        "77w0224",
+        "Lima",
+        "Peru",
     ));
     let charts = parse_file(&xml).unwrap();
     assert!(charts[0].is_lmt);
@@ -667,96 +670,13 @@ fn parses_multiple_entries() {
 }
 
 // ── acceptance: real specimen ─────────────────────────────────────────────────
-
-#[test]
-fn acceptance_entry_0_francois_i() {
-    let Some(path) = specimen_path() else {
-        eprintln!("ASTRO_SPECIMENS not set — skipping integration test");
-        return;
-    };
-    if !path.exists() {
-        eprintln!("ADB specimen absent ({}); skipping", path.display());
-        return;
-    }
-
-    let xml = std::fs::read_to_string(&path).expect("read specimen");
-    let charts = parse_file(&xml).expect("parse specimen");
-
-    assert!(!charts.is_empty(), "expected at least one chart");
-
-    // Entry 0: François I (adb_id=1 in the file, index 0 in the vec)
-    let c = &charts[0];
-    assert_eq!(c.name, "François I, King of France");
-    assert_eq!(c.event_type, EventType::Male);
-    assert_eq!(c.source_rating.as_deref(), Some("AA"));
-    assert_eq!(c.year, 1494);
-    assert_eq!(c.month, 9);
-    assert_eq!(c.day, 12);
-    assert_eq!(c.hour, 22);
-    assert_eq!(c.minute, 0);
-    assert_eq!(c.second, 0);
-    // 45°42' N
-    assert!(
-        within(c.latitude.degrees(), 45.0 + 42.0 / 60.0, 1e-4),
-        "lat={}",
-        c.latitude.degrees()
-    );
-    // 0°20' W = -0.3333°
-    assert!(
-        within(c.longitude.degrees(), -(20.0 / 60.0), 1e-4),
-        "lon={}",
-        c.longitude.degrees()
-    );
-    assert!(c.is_lmt);
-    assert_eq!(c.tz_abbreviation.as_deref(), Some("LMT"));
-    // LMT offset ≈ -0.0222h (0°20'W / 15)
-    assert!(
-        within(c.tz_offset_hours, -(20.0 / 60.0 / 15.0), 5e-3),
-        "tz={}",
-        c.tz_offset_hours
-    );
-    assert_eq!(c.city.as_deref(), Some("Cognac"));
-    assert_eq!(c.region.as_deref(), Some("France"));
-    assert_eq!(c.house_system, HouseSystem::Placidus);
-    assert_eq!(c.zodiac, Zodiac::Tropical);
-}
-
-#[test]
-fn acceptance_entry_4_elizabeth_i() {
-    let Some(path) = specimen_path() else {
-        eprintln!("ASTRO_SPECIMENS not set — skipping integration test");
-        return;
-    };
-    if !path.exists() {
-        eprintln!("ADB specimen absent ({}); skipping", path.display());
-        return;
-    }
-
-    let xml = std::fs::read_to_string(&path).expect("read specimen");
-    let charts = parse_file(&xml).expect("parse specimen");
-
-    // Entry 4: Elizabeth I (adb_id=5 in the file, index 4 in the vec)
-    let c = &charts[4];
-    assert_eq!(c.name, "Elizabeth I, Queen of England");
-    assert_eq!(c.event_type, EventType::Female);
-    assert_eq!(c.year, 1533);
-    assert_eq!(c.month, 9);
-    assert_eq!(c.day, 7);
-    assert_eq!(c.hour, 14);
-    assert_eq!(c.minute, 54);
-    // Greenwich: 0°00' E
-    assert!(
-        within(c.longitude.degrees(), 0.0, 1e-4),
-        "lon={}",
-        c.longitude.degrees()
-    );
-    // 51°29' N
-    assert!(
-        within(c.latitude.degrees(), 51.0 + 29.0 / 60.0, 1e-4),
-        "lat={}",
-        c.latitude.degrees()
-    );
-}
+//
+// Per-entry value assertions (which hardcoded specific ADB-export entries) are
+// intentionally omitted: committed tests must not bake specimen-extracted
+// data. Field-level coverage lives in the synthetic
+// minimal_entry unit tests above; the structural specimen checks below
+// (round-trip + parse-all) exercise the real corpus without hardcoding any of
+// its values.
 
 // ── writer ────────────────────────────────────────────────────────────────────
 
@@ -951,7 +871,8 @@ fn acceptance_write_all_then_parse_back() {
     let roundtripped = parse_file(&written).expect("parse written XML");
 
     assert_eq!(roundtripped.len(), original.len());
-    // Spot-check entry 0: François I
+    // Spot-check entry 0 round-trips against itself (compares to parsed input,
+    // not to any hardcoded specimen value).
     assert_eq!(roundtripped[0].name, original[0].name);
     assert_eq!(roundtripped[0].year, original[0].year);
     assert_eq!(roundtripped[0].month, original[0].month);

@@ -28,8 +28,24 @@
 //! Zeus does not store house system or zodiac; defaults (Placidus, Tropical,
 //! Geocentric) are used when constructing [`Chart`].
 
+use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac};
 use crate::error::ParseError;
+
+/// Fields recovered when reading a Zeus `.zdb` file.
+///
+/// Zeus stores source rating, notes, and event type directly.  House system,
+/// zodiac, and coordinate system are not stored; the file always produces
+/// Placidus / Tropical / Geocentric defaults and those values are dropped on
+/// the return trip.
+pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[
+    ChartField::SourceRating,
+    ChartField::Notes,
+    ChartField::EventType,
+]);
+
+/// Fields persisted when writing a Zeus `.zdb` file. Identical to [`READ_CAPS`].
+pub const WRITE_CAPS: CapabilitySet = READ_CAPS;
 
 /// Parse a Zeus `.zdb` file into a vec of canonical charts.
 ///
@@ -301,4 +317,24 @@ fn fmt_utc_offset(hours: f64) -> String {
     let m = (total_sec % 3600) / 60;
     let s = total_sec % 60;
     format!("{sign}{h:02}:{m:02}:{s:02}")
+}
+
+#[cfg(test)]
+mod cap_roundtrip {
+    use super::*;
+    use crate::capability::ChartField;
+    use crate::test_support::{fully_populated, survivors};
+
+    #[test]
+    fn write_caps_match_roundtrip() {
+        let original = fully_populated();
+        let text = write_file(std::slice::from_ref(&original));
+        let restored = parse_file(&text).expect("parse");
+        let restored = &restored[0];
+        let mut got = survivors(&original, restored);
+        got.sort_by_key(|f| format!("{f:?}"));
+        let mut declared: Vec<ChartField> = WRITE_CAPS.fields().to_vec();
+        declared.sort_by_key(|f| format!("{f:?}"));
+        assert_eq!(got, declared, "zeus WRITE_CAPS disagrees with round-trip");
+    }
 }

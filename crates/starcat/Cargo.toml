@@ -1,12 +1,12 @@
 [package]
 name = "starcat"
-version = "0.0.1"
+version = "0.1.0"
 description = "Command-line astrological ephemeris: Compute Natal Charts"
 keywords = ["astrology", "divination", "ephemeris"]
 categories = ["command-line-utilities"]
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true

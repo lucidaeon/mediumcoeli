@@ -1,7 +1,6 @@
 # Starcat
 
 [![Crates.io](https://img.shields.io/crates/v/starcat.svg)](https://crates.io/crates/starcat)
-[![Documentation](https://docs.rs/starcat/badge.svg)](https://docs.rs/starcat)
 [![License](https://img.shields.io/crates/l/starcat.svg)](https://github.com/lucidaeon/mediumcoeli#license)
 
 

@@ -71,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn equal_h1_is_asc() {
+    fn h1_is_asc() {
         // ASC: Aqu⌖17°40'17" = 317.671°. H1 cusp must equal ASC exactly.
         let ac_deg = 300.0 + 17.0 + 40.0 / 60.0 + 17.0 / 3600.0_f64;
         let hc = equal_as_rad(ac_deg.to_radians());

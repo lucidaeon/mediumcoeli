@@ -4,7 +4,7 @@ use astrogram::normalize::normalize_cp1252_str;
 
 #[test]
 fn ascii_unchanged() {
-    assert_eq!(normalize_cp1252_str("Ada Lovelace"), "Ada Lovelace");
+    assert_eq!(normalize_cp1252_str("Amber Celeste"), "Amber Celeste");
 }
 
 #[test]
@@ -83,20 +83,20 @@ fn eclipse_with_symbols() {
 
 #[test]
 fn leading_whitespace_trimmed() {
-    assert_eq!(normalize_cp1252_str("  Ada"), "Ada");
+    assert_eq!(normalize_cp1252_str("  Amber"), "Amber");
 }
 
 #[test]
 fn trailing_whitespace_trimmed() {
-    assert_eq!(normalize_cp1252_str("Ada  "), "Ada");
+    assert_eq!(normalize_cp1252_str("Amber  "), "Amber");
 }
 
 #[test]
 fn double_space_collapsed() {
-    assert_eq!(normalize_cp1252_str("Ada  Lovelace"), "Ada Lovelace");
+    assert_eq!(normalize_cp1252_str("Amber  Celeste"), "Amber Celeste");
 }
 
 #[test]
 fn tabs_and_newlines_collapsed() {
-    assert_eq!(normalize_cp1252_str("Ada\t\nLovelace"), "Ada Lovelace");
+    assert_eq!(normalize_cp1252_str("Amber\t\nCeleste"), "Amber Celeste");
 }

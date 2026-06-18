@@ -5,6 +5,132 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+---
+
+## [0.1.0](https://github.com/lucidaeon/mediumcoeli/compare/0.0.1...0.1.0) — 2026-06-18
+
+### Added — `astrogram`
+
+- **`capability` module** — `ChartField` enum enumerates the canonical `Chart`
+  fields whose support varies across formats (universal-core fields excluded).
+  `CapabilitySet` wraps a `&'static [ChartField]`. `lost_fields` and
+  `fill_fields` compute what data a source→sink conversion drops or needs
+  supplied before writing. Each format module now carries `READ_CAPS` /
+  `WRITE_CAPS` constants, making field-loss detection a pure data lookup.
+- **`format` module** — `Format` enum is the canonical format identity shared
+  by the CLI and library consumers. `FORMATS` is the static registry: each
+  `FormatSpec` carries `slug`, `Kind` (`File` | `Web`), `Auth` (`None` |
+  `Token` | `LoginOrToken`), file extensions, read/write direction, and
+  `CapabilitySet` pointers. `from_slug` resolves a format by slug string.
+- **`transcript` module** — post-write readback diffing. `diff(source, landed,
+  field_notes)` produces a `Vec<FieldMapping>` in fixed display order; each
+  `FieldMapping` carries a `FieldStatus` (`Preserved` / `Transformed` /
+  `Dropped` / `Filled`) and pre-rendered source/landed strings. Used by
+  `blackmoon` to report per-field fidelity after every web write.
+- **`astrotheoros` module — astrotheoros.com as an authenticated web target.**
+  New public `astrotheoros` module providing full read/write/delete against
+  astrotheoros.com:
+  - **RSC wire-format parser** (`parse_rsc_response`) for the Next.js React
+    Server Components payload returned by the chart-listing endpoint.
+  - **Clerk session auth** — `AstrotheorosSession::login` (Clerk identify +
+    auth, two-step) and `from_jwt`, with JWT expiry detection (`jwt_exp`) and
+    refresh.
+  - **`fetch_charts`** — pulls every chart via the RSC endpoint, returning
+    `Chart`s alongside their astrotheoros UUIDs.
+  - **`create_one` / `write_charts`** — atlas timezone lookup plus chart
+    creation; **`delete_one` / `delete_charts`** — removal by UUID.
+  - Data-conversion helpers (`entry_to_chart`, `chart_to_create_body`,
+    `calendar_to_unix_ms`, `extract_client_uat`) and a dedicated
+    `AstrotheorosError` type.
+- `lib.rs` doc updated: extractors now list `astrotheoros.com` alongside
+  `lunaastrology.com` and `astro.com`.
+- **`jzod` module** — write-only JZOD v0.0.0 serializer. Converts a
+  `&[Chart]` to a JZOD-compliant JSON document; UIDs are deterministic
+  from birth data (stable across repeated exports).
+- **`raw` module** — write-only key:value text format for inspection.
+  Emits one `key: value` line per chart field, blank line between charts;
+  designed for piping into `grep` / `awk` or human reading.
+
+### Added — `blackmoon`
+
+- **astrotheoros.com as a read/write/delete target.** New `--from
+  astrotheoros` / `--to astrotheoros` target, `--astrotheoros-user` /
+  `--astrotheoros-pass` (auto-login) and `--astrotheoros-token`
+  (`jwt:session_id:client_uat`) credentials. Existing-chart dedup uses
+  astrotheoros UUID lookup keyed on spacetime, matching the LUNA/astro flows.
+- **`--strict`** — abort the conversion (non-zero exit) when the output
+  sink cannot store one or more fields present in the source, instead of
+  warning and proceeding.
+- **`--no-verify`** — skip the post-write read-back transcript on web
+  targets. Read-back and diff are on by default.
+- **`--fill-house` / `--fill-zodiac` / `--fill-locus`** — supply a value
+  for per-chart fields the source never carried (e.g. when converting ADB
+  XML → SFcht). Without a flag, blackmoon prompts interactively on a TTY
+  or errors in non-interactive mode.
+
+### Changed — `astrogram` (**breaking**)
+
+- **`astro` module renamed to `astrocom`.** Any code importing
+  `astrogram::astro` must be updated to `astrogram::astrocom`; the public API
+  is otherwise unchanged.
+
+### Changed — environment variables and CLI flags (**breaking**)
+
+- **Credential env vars and flags renamed.** Update any scripts or shell profiles:
+
+  | Old env var | New env var |
+  |---|---|
+  | `LUNA_ASTROLOGY_APP` | `LUNA_TOKEN` |
+  | `ASTRO_COM_CID` | `ASTROCOM_TOKEN` |
+  | `ASTRO_COM_USER` | `ASTROCOM_USER` |
+  | `ASTRO_COM_PASS` | `ASTROCOM_PASS` |
+  | (new) | `ASTROTHEOROS_TOKEN` / `ASTROTHEOROS_USER` / `ASTROTHEOROS_PASS` |
+
+  | Old flag | New flag |
+  |---|---|
+  | `--luna-session` | `--luna-token` |
+  | `--astro-session` | `--astrocom-token` |
+  | `--astro-user` | `--astrocom-user` |
+  | `--astro-pass` | `--astrocom-pass` |
+
+- **`--astro-delete` / `--luna-delete` removed.** Use `--consolidate`
+  (interactive spacetime-keyed dedup and delete) instead.
+
+### Fixed — `astrogram`
+
+- **astro.com chart creation now resolves the city through the autocomplete
+  API.** Mirrors the browser's JS flow: queries `place_query` to obtain the
+  `scit` label and `spli` atlas identifier, submits `js=true` / `sown=n` /
+  `sctr`, and re-submits the server's confirmation form (carrying `extset`
+  and the embedded `sprev`) when the first POST returns the disambiguation
+  page. Previously the atlas was resolved only via the `spli` dropdown
+  fallback, which missed the browser's confirmation step.
+- **astro.com timezone format** — `offset_to_szon` omits the minutes segment
+  for whole-hour offsets (`h8w`, not `h8w00`; `h0e`, not `h0e00`), matching
+  what astro.com submits.
+- **LUNA delete used the wrong form tokens and HTTP method.** `delete_phenom`
+  now reads the CSRF/`_Token` envelope from the *delete* form
+  (`action=/phenomena/delete/<uuid>`) rather than the edit form, and
+  `delete_payload` sends `_method=POST` instead of `_method=DELETE` — the
+  delete route is reached by POSTing directly. Deletes failed silently before.
+
+### Fixed — `blackmoon`
+
+- astrotheoros.com UUID lookup, doc comments, and write-confirmation prompt
+  aligned with the LUNA/astro targets.
+
+### Changed — internal
+
+- Removed dead `RscParseFailed` error variant; clippy pedantic cleanup
+  (`similar_names`, cast-truncation, `doc_markdown` backticks); `cargo fmt`.
+- Web integration tests gated behind `#[ignore]` so the default test run stays
+  offline; synthetic city pool expanded to 41 cities >10M population;
+  round-trip test names normalized across `astrogram` / `pericynthion`.
+
+---
+
 ## [0.0.1](https://github.com/lucidaeon/mediumcoeli/compare/0.0.0...0.0.1) — 2026-06-15
 
 ### Added — `pericynthion`

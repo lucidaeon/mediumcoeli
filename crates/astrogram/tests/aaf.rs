@@ -112,10 +112,14 @@ fn latitude_north() {
 
 #[test]
 fn latitude_south() {
-    let text = "#A93:*,X,Y,01.01.2000,00:00,Sydney,AU\n#B93:0.0,33S51,151E12,10E,0\n";
+    // Jakarta -6.21°, 106.85° (docs/ref_synthetics.md) → DMS 6°12'36"S, 106°51'E
+    let text = "#A93:*,X,Y,01.01.2000,00:00,Jakarta,ID\n#B93:0.0,6S12:36,106E51,7E,0\n";
     let charts = parse_file(text).unwrap();
     let lat = charts[0].latitude.degrees();
-    assert!((lat - -(33.0 + 51.0 / 60.0)).abs() < 1e-6, "got {lat}");
+    assert!(
+        (lat - -(6.0 + 12.0 / 60.0 + 36.0 / 3600.0)).abs() < 1e-6,
+        "got {lat}"
+    );
 }
 
 #[test]

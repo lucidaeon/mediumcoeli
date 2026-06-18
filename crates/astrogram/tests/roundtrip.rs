@@ -172,17 +172,17 @@ fn zeus_to_sfcht_to_zeus_preserves_zeus_fields() {
     // parse back, then write to Zeus text and parse again.
     let original = chart(
         "Vettius Valens",
-        36.0 + 12.0 / 60.0 + 24.0 / 3600.0,
-        36.0 + 9.0 / 60.0 + 26.0 / 3600.0,
+        36.0 + 14.0 / 60.0,
+        36.0 + 7.0 / 60.0,
         120,
         2,
         8,
         18,
         35,
         1,
-        2.0 + 24.0 / 60.0 + 14.0 / 3600.0,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
-        Some("Antioch, Turkey"),
+        Some("Antioch"),
         Some("B"),
         Some("A note."),
     );
@@ -209,7 +209,7 @@ fn sfcht_to_zeus_to_sfcht_preserves_zeus_fields() {
     let original = chart(
         "Haenel, Adele",
         48.0 + 52.0 / 60.0,
-        2.0 + 7.0 / 60.0,
+        2.0 + 20.0 / 60.0,
         1989,
         2,
         11,
@@ -306,15 +306,15 @@ fn multi_chart_zeus_round_trip() {
     let charts = vec![
         chart(
             "Valens",
-            36.0 + 12.0 / 60.0 + 24.0 / 3600.0,
-            36.0 + 9.0 / 60.0 + 26.0 / 3600.0,
+            36.0 + 14.0 / 60.0,
+            36.0 + 7.0 / 60.0,
             120,
             2,
             8,
             18,
             35,
             1,
-            2.0 + 24.0 / 60.0 + 14.0 / 3600.0,
+            2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
             EventType::Male,
             Some("Antioch"),
             Some("B"),
@@ -391,8 +391,8 @@ fn all_event_types_survive_sfcht_zeus_sfcht() {
 #[test]
 fn dms_exact_coordinates_survive_zeus_round_trip_losslessly() {
     // These coords are exactly representable in DMS integer arcseconds
-    let lat = 36.0 + 12.0 / 60.0 + 24.0 / 3600.0;
-    let lon = 36.0 + 9.0 / 60.0 + 26.0 / 3600.0;
+    let lat = 36.0 + 14.0 / 60.0;
+    let lon = 36.0 + 7.0 / 60.0;
     let c = chart(
         "Valens",
         lat,
@@ -403,7 +403,7 @@ fn dms_exact_coordinates_survive_zeus_round_trip_losslessly() {
         18,
         35,
         1,
-        2.0 + 24.0 / 60.0 + 14.0 / 3600.0,
+        2.0 + 24.0 / 60.0 + 28.0 / 3600.0,
         EventType::Male,
         None,
         Some("B"),

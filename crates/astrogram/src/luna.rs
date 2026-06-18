@@ -19,12 +19,27 @@
 //! 3. POST to `/phenomena/add` (caller's responsibility)
 //! 4. [`extract_phenom_id`] — pull phenomenon UUID from redirect URL / response HTML
 
+use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac};
 use crate::normalize::normalize_cp1252_str;
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use std::time::Duration;
 use thiserror::Error;
+
+/// Fields recovered when reading a LUNA® Astrology account chart.
+///
+/// LUNA does not expose region as a separate field — the location string is
+/// split on the first comma and only the city portion is placed in `Chart.city`.
+/// The Rodden rating is recovered from the sidebar. Event type covers
+/// `event` and `horary`; natal charts always become [`crate::chart::EventType::Unspecified`]
+/// because LUNA does not store sex (M/F).
+pub const READ_CAPS: CapabilitySet =
+    CapabilitySet::new(&[ChartField::SourceRating, ChartField::EventType]);
+
+/// Fields persisted when writing a LUNA® Astrology account chart.
+/// Identical to [`READ_CAPS`].
+pub const WRITE_CAPS: CapabilitySet = READ_CAPS;
 
 /// Base URL for the LUNA® Astrology web application.
 pub const BASE_URL: &str = "https://www.lunaastrology.com";
@@ -702,13 +717,13 @@ pub fn edit_payload(chart: &Chart, tokens: &FormTokens) -> Vec<(String, String)>
 
 /// Build the ordered form-field pairs for `POST /phenomena/delete/<phenom-id>`.
 ///
-/// `CakePHP`'s DELETE method tunnel: a `POST` with `_method=DELETE` prepended
-/// to the standard CSRF + token envelope.  No chart fields are sent — the
-/// phenom UUID lives in the URL path.
+/// LUNA's delete form uses `_method=POST` (not `DELETE`) — the delete route is
+/// reached by `POST`ing to `/phenomena/delete/<uuid>` directly.  The CSRF and token
+/// envelope must come from the delete form on the edit page, not the edit form.
 #[must_use]
 pub fn delete_payload(tokens: &FormTokens) -> Vec<(String, String)> {
     vec![
-        ("_method".to_string(), "DELETE".to_string()),
+        ("_method".to_string(), "POST".to_string()),
         ("_csrfToken".to_string(), tokens.csrf.clone()),
         ("_Token[fields]".to_string(), tokens.fields.clone()),
         ("_Token[unlocked]".to_string(), tokens.unlocked.clone()),
@@ -806,7 +821,7 @@ pub struct LunaSession {
 }
 
 impl LunaSession {
-    /// Build a session from the `LUNA_ASTROLOGY_APP` cookie value.
+    /// Build a session from the `LUNAASTROLOGY_COOKIE` env-var value.
     ///
     /// # Errors
     /// - [`LunaError::HttpClientBuild`] if the cookie header value is invalid
@@ -1049,8 +1064,12 @@ impl LunaSession {
     pub fn delete_phenom(&self, phenom_id: &str) -> Result<(), LunaError> {
         let edit_url = format!("{BASE_URL}/phenomena/edit/{phenom_id}");
         let form_html = self.get_text(&edit_url)?;
-        let tokens = parse_form_tokens(&form_html, &format!("/phenomena/edit/{phenom_id}"))
-            .ok_or_else(|| LunaError::FormTokensNotFound(format!("/phenomena/edit/{phenom_id}")))?;
+        // Tokens must come from the delete form (action=/phenomena/delete/...), not the
+        // edit form — each form on the page has its own _Token[fields] value.
+        let tokens = parse_form_tokens(&form_html, &format!("/phenomena/delete/{phenom_id}"))
+            .ok_or_else(|| {
+                LunaError::FormTokensNotFound(format!("/phenomena/delete/{phenom_id}"))
+            })?;
         let payload = delete_payload(&tokens);
         let delete_url = format!("{BASE_URL}/phenomena/delete/{phenom_id}");
         self.client

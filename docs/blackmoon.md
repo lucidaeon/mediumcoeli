@@ -1,7 +1,6 @@
 # Blackmoon
 
 [![Crates.io](https://img.shields.io/crates/v/blackmoon.svg)](https://crates.io/crates/blackmoon)
-[![Documentation](https://docs.rs/blackmoon/badge.svg)](https://docs.rs/blackmoon)
 [![License](https://img.shields.io/crates/l/blackmoon.svg)](https://github.com/lucidaeon/mediumcoeli#license)
 
 A command-line astrology data manager — reads any supported target, writes any supported target, deduplicates everything in between.
@@ -13,8 +12,9 @@ One CLI verb (run with no subcommand). Inputs are file paths or a web account; t
 ```text
 blackmoon input.zdb --output out.SFcht
 blackmoon a.SFcht b.zdb export.xml --output merged.SFcht
-blackmoon --from luna --session $COOKIE --output charts.SFcht
+blackmoon --from luna --luna-session $COOKIE --output charts.SFcht
 blackmoon --from astro --astro-user me@x.com --astro-pass ... --output charts.SFcht
+blackmoon --from astrotheoros --astrotheoros-user me@x.com --astrotheoros-pass ... --output charts.SFcht
 blackmoon charts.SFcht --normalize
 ```
 
@@ -40,7 +40,7 @@ Astrologers can have their data spread out across many tools. Consolidating reco
 4. **Optionally normalize** the merged set (cp1252 cleanup for any sink, mandatory before writing `.SFcht`).
 5. **Write** the merged set to the chosen sink. Web sinks (`--to luna`, `--to astro`) carry an interactive y/N confirmation before any mutation, plus per-chart progress reporting.
 
-Credentials come from flags or env vars (`LUNA_ASTROLOGY_APP`, `ASTRO_COM_CID`, `ASTRO_COM_USER`, `ASTRO_COM_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--resume-from <prefix>` resumes an interrupted LUNA® fetch.
+Credentials come from flags or env vars (`LUNAASTROLOGY_COOKIE`, `ASTROCOM_COOKIE`, `ASTROCOM_USER`, `ASTROCOM_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--resume-from <prefix>` resumes an interrupted LUNA® fetch.
 
 ## In-place LUNA® consolidation
 
@@ -50,7 +50,7 @@ groups** for human decision — no record is ever auto-dropped.
 ### One-off delete by UUID
 
 ```
-blackmoon --luna-delete <uuid1>,<uuid2> --luna-session "$LUNA_ASTROLOGY_APP"
+blackmoon --luna-delete <uuid1>,<uuid2> --luna-session "$LUNAASTROLOGY_COOKIE"
 ```
 
 Each UUID is deleted via `POST /phenomena/delete/<uuid>` (CakePHP DELETE
@@ -61,7 +61,7 @@ between deletes.
 ### Interactive consolidation
 
 ```
-blackmoon --target luna --consolidate --luna-session "$LUNA_ASTROLOGY_APP"
+blackmoon --target luna --consolidate --luna-session "$LUNAASTROLOGY_COOKIE"
 ```
 
 The flow:

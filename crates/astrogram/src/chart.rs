@@ -13,6 +13,12 @@ use crate::error::ChartError;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Longitude(f64);
 
+impl serde::Serialize for Longitude {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_f64(self.0)
+    }
+}
+
 impl Longitude {
     /// Create a `Longitude`, returning an error if `degrees` is outside -180..=180.
     ///
@@ -39,6 +45,12 @@ impl Longitude {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Latitude(f64);
 
+impl serde::Serialize for Latitude {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_f64(self.0)
+    }
+}
+
 impl Latitude {
     /// Create a `Latitude`, returning an error if `degrees` is outside -90..=90.
     ///
@@ -61,7 +73,8 @@ impl Latitude {
 
 /// Chart subject type.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventType {
     Unspecified,
     Male,
@@ -85,7 +98,8 @@ impl From<u8> for EventType {
 /// House system. Variants cover the 32 systems observed in Solar Fire;
 /// `Other` carries the raw id for any system not yet named here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HouseSystem {
     Campanus,
     Koch,
@@ -129,7 +143,8 @@ impl From<u8> for HouseSystem {
 /// Zodiac system. Variants cover the 17 systems observed in Solar Fire;
 /// `Other` carries the raw id for any system not yet named here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Zodiac {
     Tropical,
     FaganAllen,
@@ -178,7 +193,8 @@ impl From<u8> for Zodiac {
 
 /// Coordinate reference frame.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CoordinateSystem {
     Geocentric,
     Heliocentric,
@@ -195,7 +211,7 @@ impl From<u8> for CoordinateSystem {
 
 /// A secondary chart attached to a primary chart (e.g. a progressed or relocated chart).
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SubChart {
     pub name: String,
     pub city: Option<String>,
@@ -222,7 +238,7 @@ pub struct SubChart {
 /// All coordinate values use ISO 6709 sign conventions regardless of source
 /// format. Every reader converts at the boundary; every writer converts back.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Chart {
     pub name: String,
     pub secondary_name: Option<String>,
