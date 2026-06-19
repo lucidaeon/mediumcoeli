@@ -328,9 +328,10 @@ fn astrotheoros_write_delete_synthetic() {
     let session = astrogram::astrotheoros::AstrotheorosSession::login(&user, &pass, 500)
         .expect("AstrotheorosSession::login");
 
-    let uuid = session
+    let entry = session
         .create_one(&chart)
         .expect("create synthetic chart on astrotheoros.com");
+    let uuid = entry.id;
     assert!(!uuid.is_empty(), "expected a non-empty UUID");
     println!("astrotheoros.com: created uuid={uuid}");
 

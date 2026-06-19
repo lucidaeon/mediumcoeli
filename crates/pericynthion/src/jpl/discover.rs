@@ -28,6 +28,32 @@
 //! the new files alongside DE441 and have the library pick them up
 //! automatically — no environment-variable rename, no CLI flag
 //! redesign. The data directory is the unit of distribution.
+//!
+//! # JPL DE-series cheat sheet
+//!
+//! Two parallel tracks since 1997 — standard window and long-range:
+//!
+//! | DE   | Year | Coverage             | Notes |
+//! |------|------|----------------------|-------|
+//! | 200  | 1982 | 1599–2169            | FK5-aligned; Swiss Ephemeris SE1 origin |
+//! | 405  | 1997 | 1599–2201            | Gold standard 1997–2013; SE1 standard window; astro.com historically |
+//! | 406  | 1997 | −3000 to +3000       | Long-range companion to DE405; SE1 extended window; truncated coefficients (NCOEFF 728) |
+//! | 421  | 2008 | 1899–2053            | Major LLR update; HORIZONS default for a period |
+//! | 422  | 2009 | −3000 to +3000       | Long-range companion to DE421; full precision |
+//! | 430  | 2013 | 1549–2650            | MESSENGER data; 343 asteroids; SE2 / Solar Fire 9.x standard window |
+//! | 430t | 2013 | 1549–2650            | DE430 + TT-TDB Chebyshev polynomial; same positions |
+//! | 431  | 2013 | −13200 to +17191     | Long-range companion to DE430; SE2 extended window; Solar Fire 9.x |
+//! | 440  | 2020 | 1549–2650            | Juno + Cassini Grand Finale data; current JPL standard |
+//! | 440t | 2020 | 1549–2650            | DE440 + TT-TDB polynomial |
+//! | 441  | 2020 | −13200 to +17191     | Long-range companion to DE440; **pericynthion default** |
+//!
+//! The `t` suffix adds a TT-TDB geocenter time-scale polynomial; positions are
+//! identical to the non-`t` build.
+//!
+//! **Naming quirk (DE430/431 and older):** older releases use `lnx*` (not
+//! `linux_*`) for binaries and `header.NNN_572` (not `header.NNN`) for the
+//! extended-constant header. This discover module only recognises `linux_*`
+//! and plain `header.NNN`, so DE430/431 need symlinks to work as-is.
 
 use crate::error::PericynthionError;
 use std::path::{Path, PathBuf};

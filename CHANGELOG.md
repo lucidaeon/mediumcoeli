@@ -9,6 +9,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.1.1](https://github.com/lucidaeon/mediumcoeli/compare/0.1.0...0.1.1) — 2026-06-18
+
+### Fixed — `pericynthion`
+
+- **Morinus house cusps were computed with the obliquity factor on the
+  wrong `atan2` term** and H10 was incorrectly pinned to the MC. Against
+  the First Contact refchart oracle the cusps were off by up to 4.6°.
+  Corrected the equator→ecliptic projection to `atan2(sin α · cos ε,
+  cos α)` and removed the MC pin; all twelve cusps now match the oracle to
+  arcseconds. (Bug was latent — Morinus shipped only behind `noref-houses`.)
+- **Acceptance-test ΔT / JDE tolerance widened for future-dated charts.**
+  For `unix_overflow_2038` and `first_contact`, both tolerances are now 60 s.
+  ΔT beyond the last IERS observation is not known; the Espenak/Meeus
+  parabola (pericynthion) and the reference tool's IERS linear extrapolation
+  diverge by up to ~40 s at 2038–2063 — the new band covers that disagreement
+  without changing any computation.
+
+### Added — `pericynthion`
+
+- **Vehlow Equal house system** (`noref-houses`). Equal 30° houses seeded from
+  the Ascendant, each cusp shifted 15° earlier — centres each zodiac sign on a
+  house rather than starting it there. H1 ≠ Asc; H10 ≠ MC.
+- **Carter Poli-Equatorial house system** (`noref-houses`). Divides the
+  celestial equator into twelve 30° arcs from the RA of the Ascendant, projects
+  each back to the ecliptic via `λ = atan2(sin α, cos α · cos ε)`. H1 = Asc
+  exactly; H10 ≠ MC. Latitude-independent.
+- **Pullen Sinusoidal Delta house system** (`noref-houses`, astro.com code `L`).
+  Generalises Porphyry with a linear delta offset `Δ = (q − 90°) / 4` on each
+  30° cusp step, where `q` is the minimum MC–Asc arc. Collapses to Porphyry
+  at `q = 90°`; collapses intermediates to the quadrant midpoint when either
+  quadrant is narrower than 30°. Latitude-independent.
+- **Pullen Sinusoidal Ratio house system** (`noref-houses`, astro.com code `Q`).
+  Scales intermediate cusps by a ratio `r` solved analytically from the minimum
+  quadrant arc via a closed-form depressed cubic. The r⁴ factor produces
+  pronounced central-house swelling for extreme quadrant charts. Latitude-independent.
+
+### Added — `blackmoon`
+
+- **`--clear`** — delete every chart on a web target (`--target luna /
+  astrocom / astrotheoros`) after an interactive confirmation prompt, with a
+  zero-padded `[n/N] name  deleted` progress line per chart.
+
+### Changed — `pericynthion` / `starcat`
+
+- **Morinus house system promoted out of `noref-houses`.** Refchart oracle
+  captured (`docs/ref_first_contact_morinus.md`) and acceptance test added.
+  Morinus now compiles in default builds, is emitted in `starcat` JZOD output,
+  and is part of `HouseArg::ALL` (computed when `--house` is omitted). Seven
+  house systems are now always-on; twelve remain gated.
+
+### Changed — `blackmoon`
+
+- **Web-write output consolidated into one block per chart.** The previous
+  three sections — pre-write field-drop list, write-progress lines, and the
+  post-write readback transcript — are now a single per-chart block: a
+  `[n/N] name  created uuid=…` header immediately followed by that chart's
+  field-by-field transcript. The redundant per-chart drop list is gone (the
+  transcript already shows `→ (dropped)`); the global "sink does not store …"
+  notice is condensed to one line. Progress counters are zero-padded to the
+  width of the total.
+- **astrotheoros writes now verify inline, with no extra HTTP.** Because the
+  `POST /api/chart` response echoes the full landed entry, each chart is
+  diffed and its block printed the instant it lands — no post-write readback.
+  Account-wide globals (house system, zodiac) are fetched once up front. Luna
+  and astro.com (whose create responses don't echo the full entry) keep the
+  transient-progress-then-readback path.
+
+### Changed — `astrogram` (**breaking**)
+
+- **`AstrotheorosSession::create_one` now returns the full `ApiChartEntry`**
+  (the create response echoes the complete landed chart) instead of just the
+  UUID `String`; callers wanting only the id use `.id`.
+- **`AstrotheorosSession::write_charts` signature changed** from separate
+  `on_start` / `on_result` closures to a single per-record callback
+  `on_record(orig_index, new_index, total_new, source, status, landed_entry)`,
+  exposing the landed entry so callers can verify a write without a readback.
+
+---
+
 ## [0.1.0](https://github.com/lucidaeon/mediumcoeli/compare/0.0.1...0.1.0) — 2026-06-18
 
 ### Added — `astrogram`

@@ -1,6 +1,6 @@
 use astrogram::astrotheoros::{
-    ApiChartEntry, calendar_to_unix_ms, chart_to_create_body, entry_to_chart, extract_client_uat,
-    jwt_exp, parse_rsc_response,
+    ApiChartEntry, AstrotheorosSession, calendar_to_unix_ms, chart_to_create_body, entry_to_chart,
+    extract_client_uat, jwt_exp, parse_rsc_response,
 };
 use astrogram::chart::{
     Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
@@ -100,6 +100,43 @@ fn anna_freud_chart() -> Chart {
         sub_charts: vec![],
         notes: None,
     }
+}
+
+// ── live smoke (ignored; network) ─────────────────────────────────────────────
+// Confirms the inline-verify path end to end: create one allow-listed chart,
+// receive the landed entry from the create response, convert it back to a Chart,
+// assert the round-trip, then delete. Uses Anna Freud (approved native list).
+#[test]
+#[ignore = "live network: writes+deletes one allow-listed chart on astrotheoros.com"]
+fn live_create_returns_landed_entry_then_deletes() {
+    let user = std::env::var("ASTROTHEOROS_USER").expect("ASTROTHEOROS_USER");
+    let pass = std::env::var("ASTROTHEOROS_PASS").expect("ASTROTHEOROS_PASS");
+    let session = AstrotheorosSession::login(&user, &pass, 500).expect("login");
+
+    let source = anna_freud_chart();
+    let uuids = vec![String::new()]; // empty uuid → will be created
+    let mut landed_id: Option<String> = None;
+    session
+        .write_charts(
+            std::slice::from_ref(&source),
+            &uuids,
+            &mut |orig_i, new_i, total, src, status, entry| {
+                assert_eq!(orig_i, 0);
+                assert_eq!((new_i, total), (1, 1));
+                assert!(status.starts_with("created uuid="), "status: {status}");
+                let entry = entry.expect("create response echoes landed entry");
+                let landed = entry_to_chart(entry).expect("entry_to_chart");
+                // Round-trip: the landed chart matches what we sent.
+                assert_eq!(landed.name, src.name);
+                assert_eq!((landed.year, landed.month, landed.day), (1895, 12, 3));
+                assert_eq!((landed.hour, landed.minute), (15, 15));
+                landed_id = Some(entry.id.clone());
+            },
+        )
+        .expect("write_charts");
+
+    let id = landed_id.expect("a chart was created");
+    session.delete_one(&id).expect("delete");
 }
 
 // ── entry_to_chart ────────────────────────────────────────────────────────────

@@ -7,13 +7,14 @@
 //! geocentric (default), topocentric (`--lat` + `--lon`), heliocentric
 //! (`--helio`). Also emits the chart axes (Ac/Ds, Mc/Ic,
 //! Vx/Ax, Nn/Sn, Lil/Pri — see "Chart points" below), the eight
-//! Hermetic lots, and five always-on house systems (Whole Sign,
-//! Equal-from-Ac, Placidus, Regiomontanus, Porphyry). An additional
-//! ten house systems (Koch, Campanus, Alcabitius, Morinus, Meridian,
-//! Equal-from-MC, Horizontal, Topocentric, Krusinski, Sripati) are
-//! available with the `noref-houses` Cargo feature — these have
-//! implementations but no refchart oracle yet; see
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! Hermetic lots, and seven always-on house systems (Whole Sign,
+//! Equal-from-Ac, Placidus, Regiomontanus, Porphyry, Alcabitius,
+//! Morinus). An additional twelve house systems (Koch, Campanus,
+//! Meridian, Equal-from-MC, Horizontal, Topocentric, Krusinski,
+//! Sripati, Vehlow Equal, Carter Poli-Equatorial, Pullen Sinusoidal
+//! Delta, Pullen Sinusoidal Ratio) are available with the
+//! `noref-houses` Cargo feature — these have implementations but no
+//! refchart oracle yet; see `docs/superpowers/plans/HOUSE_PROMOTION.md`.
 //!
 //! # Chart points
 //!
@@ -389,7 +390,6 @@ enum HouseArg {
     Koch,
     #[cfg(feature = "noref-houses")]
     Campanus,
-    #[cfg(feature = "noref-houses")]
     Morinus,
     #[cfg(feature = "noref-houses")]
     Meridian,
@@ -403,6 +403,14 @@ enum HouseArg {
     Krusinski,
     #[cfg(feature = "noref-houses")]
     Sripati,
+    #[cfg(feature = "noref-houses")]
+    Vehlow,
+    #[cfg(feature = "noref-houses")]
+    Carter,
+    #[cfg(feature = "noref-houses")]
+    PullenSd,
+    #[cfg(feature = "noref-houses")]
+    PullenSr,
 }
 
 impl HouseArg {
@@ -413,6 +421,7 @@ impl HouseArg {
         Self::Regiomontanus,
         Self::Porphyry,
         Self::Alcabitius,
+        Self::Morinus,
     ];
 
     fn label(self) -> &'static str {
@@ -427,7 +436,6 @@ impl HouseArg {
             Self::Koch => "Koch",
             #[cfg(feature = "noref-houses")]
             Self::Campanus => "Campanus",
-            #[cfg(feature = "noref-houses")]
             Self::Morinus => "Morinus",
             #[cfg(feature = "noref-houses")]
             Self::Meridian => "Meridian",
@@ -441,6 +449,14 @@ impl HouseArg {
             Self::Krusinski => "Krusinski-Pisa-Goeldi",
             #[cfg(feature = "noref-houses")]
             Self::Sripati => "Sripati",
+            #[cfg(feature = "noref-houses")]
+            Self::Vehlow => "Vehlow Equal",
+            #[cfg(feature = "noref-houses")]
+            Self::Carter => "Carter Poli-Equatorial",
+            #[cfg(feature = "noref-houses")]
+            Self::PullenSd => "Pullen (Sinusoidal Delta)",
+            #[cfg(feature = "noref-houses")]
+            Self::PullenSr => "Pullen (Sinusoidal Ratio)",
         }
     }
 
@@ -456,7 +472,6 @@ impl HouseArg {
             Self::Koch => "koch",
             #[cfg(feature = "noref-houses")]
             Self::Campanus => "campanus",
-            #[cfg(feature = "noref-houses")]
             Self::Morinus => "morinus",
             #[cfg(feature = "noref-houses")]
             Self::Meridian => "meridian",
@@ -470,6 +485,14 @@ impl HouseArg {
             Self::Krusinski => "krusinski",
             #[cfg(feature = "noref-houses")]
             Self::Sripati => "sripati",
+            #[cfg(feature = "noref-houses")]
+            Self::Vehlow => "vehlow",
+            #[cfg(feature = "noref-houses")]
+            Self::Carter => "carter",
+            #[cfg(feature = "noref-houses")]
+            Self::PullenSd => "pullen_sd",
+            #[cfg(feature = "noref-houses")]
+            Self::PullenSr => "pullen_sr",
         }
     }
 }
@@ -931,7 +954,6 @@ fn compute_houses(
                 HouseArg::Campanus => {
                     pericynthion::houses::campanus_rad(ramc_rad, obliquity_rad, lat_rad)
                 }
-                #[cfg(feature = "noref-houses")]
                 HouseArg::Morinus => {
                     pericynthion::houses::morinus_rad(ramc_rad, obliquity_rad, lat_rad)
                 }
@@ -957,6 +979,20 @@ fn compute_houses(
                 }
                 #[cfg(feature = "noref-houses")]
                 HouseArg::Sripati => Some(pericynthion::houses::sripati_rad(
+                    ac_rad,
+                    pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
+                )),
+                #[cfg(feature = "noref-houses")]
+                HouseArg::Vehlow => Some(pericynthion::houses::vehlow_rad(ac_rad)),
+                #[cfg(feature = "noref-houses")]
+                HouseArg::Carter => Some(pericynthion::houses::carter_rad(ac_rad, obliquity_rad)),
+                #[cfg(feature = "noref-houses")]
+                HouseArg::PullenSd => Some(pericynthion::houses::pullen_sd_rad(
+                    ac_rad,
+                    pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
+                )),
+                #[cfg(feature = "noref-houses")]
+                HouseArg::PullenSr => Some(pericynthion::houses::pullen_sr_rad(
                     ac_rad,
                     pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
                 )),

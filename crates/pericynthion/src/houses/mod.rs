@@ -41,9 +41,7 @@ pub use campanus::campanus_rad;
 pub mod alcabitius;
 pub use alcabitius::alcabitius_rad;
 
-#[cfg(feature = "noref-houses")]
 pub mod morinus;
-#[cfg(feature = "noref-houses")]
 pub use morinus::morinus_rad;
 
 #[cfg(feature = "noref-houses")]
@@ -75,6 +73,26 @@ pub use krusinski::krusinski_rad;
 pub mod sripati;
 #[cfg(feature = "noref-houses")]
 pub use sripati::sripati_rad;
+
+#[cfg(feature = "noref-houses")]
+pub mod vehlow;
+#[cfg(feature = "noref-houses")]
+pub use vehlow::vehlow_rad;
+
+#[cfg(feature = "noref-houses")]
+pub mod carter;
+#[cfg(feature = "noref-houses")]
+pub use carter::carter_rad;
+
+#[cfg(feature = "noref-houses")]
+pub mod pullen_sd;
+#[cfg(feature = "noref-houses")]
+pub use pullen_sd::pullen_sd_rad;
+
+#[cfg(feature = "noref-houses")]
+pub mod pullen_sr;
+#[cfg(feature = "noref-houses")]
+pub use pullen_sr::pullen_sr_rad;
 
 use std::f64::consts::TAU;
 

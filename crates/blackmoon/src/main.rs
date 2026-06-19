@@ -128,6 +128,11 @@ struct Cli {
     #[arg(long, env = "ASTROTHEOROS_TOKEN", hide_env_values = true)]
     astrotheoros_token: Option<String>,
 
+    /// Delete every chart on the web target after an interactive confirmation
+    /// prompt.  Requires a web target: --target luna / astrocom / astrotheoros.
+    #[arg(long)]
+    clear: bool,
+
     /// In-place consolidation mode: fetch every chart from the web target,
     /// cluster duplicate candidates by spacetime, prompt the user to choose
     /// which to keep, then delete the rest.  Decisions persist to
@@ -204,7 +209,8 @@ fn main() -> Result<()> {
         && cli.to.is_none()
         && cli.target.is_none()
         && !cli.normalize
-        && !cli.consolidate;
+        && !cli.consolidate
+        && !cli.clear;
 
     if nothing {
         use clap::CommandFactory;
@@ -466,6 +472,18 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
     let from = cli.from.or(cli.target);
     let to = cli.to.or(cli.target);
 
+    // --clear: delete every chart on the web target after confirmation.
+    if cli.clear {
+        let target = cli
+            .target
+            .or(cli.from)
+            .or(cli.to)
+            .filter(|t| is_web_target(*t))
+            .context("--clear requires a web target (--target luna / astrocom / astrotheoros)")?;
+        let provider = resolve_provider(target, cli)?;
+        return cmd_clear(provider);
+    }
+
     // --consolidate: fetch every chart from a web target, cluster duplicates,
     // prompt the user, delete the rest.  Works for any web target.
     if cli.consolidate {
@@ -678,10 +696,66 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
                 return Ok(());
             }
         }
-        p.write_charts(&merged)?;
-        if !cli.no_verify {
-            if let Err(e) = verify_and_report(p, &merged) {
+        let inline = p.verifies_inline();
+        let verify = !cli.no_verify;
+        // Inline-verify providers (astrotheoros) fold account-wide globals
+        // (house/zodiac) into the create-response entry before diffing.
+        let global = if inline {
+            p.fetch_global_settings()?
+        } else {
+            None
+        };
+        let mut verified = 0usize;
+        let write_results = {
+            // Live per-chart block, printed the instant each chart lands.
+            let mut on_landed = |n: usize,
+                                 total: usize,
+                                 source: &astrogram::chart::Chart,
+                                 landed: Option<&astrogram::chart::Chart>,
+                                 status: &str| {
+                let w = total.to_string().len();
+                println!("[{n:0>w$}/{total}] {}  {status}", source.name);
+                if let Some(landed) = landed {
+                    if verify {
+                        let mut folded = landed.clone();
+                        let notes: &[(astrogram::capability::ChartField, &'static str)] =
+                            if let Some(g) = &global {
+                                folded.house_system = g.house_system;
+                                folded.zodiac = g.zodiac;
+                                folded.coordinate_system = g.coordinate_system;
+                                &g.field_notes
+                            } else {
+                                &[]
+                            };
+                        let mappings = astrogram::transcript::diff(source, &folded, notes);
+                        print_transcript(&mappings);
+                    }
+                    verified += 1;
+                }
+            };
+            p.write_charts(&merged, &mut on_landed)?
+        };
+
+        if inline {
+            let created = write_results.iter().filter(|r| r.is_some()).count();
+            println!(
+                "verified {verified}/{created} charts (create response — no readback) from {}",
+                p.site_display()
+            );
+        } else if verify {
+            if let Err(e) = verify_and_report(p, &merged, &write_results) {
                 eprintln!("write succeeded; readback verification failed: {e}");
+            }
+        } else {
+            // No transcript follows, so print the write results permanently here.
+            let total_new = write_results.iter().filter(|r| r.is_some()).count();
+            let w = total_new.to_string().len();
+            let mut n = 0usize;
+            for (chart, status) in merged.iter().zip(write_results.iter()) {
+                if let Some(s) = status {
+                    n += 1;
+                    println!("[{n:0>w$}/{total_new}] {}  {s}", chart.name);
+                }
             }
         }
     } else {
@@ -723,6 +797,44 @@ fn cmd_normalize_inplace(inputs: &[PathBuf]) -> Result<()> {
             .with_context(|| format!("writing {}", path.display()))?;
         println!("normalised {} charts in {}", charts.len(), path.display());
     }
+    Ok(())
+}
+
+// ── clear ─────────────────────────────────────────────────────────────────────
+
+fn cmd_clear(provider: WebProvider) -> Result<()> {
+    let (charts, ids) = provider.fetch_all_with_ids()?;
+    if charts.is_empty() {
+        println!("no charts found — nothing to delete.");
+        return Ok(());
+    }
+    eprint!(
+        "Delete all {} charts from {}? [y/N] ",
+        charts.len(),
+        provider.site_display()
+    );
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .context("reading confirmation")?;
+    if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+        eprintln!("Aborted.");
+        return Ok(());
+    }
+    let total = charts.len();
+    let w = total.to_string().len();
+    for (i, (chart, id)) in charts.iter().zip(ids.iter()).enumerate() {
+        let n = i + 1;
+        let name: String = chart.name.chars().take(40).collect();
+        print!("[{n:0>w$}/{total}] {name}  ");
+        let _ = std::io::stdout().flush();
+        match provider.delete_one(id) {
+            Ok(()) => println!("deleted"),
+            Err(e) => println!("[!] {e}"),
+        }
+    }
+    println!("cleared {} charts from {}", total, provider.site_display());
     Ok(())
 }
 
@@ -1001,10 +1113,9 @@ fn clip(s: &str, width: usize) -> String {
     }
 }
 
-/// Print one chart's full field-by-field `source → landed` transcript.
-fn print_transcript(name: &str, m: &[astrogram::transcript::FieldMapping]) {
+/// Print one chart's field-by-field `source → landed` transcript (no header line).
+fn print_transcript(m: &[astrogram::transcript::FieldMapping]) {
     use astrogram::transcript::FieldStatus::{Dropped, Filled, Preserved};
-    println!("{name}");
     for fm in m {
         let glyph = if fm.status == Preserved { "=" } else { "→" };
         let from = match fm.status {
@@ -1022,7 +1133,13 @@ fn print_transcript(name: &str, m: &[astrogram::transcript::FieldMapping]) {
 }
 
 /// Read written charts back from a web sink and print per-chart transcripts.
-fn verify_and_report(provider: &WebProvider, written: &[astrogram::chart::Chart]) -> Result<()> {
+/// Each block's header carries the chart's write status (`[n/N] name created uuid=…`
+/// for newly-written charts, or just the name for pre-existing ones).
+fn verify_and_report(
+    provider: &WebProvider,
+    written: &[astrogram::chart::Chart],
+    write_results: &[Option<String>],
+) -> Result<()> {
     if has_tied_datetimes(written) {
         eprintln!(
             "note: some charts share a birth datetime; readback pairing for those is best-effort (input order)"
@@ -1031,10 +1148,21 @@ fn verify_and_report(provider: &WebProvider, written: &[astrogram::chart::Chart]
     let global = provider.fetch_global_settings()?;
     let (landed_all, _ids) = provider.fetch_all_with_ids()?;
     let pairing = pair_landed(written, &landed_all);
+    let total_new = write_results.iter().filter(|r| r.is_some()).count();
+    let w = total_new.to_string().len();
+    let mut new_idx = 0usize;
     let mut verified = 0;
-    for (src, maybe_idx) in written.iter().zip(pairing) {
+    for ((src, maybe_idx), status) in written.iter().zip(pairing).zip(write_results.iter()) {
+        // Header line: numbered + status for newly-written charts, bare name otherwise.
+        let header = match status {
+            Some(s) => {
+                new_idx += 1;
+                format!("[{new_idx:0>w$}/{total_new}] {}  {s}", src.name)
+            }
+            None => src.name.clone(),
+        };
         match maybe_idx {
-            None => println!("{}\n  not found on readback — skipped", src.name),
+            None => println!("{header}\n  not found on readback — skipped"),
             Some(i) => {
                 let mut landed = landed_all[i].clone();
                 let notes: &[(astrogram::capability::ChartField, &'static str)] =
@@ -1047,7 +1175,8 @@ fn verify_and_report(provider: &WebProvider, written: &[astrogram::chart::Chart]
                         &[]
                     };
                 let mappings = astrogram::transcript::diff(src, &landed, notes);
-                print_transcript(&src.name, &mappings);
+                println!("{header}");
+                print_transcript(&mappings);
                 verified += 1;
             }
         }
@@ -1092,11 +1221,10 @@ fn report_drops(
             .flat_map(|(_, fs)| fs.iter().copied())
             .collect();
         let lost_list = all_lost.into_iter().collect::<Vec<_>>().join(", ");
-        println!("{sink_name} does not store: {lost_list}.");
-        println!("  {} chart(s) carry data in those fields:", affected.len());
-        for (name, fs) in &affected {
-            println!("    - {name:<24} {}", fs.join(", "));
-        }
+        println!(
+            "{sink_name} does not store: {lost_list}. ({} chart(s) affected)",
+            affected.len()
+        );
     }
     affected.len()
 }

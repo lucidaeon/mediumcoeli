@@ -1,13 +1,19 @@
 use anyhow::{Context, Result};
 use astrogram::astrocom::AstrocomSession;
-use astrogram::astrotheoros::AstrotheorosSession;
+use astrogram::astrotheoros::{AstrotheorosSession, entry_to_chart};
 use astrogram::capability::ChartField;
 use astrogram::chart::{Chart, CoordinateSystem, HouseSystem, Zodiac};
 use astrogram::luna::LunaSession;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::io::Write as _;
+use std::io::{IsTerminal, Write as _};
 
 pub type DatetimeKey = (String, i16, u8, u8, u8, u8, u8);
+
+/// Per-record callback for [`WebProvider::write_charts`] on inline-verify
+/// providers: `(new_index, total_new, source, landed, status)`.  `landed` is
+/// `None` if the create failed.
+pub type LandedFn<'a> = dyn FnMut(usize, usize, &Chart, Option<&Chart>, &str) + 'a;
 
 pub fn key(c: &Chart) -> DatetimeKey {
     (
@@ -295,12 +301,57 @@ impl WebProvider {
         Ok(())
     }
 
-    pub fn write_charts(&mut self, charts: &[Chart]) -> Result<()> {
-        let on_start = &|i: usize, total: usize, name: &str| {
-            print!("[{i:>3}/{total}] {name:<40}  ");
-            let _ = std::io::stdout().flush();
+    /// Write charts to the web sink.  Returns per-chart statuses: `Some(msg)` for
+    /// charts that were written (created or updated), `None` for pre-existing charts
+    /// that were skipped.  Nothing is printed to stdout — callers use the returned
+    /// statuses to compose output (e.g. inline with the readback transcript).
+    /// Whether this provider verifies writes inline from the create response,
+    /// with no separate readback.  True for astrotheoros (the `POST /api/chart`
+    /// response echoes the full landed entry); false for providers whose create
+    /// response does not, which fall back to a post-write readback.
+    #[must_use]
+    pub fn verifies_inline(&self) -> bool {
+        matches!(self, WebProvider::Astrotheoros { .. })
+    }
+
+    /// Write charts to the web sink.
+    ///
+    /// For inline-verify providers (see [`Self::verifies_inline`]), `on_landed`
+    /// is invoked the instant each chart lands — `(new_index, total_new, source,
+    /// landed, status)` — so the caller can print a live per-chart block from the
+    /// create response.  `landed` is `None` if the create failed.
+    ///
+    /// For other providers a transient single-line progress indicator is shown
+    /// while writing (so the run is never silent), `on_landed` is not called, and
+    /// the caller verifies afterward via a readback.
+    ///
+    /// Returns per-chart statuses: `Some(msg)` for charts that were written,
+    /// `None` for pre-existing charts that were skipped.
+    pub fn write_charts(
+        &mut self,
+        charts: &[Chart],
+        on_landed: &mut LandedFn<'_>,
+    ) -> Result<Vec<Option<String>>> {
+        let tty = std::io::stdout().is_terminal();
+        // Transient progress: redraw on the same line via CR + clear-to-EOL.
+        let live_start = &|i: usize, total: usize, name: &str| {
+            if tty {
+                let w = total.to_string().len();
+                print!("\r\x1b[Kwriting [{i:0>w$}/{total}] {name}");
+                let _ = std::io::stdout().flush();
+            }
         };
-        let on_result = &|status: &str| println!("{status}");
+        // Store every status; print errors permanently (clearing the progress line first).
+        let on_done = |results: &RefCell<Vec<String>>, s: &str| {
+            if s.starts_with("[!]") {
+                if tty {
+                    print!("\r\x1b[K");
+                }
+                println!("{s}");
+            }
+            results.borrow_mut().push(s.to_string());
+        };
+        let mut statuses: Vec<Option<String>> = vec![None; charts.len()];
 
         match self {
             WebProvider::Luna {
@@ -312,27 +363,41 @@ impl WebProvider {
                 if phenom_ids.is_empty() {
                     // listing-keys mode: came from read_existing().
                     // Create only charts not already in LUNA.
-                    let new_charts: Vec<Chart> = charts
+                    let new_indices: Vec<usize> = charts
                         .iter()
-                        .filter(|c| !listing_keys.contains(&key(c)))
-                        .cloned()
+                        .enumerate()
+                        .filter(|(_, c)| !listing_keys.contains(&key(c)))
+                        .map(|(i, _)| i)
                         .collect();
-                    let skipped = charts.len() - new_charts.len();
+                    let skipped = charts.len() - new_indices.len();
                     if skipped > 0 {
                         println!("  {skipped} already in LUNA — skipped");
                     }
+                    let new_charts: Vec<Chart> =
+                        new_indices.iter().map(|&i| charts[i].clone()).collect();
                     let empty_ids = vec!["".to_string(); new_charts.len()];
+                    let results: RefCell<Vec<String>> = RefCell::new(Vec::new());
                     session
-                        .write_charts(&new_charts, &empty_ids, on_start, on_result)
+                        .write_charts(&new_charts, &empty_ids, live_start, &|s: &str| {
+                            on_done(&results, s)
+                        })
                         .context("writing to LUNA")?;
+                    for (idx, status) in new_indices.iter().zip(results.into_inner()) {
+                        statuses[*idx] = Some(status);
+                    }
                 } else {
                     // phenom-ids mode: came from read_input() (normalize-in-place).
                     // Update existing charts using cached phenom_ids.
+                    let results: RefCell<Vec<String>> = RefCell::new(Vec::new());
                     session
-                        .write_charts(charts, phenom_ids, on_start, on_result)
+                        .write_charts(charts, phenom_ids, live_start, &|s: &str| {
+                            on_done(&results, s)
+                        })
                         .context("writing to LUNA")?;
+                    for (i, status) in results.into_inner().into_iter().enumerate() {
+                        statuses[i] = Some(status);
+                    }
                 }
-                Ok(())
             }
             WebProvider::Astrocom {
                 session,
@@ -343,10 +408,19 @@ impl WebProvider {
                     .iter()
                     .map(|c| *nhor_id_map.get(&key(c)).unwrap_or(&0))
                     .collect();
+                let new_indices: Vec<usize> = ids
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &id)| id == 0)
+                    .map(|(i, _)| i)
+                    .collect();
+                let results: RefCell<Vec<String>> = RefCell::new(Vec::new());
                 session
-                    .write_charts(charts, &ids, on_start, on_result)
+                    .write_charts(charts, &ids, live_start, &|s: &str| on_done(&results, s))
                     .context("writing to astro.com")?;
-                Ok(())
+                for (idx, status) in new_indices.iter().zip(results.into_inner()) {
+                    statuses[*idx] = Some(status);
+                }
             }
             WebProvider::Astrotheoros {
                 session, uuid_map, ..
@@ -355,11 +429,26 @@ impl WebProvider {
                     .iter()
                     .map(|c| uuid_map.get(&key(c)).cloned().unwrap_or_default())
                     .collect();
+                // Inline verify: convert each create response to a landed Chart and
+                // hand it to `on_landed` immediately; record the status by orig index.
                 session
-                    .write_charts(charts, &uuids, on_start, on_result)
+                    .write_charts(
+                        charts,
+                        &uuids,
+                        &mut |orig_i, n, total, source, status, entry| {
+                            let landed = entry.and_then(|e| entry_to_chart(e).ok());
+                            on_landed(n, total, source, landed.as_ref(), status);
+                            statuses[orig_i] = Some(status.to_string());
+                        },
+                    )
                     .context("writing to astrotheoros.com")?;
-                Ok(())
             }
         }
+        // Clear the transient progress line so merged output starts clean.
+        if tty {
+            print!("\r\x1b[K");
+            let _ = std::io::stdout().flush();
+        }
+        Ok(statuses)
     }
 }

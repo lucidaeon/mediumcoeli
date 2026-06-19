@@ -127,6 +127,11 @@ pub enum AstrotheorosError {
     DeleteFailed(String),
 }
 
+/// Per-record callback for [`AstrotheorosSession::write_charts`]:
+/// `(orig_index, new_index, total_new, source, status, landed_entry)`.
+pub type WriteRecordFn<'a> =
+    dyn FnMut(usize, usize, usize, &Chart, &str, Option<&ApiChartEntry>) + 'a;
+
 /// One chart entry as returned by the astrotheoros.com API.
 /// Month is 0-indexed (0 = January) — matches JS `Date.getMonth()`.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -714,7 +719,10 @@ impl AstrotheorosSession {
         Ok((tz, offset))
     }
 
-    /// Create a single chart on astrotheoros.com. Returns the new chart UUID.
+    /// Create a single chart on astrotheoros.com. Returns the full landed
+    /// [`ApiChartEntry`] echoed by the create response — shape-identical to the
+    /// entries returned by the `/app` readback, so callers can verify a write
+    /// without a separate readback (use `.id` for just the UUID).
     ///
     /// Pre-calls `GET /api/atlas` with the chart's birth location and time to resolve
     /// the historical IANA timezone and UTC offset, then `POST /api/chart`.
@@ -722,8 +730,8 @@ impl AstrotheorosSession {
     /// # Errors
     /// - [`AstrotheorosError::Http`] on any network failure.
     /// - [`AstrotheorosError::AtlasResponseInvalid`] if atlas lookup fails.
-    /// - [`AstrotheorosError::CreateResponseInvalid`] if the create response lacks `entry.id`.
-    pub fn create_one(&self, chart: &Chart) -> Result<String, AstrotheorosError> {
+    /// - [`AstrotheorosError::CreateResponseInvalid`] if the create response lacks a valid `entry`.
+    pub fn create_one(&self, chart: &Chart) -> Result<ApiChartEntry, AstrotheorosError> {
         self.refresh_jwt_if_needed()?;
 
         let unix_ms =
@@ -758,44 +766,49 @@ impl AstrotheorosSession {
             .send()?
             .error_for_status()?
             .json()?;
-        let id = resp_json["entry"]["id"]
-            .as_str()
-            .ok_or(AstrotheorosError::CreateResponseInvalid)?
-            .to_string();
-        Ok(id)
+        let entry: ApiChartEntry = serde_json::from_value(resp_json["entry"].clone())
+            .map_err(|_| AstrotheorosError::CreateResponseInvalid)?;
+        Ok(entry)
     }
 
     /// Write new charts to astrotheoros.com (skips charts with a non-empty UUID).
     ///
-    /// - `on_start(current, total, name)`: called before each create.
-    /// - `on_result(status)`: called after with `"created uuid=…"` or `"[!] …"`.
+    /// Calls `on_record(orig_index, new_index, total_new, source, status, landed)`
+    /// after each create completes:
+    /// - `orig_index` — the chart's position in `charts` (for status bookkeeping)
+    /// - `new_index` — 1-based index among the newly-created charts
+    /// - `total_new` — count of charts that will be created
+    /// - `source` — the chart that was sent
+    /// - `status` — `"created uuid=…"` or `"[!] create: …"`
+    /// - `landed` — the entry echoed by the create response (`None` on failure),
+    ///   which the caller can convert + diff for readback-free verification
     ///
-    /// Per-chart failures are reported via `on_result`; the method always returns `Ok(())`.
+    /// Per-chart failures surface via `on_record`; the method always returns `Ok(())`.
     ///
     /// # Errors
-    /// Always returns `Ok(())`; per-chart failures surface via the `on_result` closure.
+    /// Always returns `Ok(())`; per-chart failures surface via the `on_record` closure.
     pub fn write_charts(
         &self,
         charts: &[Chart],
         uuids: &[String],
-        on_start: &dyn Fn(usize, usize, &str),
-        on_result: &dyn Fn(&str),
+        on_record: &mut WriteRecordFn<'_>,
     ) -> Result<(), AstrotheorosError> {
-        let new_charts: Vec<_> = charts
+        let new: Vec<(usize, &Chart)> = charts
             .iter()
-            .zip(uuids.iter())
-            .filter(|(_, uuid)| uuid.is_empty())
+            .enumerate()
+            .filter(|(i, _)| uuids[*i].is_empty())
             .collect();
-        let total = new_charts.len();
-        for (i, (chart, _)) in new_charts.iter().enumerate() {
-            on_start(
-                i + 1,
-                total,
-                &chart.name.chars().take(40).collect::<String>(),
-            );
+        let total = new.len();
+        for (n, (orig_i, chart)) in new.iter().enumerate() {
             match self.create_one(chart) {
-                Ok(id) => on_result(&format!("created uuid={id}")),
-                Err(e) => on_result(&format!("[!] create: {e}")),
+                Ok(entry) => {
+                    let status = format!("created uuid={}", entry.id);
+                    on_record(*orig_i, n + 1, total, chart, &status, Some(&entry));
+                }
+                Err(e) => {
+                    let status = format!("[!] create: {e}");
+                    on_record(*orig_i, n + 1, total, chart, &status, None);
+                }
             }
             self.sleep();
         }

@@ -49,13 +49,14 @@ publish CRATE='':
 	    cargo publish --dry-run -p "$crate"
 	done
 
-# Build and tag Docker images into the local daemon (native arch only; BuildKit
-# cache is populated so a subsequent push reuses layers).
+# Build Docker images for all platforms (no output — warms each node's BuildKit
+# cache so a subsequent push reuses layers).
 # Set DOCKER_AMD64_HOST=tcp://host:2375 to wire a native amd64 remote builder
 # instead of QEMU emulation (faster, no OOM on heavy dep graphs).
 # just docker build                    → build+tag both crates, tag latest
 # just docker build 0.0.1             → build+tag both crates, tag 0.0.1
 # just docker build 0.0.1 starcat     → build+tag one crate
+# just docker build-no-cache          → same as build but with --no-cache
 # just docker push                    → push latest to all registries (multi-arch)
 # just docker push 0.0.1             → push 0.0.1 to all registries (multi-arch)
 # just docker push 0.0.1 starcat     → push one crate
@@ -82,8 +83,18 @@ docker ACTION TAG=tag CRATE='':
 	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
 	            docker buildx build \
 	                "${builder_args[@]}" \
+	                --platform {{platforms}} \
 	                "${tag_flags[@]}" \
-	                --load \
+	                -f "scripts/Dockerfile.$crate" .
+	            ;;
+	        build-no-cache)
+	            tag_flags=()
+	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
+	            docker buildx build \
+	                "${builder_args[@]}" \
+	                --platform {{platforms}} \
+	                "${tag_flags[@]}" \
+	                --no-cache \
 	                -f "scripts/Dockerfile.$crate" .
 	            ;;
 	        push)

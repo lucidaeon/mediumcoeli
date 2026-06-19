@@ -132,7 +132,12 @@ Adding a new format means: add a `Format` variant, add a `FormatSpec` row to `FO
 
 ## Transcript / readback
 
-After writing to a web sink, blackmoon reads the charts back and calls `transcript::diff(source, landed, field_notes)` to produce per-field `FieldMapping` (Preserved / Transformed / Dropped / Filled). For astrotheoros, house system and zodiac are account-wide globals, so `fetch_global_settings()` returns a `GlobalRender` that is folded into the landed chart before diffing, with `field_notes` tagging those fields as `"global setting"`.
+After writing to a web sink, blackmoon calls `transcript::diff(source, landed, field_notes)` to produce per-field `FieldMapping` (Preserved / Transformed / Dropped / Filled). For astrotheoros, house system and zodiac are account-wide globals, so `fetch_global_settings()` returns a `GlobalRender` that is folded into the landed chart before diffing, with `field_notes` tagging those fields as `"global setting"`.
+
+How `landed` is obtained depends on the provider (`WebProvider::verifies_inline()`):
+
+- **Inline (astrotheoros):** the `POST /api/chart` response echoes the full landed entry (shape-identical to a readback entry), so `create_one` returns the `ApiChartEntry` and each chart is diffed and printed the instant it lands — no separate readback. `write_charts` drives this via a per-record `on_landed(new_index, total_new, source, landed, status)` callback; account globals are fetched once up front.
+- **Post-readback (luna / astrocom):** their create responses do not echo the full entry, so blackmoon shows transient write progress, then reads all charts back via `fetch_all_with_ids()` and diffs (see `verify_and_report`).
 
 ## Consolidation
 
@@ -148,7 +153,7 @@ The JWT expires every 60 seconds. `AstrotheorosSession` auto-refreshes it (via `
 
 **Read:** `GET {BASE_URL}/app` with `rsc: 1` header returns Next.js RSC wire format — newline-delimited `<hex>:<json>` lines. `parse_rsc_response` finds the line containing `"charts":[`, strips the `$D` date prefix, maps `"$undefined"` to `null`, then deserializes `Vec<ApiChartEntry>`. `parse_rsc_settings` extracts the `settings` object from the same payload to get account-wide house system and zodiac.
 
-**Create:** Atlas lookup first — `GET {BASE_URL}/api/atlas?time=<unix_ms>&latitude=…&longitude=…` returns the historical IANA timezone and UTC offset for the birth location. Then `POST {BASE_URL}/api/chart` with the `{"data": {...}}` body built by `chart_to_create_body`. Returns the new chart UUID from `entry.id`.
+**Create:** Atlas lookup first — `GET {BASE_URL}/api/atlas?time=<unix_ms>&latitude=…&longitude=…` returns the historical IANA timezone and UTC offset for the birth location. Then `POST {BASE_URL}/api/chart` with the `{"data": {...}}` body built by `chart_to_create_body`. The response's `entry` object is the full landed chart (same shape as a readback entry); `create_one` deserializes it to an `ApiChartEntry` and returns it (use `.id` for just the UUID). This is what enables inline verification — see *Transcript / readback*.
 
 **Delete:** `DELETE {BASE_URL}/api/chart` with `{"data": {"id": uuid}}`.
 
