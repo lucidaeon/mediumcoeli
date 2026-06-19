@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/astrogram/badge.svg)](https://docs.rs/astrogram)
 [![License](https://img.shields.io/crates/l/astrogram.svg)](https://github.com/lucidaeon/mediumcoeli#license)
 
-The chart-format conversion engine behind [`Blackmoon`](blackmoon.md). A pure-Rust library for reading, writing, merging, and normalizing astrology chart data across every documented platform format.
+The chart-format conversion engine behind [`Blackmoon`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/blackmoon/README.md). A pure-Rust library for reading, writing, merging, and normalizing astrology chart data across every documented platform format.
 
 ## What it does
 

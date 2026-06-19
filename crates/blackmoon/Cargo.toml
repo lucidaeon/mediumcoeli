@@ -1,6 +1,6 @@
 [package]
 name = "blackmoon"
-version = "0.1.1"
+version = "0.1.2"
 description = "Command-line astrology data-format converter built on astrogram."
 keywords = ["astrology", "chart", "natal", "sfcht"]
 categories = ["command-line-utilities", "data-structures", "encoding"]
@@ -10,7 +10,6 @@ license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-readme = "docs/blackmoon.md"
 
 [[bin]]
 name = "blackmoon"

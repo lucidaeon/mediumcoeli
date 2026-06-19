@@ -11,7 +11,7 @@ Use best practices and simple architecture.
 Always consult the local source code for information about Rust dependencies, which is guaranteed to
 be up-to-date for the correct version.
 
-Run `cargo path NAME` to find the source directory for a dependency.
+Run `cargo path NAME` from inside a given crate directory to find the source directory for a dependency.
 
 # Definitions
 
@@ -105,6 +105,7 @@ Credentials for web targets are read from env vars matching the slug (`ASTROTHEO
 | `starcat` | CLI — ephemeris computation and table presentation |
 | `astrogram` | Chart format conversion library |
 | `blackmoon` | CLI — reads any format, merges, writes any format; wraps `astrogram` |
+| `jzod` | JZOD v0.0.0 typed model — single source of truth for the chart interchange format; `astrogram` and `starcat` build and serialize through it |
 
 # astrogram architecture
 
@@ -116,6 +117,10 @@ Credentials for web targets are read from env vars matching the slug (`ASTROTHEO
 - `SFcht` files store `+West` longitude and `+West` tz offset — both are negated on read and negated again on write.
 - `year` is `i16` (negative for BCE).
 - `month` is 1-indexed throughout `Chart`. The astrotheoros.com API uses 0-indexed months (JS `Date.getMonth()`); conversion happens in `entry_to_chart` (+1 on read) and `chart_to_create_body` (−1 on write).
+
+## JZOD writer
+
+`astrogram/src/jzod.rs` implements the JZOD output format for `astrogram`. It maps each `astrogram::chart::Chart` to a `jzod::Chart` and delegates all serialization to the `jzod` crate (`jzod::to_string_pretty`). The `jzod` crate is the single source of truth for the JZOD typed model; `astrogram` and `starcat` both build their JZOD output by constructing `jzod::Chart` values and calling into it.
 
 ## Format registry
 

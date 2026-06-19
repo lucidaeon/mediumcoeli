@@ -2,7 +2,7 @@
 
 Astrology software written in Rust.
 
-- **[Blackmoon](docs/blackmoon.md)** — chart data-format conversion. Reads and writes:
+- **[Blackmoon](crates/blackmoon/README.md)** — chart data-format conversion. Reads and writes:
 
   - Files
     - Solar Fire `.SFcht` files
@@ -17,7 +17,7 @@ Astrology software written in Rust.
 
 > Blackmoon is pre-release. It should only be used by those who have sucessfully restored databases from backups. It is recommended to backup your Astrology databases on at least one flash drive and one cloud drive. See your Astrology software user guide for information.
 
-- **[Starcat](docs/starcat.md)** — ephemeris computation and presentation. Reads NASA JPL DE441 binary files and produces ecliptic-of-date apparent positions for Astrological placements. Supports multiple geographic coordinate systems, astronomical coordinate systems, and astrological house systems.
+- **[Starcat](crates/starcat/README.md)** — ephemeris computation and presentation. Reads NASA JPL DE441 binary files and produces ecliptic-of-date apparent positions for Astrological placements. Supports multiple geographic coordinate systems, astronomical coordinate systems, and astrological house systems.
 
 > Starcat is also pre-release. It is fast and accurate, and we will be adding support for satellites, small bodies, asteroids and fixed stars soon!
 

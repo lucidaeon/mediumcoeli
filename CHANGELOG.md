@@ -9,7 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.1](https://github.com/lucidaeon/mediumcoeli/compare/0.1.0...0.1.1) — 2026-06-18
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/db1f399811ee4731aea08b50e224dbb3b6d6836e...main), [astrogram/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.1.2), [blackmoon/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.1.2), [jzod/0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.0.0), [pericynthion/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.1.2), [starcat/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.1.2), 2026.06.19
+
+### Added — `jzod`
+
+- **New leaf crate — the single source of truth for the JZOD `0.0.0` open
+  chart-interchange format.** Typed serde model (`JzodDocument`, `Chart`,
+  `Birth`/`Datetime`/`Location`, `Placements` with `Body`/`Angle`/`Point`/`Lot`,
+  `Houses`, `Zodiac`, `Ephemeris`) with `to_string_pretty` / `from_str`
+  round-tripping and forward-compatible unknown-key tolerance.
+- **Coordinate, UID, and time primitives.** `Sign`, `Degrees8` (fixed
+  8-decimal serialization), `Position` (absolute-longitude → sign/degree/
+  minute/second); deterministic `derive_uid` and random `random_uid`;
+  `format_utc_offset` and `calculated_at`.
+- **Published JSON Schema** (`schema/jzod-0.0.0.schema.json`, draft-2020-12)
+  with an integration test that validates emitted output and the worked
+  example against it. The spec (`README.md`) and a complete worked example
+  (`anna_freud_radix.json`) ship inside the crate.
+
+### Added — `jzod`, `starcat`
+
+- **`sect` is now three-state** — `diurnal` / `nocturnal` / `unknown`
+  (`unknown` when the birth time is unknown). The field is omitted entirely
+  for heliocentric charts, where sect is undefined.
+
+### Changed — `astrogram`, `starcat`
+
+- **JZOD output is built through the shared `jzod` crate** instead of two
+  divergent hand-rolled `serde_json` implementations — the format now evolves
+  in one place. `astrogram`'s `util` time helpers delegate to `jzod::time`.
+
+### Fixed — `starcat`
+
+- **`zodiac` was emitted as the bare string `"tropical"`**; it is now the
+  spec-correct object `{"name":"tropical"}`.
+
+### Fixed — `jzod`
+
+- **`Degrees8` deserialization** routes through `serde_json::Number` so that
+  flattened placements round-trip under the `arbitrary_precision` feature
+  (a `Body` with a populated `house` map previously failed to deserialize).
+- **Deterministic UID hashes the year as `i16`**, preserving bit-for-bit
+  identity with the prior `astrogram` `chart_uid`.
+- **Sign-boundary rounding snaps sub-arcsecond noise up** to the next sign
+  rather than rendering it as `29°59'59"` of the previous sign.
+
+### Fixed — build
+
+- **Docker images (`starcat`, `blackmoon`)** add the new `jzod` workspace
+  member to their dependency-cache stage; `just docker build-no-cache`
+  previously failed to load the workspace.
+
+### Changed — docs & packaging
+
+- **Each crate now owns its published doc as `crates/<name>/README.md`**
+  (cargo auto-detects it; explicit `readme` fields removed). The
+  `crates/*/docs/` symlink dirs are deleted and cross-crate links point at
+  the new locations, keeping them live on crates.io.
+
+### Changed — versions
+
+- `astrogram`, `blackmoon`, `pericynthion`, `starcat` bumped to `0.1.2`;
+  `jzod` introduced at `0.0.0`.
+
+---
+
+## [db1f399](https://github.com/lucidaeon/mediumcoeli/compare/7f116df4f0d1e77493dc034c28383193a6374714...db1f399811ee4731aea08b50e224dbb3b6d6836e), [0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/0.1.1), 2026.06.18
 
 ### Fixed — `pericynthion`
 
@@ -88,7 +153,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0](https://github.com/lucidaeon/mediumcoeli/compare/0.0.1...0.1.0) — 2026-06-18
+## [7f116df](https://github.com/lucidaeon/mediumcoeli/compare/19ba32d2ffb396492d481410ee41017a6949740d...7f116df4f0d1e77493dc034c28383193a6374714), [0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/0.1.0), 2026.06.18
 
 ### Added — `astrogram`
 
@@ -210,7 +275,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.0.1](https://github.com/lucidaeon/mediumcoeli/compare/0.0.0...0.0.1) — 2026-06-15
+## [19ba32d](https://github.com/lucidaeon/mediumcoeli/compare/584712ba3ce6414493f1f0ea4f997533025ef442...19ba32d2ffb396492d481410ee41017a6949740d), [0.0.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/0.0.1), 2026.06.15
 
 ### Added — `pericynthion`
 
@@ -264,7 +329,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.0.0](https://github.com/lucidaeon/mediumcoeli/compare/0a080f3534e15c52e6e3493815eb85875f08e179...0.0.0)
+## [584712b](https://github.com/lucidaeon/mediumcoeli/compare/0a080f3534e15c52e6e3493815eb85875f08e179...584712ba3ce6414493f1f0ea4f997533025ef442), [0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/0.0.0), 2026.06.09
 
 Initial public release. Four crates ship as one workspace:
 

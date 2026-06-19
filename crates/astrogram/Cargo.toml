@@ -1,6 +1,6 @@
 [package]
 name = "astrogram"
-version = "0.1.1"
+version = "0.1.2"
 description = "Astrology data-format conversion library."
 keywords = ["astrology", "chart", "natal", "sfcht"]
 categories = ["data-structures", "encoding", "parser-implementations"]
@@ -10,7 +10,6 @@ license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-readme = "docs/astrogram.md"
 
 [lib]
 name = "astrogram"
@@ -19,6 +18,7 @@ name = "astrogram"
 default = []
 
 [dependencies]
+jzod = { workspace = true }
 thiserror.workspace = true
 encoding_rs.workspace = true
 serde = { workspace = true, features = ["derive"] }

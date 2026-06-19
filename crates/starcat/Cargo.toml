@@ -1,6 +1,6 @@
 [package]
 name = "starcat"
-version = "0.1.1"
+version = "0.1.2"
 description = "Command-line astrological ephemeris: Compute Natal Charts"
 keywords = ["astrology", "divination", "ephemeris"]
 categories = ["command-line-utilities"]
@@ -10,7 +10,6 @@ license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-readme = "docs/starcat.md"
 
 [[bin]]
 name = "starcat"
@@ -28,6 +27,7 @@ noref-houses = ["pericynthion/noref-houses"]
 
 [dependencies]
 pericynthion = { workspace = true, features = ["serde"] }
+jzod = { workspace = true }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true

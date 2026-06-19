@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pericynthion", "crates/starcat", "crates/astrogram", "crates/blackmoon"]
+members = ["crates/pericynthion", "crates/starcat", "crates/astrogram", "crates/blackmoon", "crates/jzod"]
 
 [workspace.package]
 edition = "2024"
@@ -14,8 +14,9 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.1.1" }
-astrogram = { path = "crates/astrogram", version = "0.1.1" }
+pericynthion = { path = "crates/pericynthion", version = "0.1.2" }
+astrogram = { path = "crates/astrogram", version = "0.1.2" }
+jzod = { path = "crates/jzod", version = "0.0.0" }
 
 # Errors
 thiserror = "2"

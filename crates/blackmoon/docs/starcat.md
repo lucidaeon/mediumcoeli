@@ -1,1 +1,0 @@
-../../../docs/starcat.md

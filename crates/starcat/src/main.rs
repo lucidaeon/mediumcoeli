@@ -116,7 +116,7 @@ use pericynthion::lots::{
 use pericynthion::time::calendar::{Calendar, CivilDate};
 use pericynthion::time::delta_t::jd_ut_to_jd_tt;
 use pericynthion::time::zone::{Zone, civil_to_jd_ut};
-use pericynthion::time::{parse_date, parse_time, parse_tz, unix_to_utc};
+use pericynthion::time::{parse_date, parse_time, parse_tz};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -1748,58 +1748,21 @@ fn split_sign(lon_deg: f64) -> (&'static str, f64) {
 // JZOD output
 // =============================================================================
 
-const JZOD_VERSION: &str = "0.0.0";
-
-const JZOD_SIGN_SLUGS: [&str; 12] = [
-    "aries",
-    "taurus",
-    "gemini",
-    "cancer",
-    "leo",
-    "virgo",
-    "libra",
-    "scorpio",
-    "sagittarius",
-    "capricorn",
-    "aquarius",
-    "pisces",
-];
-
-fn jzod_body_id(body: Body) -> &'static str {
+fn body_to_jzod_id(body: Body) -> jzod::BodyId {
     match body {
-        Body::Sun => "sun",
-        Body::Moon => "moon",
-        Body::Mercury => "mercury",
-        Body::Venus => "venus",
-        Body::Earth => "earth",
-        Body::Mars => "mars",
-        Body::Jupiter => "jupiter",
-        Body::Saturn => "saturn",
-        Body::Uranus => "uranus",
-        Body::Neptune => "neptune",
-        Body::Pluto => "pluto",
-        Body::EarthMoonBarycenter => "earth_moon_barycenter",
+        Body::Sun => jzod::BodyId::Sun,
+        Body::Moon => jzod::BodyId::Moon,
+        Body::Mercury => jzod::BodyId::Mercury,
+        Body::Venus => jzod::BodyId::Venus,
+        Body::Earth => jzod::BodyId::Earth,
+        Body::Mars => jzod::BodyId::Mars,
+        Body::Jupiter => jzod::BodyId::Jupiter,
+        Body::Saturn => jzod::BodyId::Saturn,
+        Body::Uranus => jzod::BodyId::Uranus,
+        Body::Neptune => jzod::BodyId::Neptune,
+        Body::Pluto => jzod::BodyId::Pluto,
+        Body::EarthMoonBarycenter => jzod::BodyId::EarthMoonBarycenter,
     }
-}
-
-/// Format a degree value as a `serde_json::Number` with exactly 8 decimal places.
-fn deg_to_num(v: f64) -> serde_json::Number {
-    format!("{v:.8}").parse().expect("finite f64 degree")
-}
-
-/// Decompose an ecliptic longitude into (sign_slug, degree_in_sign, minute, second).
-/// Rounds to 4dp before splitting (same guard as `split_sign`) so that values
-/// like 29.9999999...° don't silently land in the wrong sign.
-fn jzod_lon_sdms(lon_deg: f64) -> (&'static str, u8, u8, u8) {
-    let norm = (lon_deg.rem_euclid(360.0) * 1e4).round() / 1e4;
-    let norm = norm.rem_euclid(360.0);
-    let idx = (norm / 30.0).floor() as usize;
-    let in_sign = norm - idx as f64 * 30.0;
-    let d = in_sign.floor() as u8;
-    let mf = (in_sign - f64::from(d)) * 60.0;
-    let m = mf.floor() as u8;
-    let s = ((mf - f64::from(m)) * 60.0).floor() as u8;
-    (JZOD_SIGN_SLUGS[idx.min(11)], d, m, s)
 }
 
 /// Return the 1-based house number a longitude falls in given house cusps (radians).
@@ -1819,50 +1782,6 @@ fn jzod_house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
         }
     }
     1
-}
-
-/// Build a JZOD placement object with id, ecliptic_longitude, sign/d/m/s, and
-/// an optional `retrograde` field (omitted for angles and lots).
-fn jzod_point(id: &str, lon_deg: f64, retrograde: Option<bool>) -> serde_json::Value {
-    let (sign, deg, min, sec) = jzod_lon_sdms(lon_deg);
-    let mut obj = serde_json::json!({
-        "id": id,
-        "ecliptic_longitude": deg_to_num(lon_deg),
-        "sign": sign,
-        "degree": deg,
-        "minute": min,
-        "second": sec
-    });
-    if let Some(retro) = retrograde {
-        obj["retrograde"] = serde_json::json!(retro);
-    }
-    obj
-}
-
-/// Build a JZOD house-cusp entry {longitude, sign, degree, minute, second}.
-/// Whole-sign cusps always emit degree/minute/second = 0 (spec invariant).
-fn jzod_cusp(sys: HouseArg, lon_deg: f64) -> serde_json::Value {
-    if sys == HouseArg::WholeSign {
-        let norm = (lon_deg.rem_euclid(360.0) * 1e4).round() / 1e4;
-        let norm = norm.rem_euclid(360.0);
-        let sign = JZOD_SIGN_SLUGS[(norm / 30.0).floor() as usize];
-        serde_json::json!({
-            "longitude": deg_to_num(lon_deg),
-            "sign": sign,
-            "degree": 0u8,
-            "minute": 0u8,
-            "second": 0u8
-        })
-    } else {
-        let (sign, deg, min, sec) = jzod_lon_sdms(lon_deg);
-        serde_json::json!({
-            "longitude": deg_to_num(lon_deg),
-            "sign": sign,
-            "degree": deg,
-            "minute": min,
-            "second": sec
-        })
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1887,13 +1806,12 @@ fn print_jzod(
 ) -> Result<()> {
     use pericynthion::coords::lilith::{mean_lilith_rad, priapus_rad, true_lilith_rad};
     use pericynthion::coords::nodes::{mean_nn_rad, sn_rad, true_nn_rad};
-    use serde_json::json;
 
     let is_helio = matches!(mode, CoordMode::Heliocentric);
     let coord_system = match mode {
-        CoordMode::Geocentric => "geocentric",
-        CoordMode::Topocentric(_) => "topocentric",
-        CoordMode::Heliocentric => "heliocentric",
+        CoordMode::Geocentric => jzod::CoordinateSystem::Geocentric,
+        CoordMode::Topocentric(_) => jzod::CoordinateSystem::Topocentric,
+        CoordMode::Heliocentric => jzod::CoordinateSystem::Heliocentric,
     };
 
     // Sect from Sun above/below horizon.
@@ -1901,14 +1819,12 @@ fn print_jzod(
         .iter()
         .find(|(b, _)| *b == Body::Sun)
         .map(|(_, p)| p.longitude_deg);
-    let sect_str = angles
-        .and_then(|a| a.ac_deg)
-        .zip(sun_lon)
-        .map(|(ac, s)| match sect(s.to_radians(), ac.to_radians()) {
-            Sect::Day => "diurnal",
-            Sect::Night => "nocturnal",
-        })
-        .unwrap_or("diurnal");
+    let jzod_sect = angles.and_then(|a| a.ac_deg).zip(sun_lon).map(|(ac, s)| {
+        match sect(s.to_radians(), ac.to_radians()) {
+            Sect::Day => jzod::Sect::Diurnal,
+            Sect::Night => jzod::Sect::Nocturnal,
+        }
+    });
 
     // Both node variants — geo/topo only, requires ASC (i.e. angles present).
     let has_points = !is_helio && angles.and_then(|a| a.ac_deg).is_some();
@@ -1950,30 +1866,23 @@ fn print_jzod(
     };
 
     // calculated_at timestamp.
-    let calculated_at = {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let (y, mo, d, h, mi, s) = unix_to_utc(secs);
-        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
-    };
+    let calculated_at = jzod::time::calculated_at_now();
 
     // House assignments for a longitude across all computed systems.
-    let body_houses = |lon_deg: f64| -> serde_json::Value {
-        let mut map = serde_json::Map::new();
+    let body_houses = |lon_deg: f64| -> std::collections::BTreeMap<String, u8> {
+        let mut map = std::collections::BTreeMap::new();
         if let Some(hs) = houses {
             for (sys, cusps) in hs {
                 if let Some(c) = cusps {
-                    map.insert(sys.slug().to_string(), json!(jzod_house_for(lon_deg, c)));
+                    map.insert(sys.slug().to_string(), jzod_house_for(lon_deg, c));
                 }
             }
         }
-        serde_json::Value::Object(map)
+        map
     };
 
     // Bodies array.
-    let bodies: Vec<serde_json::Value> = positions
+    let bodies: Vec<jzod::placement::Body> = positions
         .iter()
         .map(|&(body, pos)| {
             let lon_at = |jd: f64| match mode {
@@ -1984,158 +1893,226 @@ fn print_jzod(
             };
             let daily_speed = signed_daily_motion(lon_at(jd_tt - 0.5), lon_at(jd_tt + 0.5));
             let retrograde = body_is_retrograde(ephem, body, jd_tt, is_helio);
-            let (sign, deg, min, sec) = jzod_lon_sdms(pos.longitude_deg);
-            json!({
-                "id": jzod_body_id(body),
-                "ecliptic_longitude": deg_to_num(pos.longitude_deg),
-                "sign": sign,
-                "degree": deg,
-                "minute": min,
-                "second": sec,
-                "ecliptic_latitude": deg_to_num(pos.latitude_deg),
-                "distance_au": pos.distance_au,
-                "daily_speed": deg_to_num(daily_speed),
-                "retrograde": retrograde,
-                "house": body_houses(pos.longitude_deg)
-            })
+            jzod::placement::Body {
+                id: body_to_jzod_id(body),
+                position: jzod::coord::Position::from_longitude(pos.longitude_deg),
+                ecliptic_latitude: jzod::coord::Degrees8(pos.latitude_deg),
+                daily_speed: jzod::coord::Degrees8(daily_speed),
+                retrograde,
+                distance_au: Some(pos.distance_au),
+                house: body_houses(pos.longitude_deg),
+            }
         })
         .collect();
 
     // Angles array (ASC, DSC, MC, IC — in that order when present).
-    let angles_arr: Vec<serde_json::Value> = angles
-        .map(|a| {
-            let mut v = Vec::new();
-            if let Some(ac) = a.ac_deg {
-                v.push(jzod_point("ascendant", ac, None));
-            }
-            if let Some(ds) = a.ds_deg {
-                v.push(jzod_point("descendant", ds, None));
-            }
-            v.push(jzod_point("midheaven", a.mc_deg, None));
-            v.push(jzod_point("imum_coeli", a.ic_deg, None));
-            v
-        })
-        .unwrap_or_default();
+    let mut angles_vec: Vec<jzod::Angle> = Vec::new();
+    if let Some(a) = angles {
+        if let Some(ac) = a.ac_deg {
+            angles_vec.push(jzod::Angle {
+                id: jzod::AngleId::Ascendant,
+                position: jzod::coord::Position::from_longitude(ac),
+            });
+        }
+        if let Some(ds) = a.ds_deg {
+            angles_vec.push(jzod::Angle {
+                id: jzod::AngleId::Descendant,
+                position: jzod::coord::Position::from_longitude(ds),
+            });
+        }
+        angles_vec.push(jzod::Angle {
+            id: jzod::AngleId::Midheaven,
+            position: jzod::coord::Position::from_longitude(a.mc_deg),
+        });
+        angles_vec.push(jzod::Angle {
+            id: jzod::AngleId::ImumCoeli,
+            position: jzod::coord::Position::from_longitude(a.ic_deg),
+        });
+    }
 
     // Points array: vertex axis, then nodes (mean, true), then BML (mean, true).
     // Variant schema: Option A — suffixed IDs (resolves OQ-19).
-    let mut points_arr: Vec<serde_json::Value> = Vec::new();
+    let mut points_vec: Vec<jzod::Point> = Vec::new();
     if let Some(a) = angles {
         if let Some(vx) = a.vx_deg {
-            points_arr.push(jzod_point("vertex", vx, None));
+            points_vec.push(jzod::Point {
+                id: jzod::PointId::Vertex,
+                position: jzod::coord::Position::from_longitude(vx),
+                retrograde: false,
+            });
         }
         if let Some(ax) = a.ax_deg {
-            points_arr.push(jzod_point("anti_vertex", ax, None));
+            points_vec.push(jzod::Point {
+                id: jzod::PointId::AntiVertex,
+                position: jzod::coord::Position::from_longitude(ax),
+                retrograde: false,
+            });
         }
     }
     if let (Some(nm), Some(sm)) = (nn_mean, sn_mean) {
-        points_arr.push(jzod_point("north_node_mean", nm, Some(true)));
-        points_arr.push(jzod_point("south_node_mean", sm, Some(true)));
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::NorthNodeMean,
+            position: jzod::coord::Position::from_longitude(nm),
+            retrograde: true,
+        });
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::SouthNodeMean,
+            position: jzod::coord::Position::from_longitude(sm),
+            retrograde: true,
+        });
     }
     if let (Some(nt), Some(st), Some(tr)) = (nn_true, sn_true, nn_true_retro) {
-        points_arr.push(jzod_point("north_node_true", nt, Some(tr)));
-        points_arr.push(jzod_point("south_node_true", st, Some(tr)));
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::NorthNodeTrue,
+            position: jzod::coord::Position::from_longitude(nt),
+            retrograde: tr,
+        });
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::SouthNodeTrue,
+            position: jzod::coord::Position::from_longitude(st),
+            retrograde: tr,
+        });
     }
     if let (Some(lm), Some(pm)) = (lil_mean, pri_mean) {
-        points_arr.push(jzod_point("black_moon_lilith_mean", lm, Some(false)));
-        points_arr.push(jzod_point("priapus_mean", pm, Some(false)));
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::BlackMoonLilithMean,
+            position: jzod::coord::Position::from_longitude(lm),
+            retrograde: false,
+        });
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::PriapusMean,
+            position: jzod::coord::Position::from_longitude(pm),
+            retrograde: false,
+        });
     }
     if let (Some(lt), Some(pt), Some(lr)) = (lil_true, pri_true, lil_true_retro) {
-        points_arr.push(jzod_point("black_moon_lilith_true", lt, Some(lr)));
-        points_arr.push(jzod_point("priapus_true", pt, Some(lr)));
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::BlackMoonLilithTrue,
+            position: jzod::coord::Position::from_longitude(lt),
+            retrograde: lr,
+        });
+        points_vec.push(jzod::Point {
+            id: jzod::PointId::PriapusTrue,
+            position: jzod::coord::Position::from_longitude(pt),
+            retrograde: lr,
+        });
     }
 
     // Lots array.
-    let lots_arr: Vec<serde_json::Value> = lots
-        .map(|l| {
-            let mut v = vec![
-                jzod_point("lot_of_fortune", l.fortune_deg, None),
-                jzod_point("lot_of_spirit", l.spirit_deg, None),
-                jzod_point("lot_of_exaltation", l.exaltation_deg, None),
-            ];
-            if let Some(d) = l.necessity_deg {
-                v.push(jzod_point("lot_of_necessity", d, None));
-            }
-            if let Some(d) = l.eros_deg {
-                v.push(jzod_point("lot_of_eros", d, None));
-            }
-            if let Some(d) = l.courage_deg {
-                v.push(jzod_point("lot_of_courage", d, None));
-            }
-            if let Some(d) = l.victory_deg {
-                v.push(jzod_point("lot_of_victory", d, None));
-            }
-            if let Some(d) = l.nemesis_deg {
-                v.push(jzod_point("lot_of_nemesis", d, None));
-            }
-            v
-        })
-        .unwrap_or_default();
+    let mut lots_vec: Vec<jzod::Lot> = Vec::new();
+    if let Some(l) = lots {
+        lots_vec.push(jzod::Lot {
+            id: jzod::LotId::LotOfFortune,
+            position: jzod::coord::Position::from_longitude(l.fortune_deg),
+        });
+        lots_vec.push(jzod::Lot {
+            id: jzod::LotId::LotOfSpirit,
+            position: jzod::coord::Position::from_longitude(l.spirit_deg),
+        });
+        lots_vec.push(jzod::Lot {
+            id: jzod::LotId::LotOfExaltation,
+            position: jzod::coord::Position::from_longitude(l.exaltation_deg),
+        });
+        if let Some(d) = l.necessity_deg {
+            lots_vec.push(jzod::Lot {
+                id: jzod::LotId::LotOfNecessity,
+                position: jzod::coord::Position::from_longitude(d),
+            });
+        }
+        if let Some(d) = l.eros_deg {
+            lots_vec.push(jzod::Lot {
+                id: jzod::LotId::LotOfEros,
+                position: jzod::coord::Position::from_longitude(d),
+            });
+        }
+        if let Some(d) = l.courage_deg {
+            lots_vec.push(jzod::Lot {
+                id: jzod::LotId::LotOfCourage,
+                position: jzod::coord::Position::from_longitude(d),
+            });
+        }
+        if let Some(d) = l.victory_deg {
+            lots_vec.push(jzod::Lot {
+                id: jzod::LotId::LotOfVictory,
+                position: jzod::coord::Position::from_longitude(d),
+            });
+        }
+        if let Some(d) = l.nemesis_deg {
+            lots_vec.push(jzod::Lot {
+                id: jzod::LotId::LotOfNemesis,
+                position: jzod::coord::Position::from_longitude(d),
+            });
+        }
+    }
 
-    // Houses object keyed by system slug.
-    let mut houses_obj = serde_json::Map::new();
+    // Houses keyed by system slug, using typed HouseCusp.
+    let mut jzod_houses: jzod::Houses = jzod::Houses::new();
     if let Some(hs) = houses {
         for (sys, cusps) in hs {
             if let Some(c) = cusps {
-                let mut cusp_map = serde_json::Map::new();
+                let mut system_cusps: jzod::HouseSystemCusps = jzod::HouseSystemCusps::new();
                 for h in 1u8..=12 {
                     let lon_deg = c.cusp(h).to_degrees().rem_euclid(360.0);
-                    cusp_map.insert(h.to_string(), jzod_cusp(*sys, lon_deg));
+                    let cusp = if *sys == HouseArg::WholeSign {
+                        jzod::HouseCusp::whole_sign_from_longitude(lon_deg)
+                    } else {
+                        jzod::HouseCusp::from_longitude(lon_deg)
+                    };
+                    system_cusps.insert(h, cusp);
                 }
-                houses_obj.insert(sys.slug().to_string(), serde_json::Value::Object(cusp_map));
+                jzod_houses.insert(sys.slug().to_string(), system_cusps);
             }
         }
     }
 
-    // Birth data from CLI args.
-    let mut loc = serde_json::Map::new();
-    if let Some(la) = lat {
-        loc.insert("latitude".to_string(), json!(la));
-    }
-    if let Some(lo) = lon {
-        loc.insert("longitude".to_string(), json!(lo));
-    }
-    let birth = json!({
-        "datetime": {
-            "year": year,
-            "month": month,
-            "day": day,
-            "hour": hour,
-            "minute": minute,
-            "second": second.floor() as u8,
-            "utc_offset": utc_offset,
-            "unknown": false
+    // Build the typed chart.
+    let chart = jzod::Chart {
+        uid: uuid::Uuid::new_v4().to_string(),
+        chart_type: jzod::ChartType::Radix,
+        name: None,
+        gender: None,
+        rodden_rating: None,
+        birth: jzod::Birth {
+            datetime: jzod::Datetime {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second: second.floor() as u8,
+                utc_offset: utc_offset.to_string(),
+                iana_tz: None,
+                unknown: false,
+                tod_method: None,
+            },
+            location: jzod::Location {
+                name: None,
+                latitude: lat,
+                longitude: lon,
+            },
         },
-        "location": serde_json::Value::Object(loc)
-    });
+        zodiac: jzod::Zodiac::Tropical,
+        coordinate_system: coord_system,
+        sect: jzod_sect,
+        ephemeris: jzod::Ephemeris {
+            source: "DE441".to_string(),
+            calculated_at,
+            jd_ut: Some(jd_ut),
+            jd_tt: Some(jd_tt),
+        },
+        placements: jzod::Placements {
+            bodies,
+            angles: angles_vec,
+            points: points_vec,
+            lots: lots_vec,
+        },
+        houses: jzod_houses,
+        lunar_phase: None,
+        nested: vec![],
+    };
 
-    let output = json!({
-        "version": JZOD_VERSION,
-        "charts": [{
-            "uid": uuid::Uuid::new_v4().to_string(),
-            "type": "radix",
-            "birth": birth,
-            "zodiac": "tropical",
-            "coordinate_system": coord_system,
-            "sect": sect_str,
-            "ephemeris": {
-                "source": "DE441",
-                "calculated_at": calculated_at,
-                "jd_ut": jd_ut,
-                "jd_tt": jd_tt
-            },
-            "placements": {
-                "bodies": bodies,
-                "angles": angles_arr,
-                "points": points_arr,
-                "lots": lots_arr
-            },
-            "houses": serde_json::Value::Object(houses_obj),
-            "lunar_phase": null
-        }]
-    });
-
-    println!("{}", serde_json::to_string_pretty(&output)?);
+    let doc = jzod::JzodDocument::new(vec![chart]);
+    println!("{}", jzod::to_string_pretty(&doc));
     Ok(())
 }
 

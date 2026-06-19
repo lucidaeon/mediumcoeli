@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/pericynthion/badge.svg)](https://docs.rs/pericynthion)
 [![License](https://img.shields.io/crates/l/pericynthion.svg)](https://github.com/lucidaeon/mediumcoeli#license)
 
-The ephemeris-reading and chart-generation engine behind [`Starcat`](starcat.md). A pure-Rust library that turns a JPL DE-series planetary file into apparent ecliptic positions, chart angles, lunar nodes, Black Moon Lilith, Hermetic lots, and house cusps.
+The ephemeris-reading and chart-generation engine behind [`Starcat`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/starcat/README.md). A pure-Rust library that turns a JPL DE-series planetary file into apparent ecliptic positions, chart angles, lunar nodes, Black Moon Lilith, Hermetic lots, and house cusps.
 
 ## What it does
 

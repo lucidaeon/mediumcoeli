@@ -1,0 +1,351 @@
+{
+  "version": "0.0.0",
+  "charts": [
+    {
+      "uid": "a3f8c2d1-6b94-4e17-8f53-2c71d0b43e85",
+      "type": "radix",
+      "name": {
+        "display": "Anna Freud",
+        "aliases": []
+      },
+      "gender": "f",
+      "rodden_rating": "AA",
+      "birth": {
+        "datetime": {
+          "year": 1895,
+          "month": 12,
+          "day": 3,
+          "hour": 15,
+          "minute": 15,
+          "second": 0,
+          "utc_offset": "+01:00",
+          "iana_tz": "Europe/Vienna",
+          "unknown": false
+        },
+        "location": {
+          "name": "Vienna, Austria",
+          "latitude": 48.208333,
+          "longitude": 16.371667
+        }
+      },
+      "zodiac": { "name": "tropical" },
+      "coordinate_system": "geocentric",
+      "sect": "diurnal",
+      "ephemeris": {
+        "source": "DE441",
+        "calculated_at": "2026-06-08T20:45:18Z"
+      },
+      "placements": {
+        "bodies": [
+          {
+            "id": "sun",
+            "ecliptic_longitude": 251.206,
+            "sign": "sagittarius",
+            "degree": 11,
+            "minute": 12,
+            "second": 21,
+            "ecliptic_latitude": -0.002,
+            "daily_speed": 1.015,
+            "retrograde": false,
+            "house": { "whole_sign": 8, "placidus": 7 }
+          },
+          {
+            "id": "moon",
+            "ecliptic_longitude": 87.940,
+            "sign": "gemini",
+            "degree": 27,
+            "minute": 56,
+            "second": 25,
+            "ecliptic_latitude": 3.825,
+            "daily_speed": 13.593,
+            "retrograde": false,
+            "house": { "whole_sign": 2, "placidus": 2 }
+          },
+          {
+            "id": "mercury",
+            "ecliptic_longitude": 241.784,
+            "sign": "sagittarius",
+            "degree": 1,
+            "minute": 47,
+            "second": 2,
+            "ecliptic_latitude": 0.256,
+            "daily_speed": 1.558,
+            "retrograde": false,
+            "house": { "whole_sign": 8, "placidus": 7 }
+          },
+          {
+            "id": "venus",
+            "ecliptic_longitude": 204.496,
+            "sign": "libra",
+            "degree": 24,
+            "minute": 29,
+            "second": 47,
+            "ecliptic_latitude": 2.272,
+            "daily_speed": 1.039,
+            "retrograde": false,
+            "house": { "whole_sign": 6, "placidus": 6 }
+          },
+          {
+            "id": "mars",
+            "ecliptic_longitude": 233.972,
+            "sign": "scorpio",
+            "degree": 23,
+            "minute": 58,
+            "second": 19,
+            "ecliptic_latitude": 0.112,
+            "daily_speed": 0.697,
+            "retrograde": false,
+            "house": { "whole_sign": 7, "placidus": 6 }
+          },
+          {
+            "id": "jupiter",
+            "ecliptic_longitude": 129.045,
+            "sign": "leo",
+            "degree": 9,
+            "minute": 2,
+            "second": 42,
+            "ecliptic_latitude": 0.517,
+            "daily_speed": -0.026,
+            "retrograde": true,
+            "house": { "whole_sign": 4, "placidus": 4 }
+          },
+          {
+            "id": "saturn",
+            "ecliptic_longitude": 223.627,
+            "sign": "scorpio",
+            "degree": 13,
+            "minute": 37,
+            "second": 37,
+            "ecliptic_latitude": 2.175,
+            "daily_speed": 0.111,
+            "retrograde": false,
+            "house": { "whole_sign": 7, "placidus": 6 }
+          },
+          {
+            "id": "uranus",
+            "ecliptic_longitude": 231.512,
+            "sign": "scorpio",
+            "degree": 21,
+            "minute": 30,
+            "second": 43,
+            "ecliptic_latitude": 0.288,
+            "daily_speed": 0.060,
+            "retrograde": false,
+            "house": { "whole_sign": 7, "placidus": 6 }
+          },
+          {
+            "id": "neptune",
+            "ecliptic_longitude": 76.803,
+            "sign": "gemini",
+            "degree": 16,
+            "minute": 48,
+            "second": 11,
+            "ecliptic_latitude": -1.489,
+            "daily_speed": -0.028,
+            "retrograde": true,
+            "house": { "whole_sign": 2, "placidus": 1 }
+          },
+          {
+            "id": "pluto",
+            "ecliptic_longitude": 71.771,
+            "sign": "gemini",
+            "degree": 11,
+            "minute": 46,
+            "second": 14,
+            "ecliptic_latitude": -10.778,
+            "daily_speed": -0.019,
+            "retrograde": true,
+            "house": { "whole_sign": 2, "placidus": 1 }
+          }
+        ],
+        "angles": [
+          {
+            "id": "ascendant",
+            "ecliptic_longitude": 58.26166755,
+            "sign": "taurus",
+            "degree": 28,
+            "minute": 15,
+            "second": 42
+          },
+          {
+            "id": "descendant",
+            "ecliptic_longitude": 238.26166755,
+            "sign": "scorpio",
+            "degree": 28,
+            "minute": 15,
+            "second": 42
+          },
+          {
+            "id": "midheaven",
+            "ecliptic_longitude": 300.08949251,
+            "sign": "aquarius",
+            "degree": 0,
+            "minute": 5,
+            "second": 22
+          },
+          {
+            "id": "imum_coeli",
+            "ecliptic_longitude": 120.08949251,
+            "sign": "leo",
+            "degree": 0,
+            "minute": 5,
+            "second": 22
+          }
+        ],
+        "points": [
+          {
+            "id": "vertex",
+            "ecliptic_longitude": 205.26752987,
+            "sign": "libra",
+            "degree": 25,
+            "minute": 16,
+            "second": 3,
+            "retrograde": false
+          },
+          {
+            "id": "anti_vertex",
+            "ecliptic_longitude": 25.26752987,
+            "sign": "aries",
+            "degree": 25,
+            "minute": 16,
+            "second": 3,
+            "retrograde": false
+          },
+          {
+            "id": "north_node_mean",
+            "ecliptic_longitude": 338.02621501,
+            "sign": "pisces",
+            "degree": 8,
+            "minute": 1,
+            "second": 34,
+            "retrograde": true
+          },
+          {
+            "id": "south_node_mean",
+            "ecliptic_longitude": 158.02621501,
+            "sign": "virgo",
+            "degree": 8,
+            "minute": 1,
+            "second": 34,
+            "retrograde": true
+          },
+          {
+            "id": "black_moon_lilith_mean",
+            "ecliptic_longitude": 348.45875025,
+            "sign": "pisces",
+            "degree": 18,
+            "minute": 27,
+            "second": 31,
+            "retrograde": false
+          },
+          {
+            "id": "priapus_mean",
+            "ecliptic_longitude": 168.45875025,
+            "sign": "virgo",
+            "degree": 18,
+            "minute": 27,
+            "second": 31,
+            "retrograde": false
+          }
+        ],
+        "lots": [
+          {
+            "id": "lot_of_fortune",
+            "ecliptic_longitude": 254.99609674,
+            "sign": "sagittarius",
+            "degree": 14,
+            "minute": 59,
+            "second": 45
+          },
+          {
+            "id": "lot_of_spirit",
+            "ecliptic_longitude": 221.52723837,
+            "sign": "scorpio",
+            "degree": 11,
+            "minute": 31,
+            "second": 37
+          },
+          {
+            "id": "lot_of_exaltation",
+            "ecliptic_longitude": 185.05581041,
+            "sign": "libra",
+            "degree": 5,
+            "minute": 3,
+            "second": 20
+          },
+          {
+            "id": "lot_of_necessity",
+            "ecliptic_longitude": 71.47365360,
+            "sign": "gemini",
+            "degree": 11,
+            "minute": 28,
+            "second": 25
+          },
+          {
+            "id": "lot_of_eros",
+            "ecliptic_longitude": 41.23081884,
+            "sign": "taurus",
+            "degree": 11,
+            "minute": 13,
+            "second": 50
+          },
+          {
+            "id": "lot_of_courage",
+            "ecliptic_longitude": 79.28568117,
+            "sign": "gemini",
+            "degree": 19,
+            "minute": 17,
+            "second": 8
+          },
+          {
+            "id": "lot_of_victory",
+            "ecliptic_longitude": 325.77954183,
+            "sign": "aquarius",
+            "degree": 25,
+            "minute": 46,
+            "second": 46
+          },
+          {
+            "id": "lot_of_nemesis",
+            "ecliptic_longitude": 89.63079838,
+            "sign": "gemini",
+            "degree": 29,
+            "minute": 37,
+            "second": 50
+          }
+        ]
+      },
+      "houses": {
+        "whole_sign": {
+          "1":  { "longitude": 30.00000000, "sign": "taurus",      "degree": 0, "minute": 0, "second": 0 },
+          "2":  { "longitude": 60.00000000, "sign": "gemini",      "degree": 0, "minute": 0, "second": 0 },
+          "3":  { "longitude": 90.00000000, "sign": "cancer",      "degree": 0, "minute": 0, "second": 0 },
+          "4":  { "longitude": 120.00000000, "sign": "leo",        "degree": 0, "minute": 0, "second": 0 },
+          "5":  { "longitude": 150.00000000, "sign": "virgo",      "degree": 0, "minute": 0, "second": 0 },
+          "6":  { "longitude": 180.00000000, "sign": "libra",      "degree": 0, "minute": 0, "second": 0 },
+          "7":  { "longitude": 210.00000000, "sign": "scorpio",    "degree": 0, "minute": 0, "second": 0 },
+          "8":  { "longitude": 240.00000000, "sign": "sagittarius","degree": 0, "minute": 0, "second": 0 },
+          "9":  { "longitude": 270.00000000, "sign": "capricorn",  "degree": 0, "minute": 0, "second": 0 },
+          "10": { "longitude": 300.00000000, "sign": "aquarius",   "degree": 0, "minute": 0, "second": 0 },
+          "11": { "longitude": 330.00000000, "sign": "pisces",     "degree": 0, "minute": 0, "second": 0 },
+          "12": { "longitude": 0.00000000,   "sign": "aries",      "degree": 0, "minute": 0, "second": 0 }
+        },
+        "placidus": {
+          "1":  { "longitude": 58.26166755,  "sign": "taurus",      "degree": 28, "minute": 15, "second": 42 },
+          "2":  { "longitude": 82.10024150,  "sign": "gemini",      "degree": 22, "minute": 6,  "second": 1  },
+          "3":  { "longitude": 100.79029857, "sign": "cancer",      "degree": 10, "minute": 47, "second": 25 },
+          "4":  { "longitude": 120.08949251, "sign": "leo",         "degree": 0,  "minute": 5,  "second": 22 },
+          "5":  { "longitude": 144.90679314, "sign": "leo",         "degree": 24, "minute": 54, "second": 24 },
+          "6":  { "longitude": 183.66881368, "sign": "libra",       "degree": 3,  "minute": 40, "second": 7  },
+          "7":  { "longitude": 238.26166755, "sign": "scorpio",     "degree": 28, "minute": 15, "second": 42 },
+          "8":  { "longitude": 262.10024150, "sign": "sagittarius", "degree": 22, "minute": 6,  "second": 1  },
+          "9":  { "longitude": 280.79029857, "sign": "capricorn",   "degree": 10, "minute": 47, "second": 25 },
+          "10": { "longitude": 300.08949251, "sign": "aquarius",    "degree": 0,  "minute": 5,  "second": 22 },
+          "11": { "longitude": 324.90679314, "sign": "aquarius",    "degree": 24, "minute": 54, "second": 24 },
+          "12": { "longitude": 3.66881368,   "sign": "aries",       "degree": 3,  "minute": 40, "second": 7  }
+        }
+      },
+      "lunar_phase": null
+    }
+  ]
+}

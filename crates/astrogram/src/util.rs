@@ -23,37 +23,16 @@ pub fn utc_timestamp_from_secs(secs: u64) -> String {
 /// Used wherever an offset needs display or serialisation (transcript,
 /// JZOD, raw dump).
 #[must_use]
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
 pub fn format_utc_offset(hours: f64) -> String {
-    let sign = if hours < 0.0 { '-' } else { '+' };
-    let abs = hours.abs();
-    let h = abs.floor() as u32;
-    let m = ((abs - f64::from(h)) * 60.0).round() as u32;
-    format!("{sign}{h:02}:{m:02}")
+    jzod::time::format_utc_offset(hours)
 }
 
 /// Current wall-clock time as `YYYY-MM-DDTHH:MM:SSZ` (ISO 8601 extended).
 ///
 /// Used in JZOD `ephemeris.calculated_at` fields.
 #[must_use]
-#[allow(clippy::cast_possible_wrap)]
 pub fn utc_iso8601() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let hh = rem / 3_600;
-    let mm = (rem % 3_600) / 60;
-    let ss = rem % 60;
-    let (y, m, d) = days_to_ymd(days);
-    format!("{y:04}-{m:02}-{d:02}T{hh:02}:{mm:02}:{ss:02}Z")
+    jzod::time::calculated_at_now()
 }
 
 /// Current wall-clock time as `YYYYMMDDThhmmssZ`.
@@ -89,6 +68,26 @@ pub fn expand_now(path: &Path, secs: u64) -> PathBuf {
     }
 }
 
+// Hinnant civil_from_days: days since 1970-01-01 → (year, month, day).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+fn days_to_ymd(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = i64::from(yoe) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,24 +111,4 @@ mod tests {
     fn utc_offset_whole_hour() {
         assert_eq!(format_utc_offset(1.0), "+01:00");
     }
-}
-
-// Hinnant civil_from_days: days since 1970-01-01 → (year, month, day).
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-fn days_to_ymd(z: i64) -> (i32, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = i64::from(yoe) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
 }

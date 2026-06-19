@@ -1,117 +1,84 @@
-# `just` with no arguments runs the workspace test suite.
+# ─────────────────────────────────────────────────────────────────────────────
+# mediumcoeli — workspace task runner
+#
+#   just            run the test suite (the default recipe)
+#   just --list     browse every recipe, grouped
+#   just --groups   list the groups
+#   just docker …   multi-arch image builds — build · build-no-cache · push · release
+#                   (defined in scripts/docker.just)
+# ─────────────────────────────────────────────────────────────────────────────
+
+mod docker 'scripts/docker.just'
+
+# Run the workspace test suite.
 default: test
 
-registries := 'ghcr.io docker.io'
-namespace  := 'lucidaeon'
-tag        := 'latest'
-platforms  := 'linux/amd64,linux/arm64'
+# Most build/quality recipes take an optional CRATE: omit it to act on the whole
+# workspace, or pass one (e.g. `just build astrogram`) to scope to a package.
 
-# Build (workspace, or one crate when CRATE is given).
+# ── build ─────────────────────────────────────────────────────────────────────
+
+# Compile the workspace (or one CRATE).
+[group('build')]
 build CRATE='':
 	cargo build {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }}
 
-# Release build (workspace, or one crate when CRATE is given).
+# Compile with the release profile (or one CRATE).
+[group('build')]
 release CRATE='':
 	cargo build --release {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }}
 
-# Cargo check (workspace, or one crate when CRATE is given).
+# Type-check without producing binaries (or one CRATE).
+[group('build')]
 check CRATE='':
 	cargo check {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }}
 
-# Run tests (workspace, or one crate). `--nocapture`; tests self-skip on missing STARCAT_JPL_DATA / ASTRO_SPECIMENS.
+# ── quality ───────────────────────────────────────────────────────────────────
+
+# Run tests (release, --nocapture). Tests self-skip without STARCAT_JPL_DATA / ASTRO_SPECIMENS.
+[group('qa')]
 test CRATE='':
 	cargo test --release {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }} -- --nocapture
 
-# Lint with all targets — lib, bin, tests, examples, benches (workspace, or one crate).
+# Clippy across all targets — lib, bin, tests, examples, benches (deny warnings).
+[group('qa')]
 lint CRATE='':
 	cargo clippy {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }} --all-targets -- -D warnings
 
-# Narrower lint: lib + bin only, no tests / examples / benches (workspace, or one crate).
+# Clippy on lib + bin only — no tests / examples / benches (deny warnings).
+[group('qa')]
 lint-narrow CRATE='':
 	cargo clippy {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }} -- -D warnings
 
 # Format every Rust file in the workspace.
+[group('qa')]
 fmt:
 	cargo fmt --all
 
-# Verify the workspace is already correctly formatted.
+# Check formatting without writing changes.
+[group('qa')]
 fmt-check:
 	cargo fmt --all -- --check
 
-# Publish to crates.io (dry-run for now). Optionally target one crate: just publish starcat
+# ── distribution ──────────────────────────────────────────────────────────────
+
+# Dry-run `cargo publish` for each crate in dependency order (or pass one CRATE).
+[group('dist')]
 publish CRATE='':
 	#!/usr/bin/env bash
 	set -euo pipefail
-	crates=( starcat blackmoon )
+	# Dependency order: jzod → pericynthion → astrogram → starcat → blackmoon.
+	crates=( jzod pericynthion astrogram starcat blackmoon )
 	[[ -n "{{CRATE}}" ]] && crates=( "{{CRATE}}" )
 	for crate in "${crates[@]}"; do
 	    echo ">>> cargo publish --dry-run -p $crate"
 	    cargo publish --dry-run -p "$crate"
 	done
 
-# Build Docker images for all platforms (no output — warms each node's BuildKit
-# cache so a subsequent push reuses layers).
-# Set DOCKER_AMD64_HOST=tcp://host:2375 to wire a native amd64 remote builder
-# instead of QEMU emulation (faster, no OOM on heavy dep graphs).
-# just docker build                    → build+tag both crates, tag latest
-# just docker build 0.0.1             → build+tag both crates, tag 0.0.1
-# just docker build 0.0.1 starcat     → build+tag one crate
-# just docker build-no-cache          → same as build but with --no-cache
-# just docker push                    → push latest to all registries (multi-arch)
-# just docker push 0.0.1             → push 0.0.1 to all registries (multi-arch)
-# just docker push 0.0.1 starcat     → push one crate
-docker ACTION TAG=tag CRATE='':
-	#!/usr/bin/env bash
-	set -euo pipefail
-	crates=( starcat blackmoon )
-	[[ -n "{{CRATE}}" ]] && crates=( "{{CRATE}}" )
-	# Wire up a native amd64 remote node when DOCKER_AMD64_HOST is set.
-	builder_args=()
-	if [[ -n "${DOCKER_AMD64_HOST:-}" ]]; then
-	    if ! docker buildx inspect multiarch &>/dev/null; then
-	        docker buildx create --name multiarch --driver docker-container \
-	            --platform linux/arm64
-	        docker buildx create --append --name multiarch \
-	            --platform linux/amd64 "${DOCKER_AMD64_HOST}"
-	    fi
-	    builder_args=(--builder multiarch)
-	fi
-	for crate in "${crates[@]}"; do
-	    case "{{ACTION}}" in
-	        build)
-	            tag_flags=()
-	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
-	            docker buildx build \
-	                "${builder_args[@]}" \
-	                --platform {{platforms}} \
-	                "${tag_flags[@]}" \
-	                -f "scripts/Dockerfile.$crate" .
-	            ;;
-	        build-no-cache)
-	            tag_flags=()
-	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
-	            docker buildx build \
-	                "${builder_args[@]}" \
-	                --platform {{platforms}} \
-	                "${tag_flags[@]}" \
-	                --no-cache \
-	                -f "scripts/Dockerfile.$crate" .
-	            ;;
-	        push)
-	            tag_flags=()
-	            for r in {{registries}}; do tag_flags+=( -t "$r/{{namespace}}/$crate:{{TAG}}" ); done
-	            docker buildx build \
-	                "${builder_args[@]}" \
-	                --platform {{platforms}} \
-	                "${tag_flags[@]}" \
-	                --push \
-	                -f "scripts/Dockerfile.$crate" .
-	            ;;
-	        *)     echo "unknown docker action: {{ACTION}}" >&2; exit 1 ;;
-	    esac
-	done
+# ── test corpora ──────────────────────────────────────────────────────────────
 
-# Fetch test corpora by source name: de441 | adbxml | horizons.
+# Fetch a test corpus by name: de441 | adbxml | horizons.
+[group('corpus')]
 fetch SOURCE:
 	#!/usr/bin/env bash
 	set -euo pipefail

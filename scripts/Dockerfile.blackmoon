@@ -6,13 +6,16 @@ COPY crates/pericynthion/Cargo.toml crates/pericynthion/Cargo.toml
 COPY crates/astrogram/Cargo.toml  crates/astrogram/Cargo.toml
 COPY crates/blackmoon/Cargo.toml  crates/blackmoon/Cargo.toml
 COPY crates/starcat/Cargo.toml    crates/starcat/Cargo.toml
+COPY crates/jzod/Cargo.toml       crates/jzod/Cargo.toml
 RUN mkdir -p \
         crates/pericynthion/src \
         crates/astrogram/src \
         crates/blackmoon/src \
         crates/starcat/src \
+        crates/jzod/src \
  && echo '' > crates/pericynthion/src/lib.rs \
  && echo '' > crates/astrogram/src/lib.rs \
+ && echo '' > crates/jzod/src/lib.rs \
  && echo 'fn main(){}' > crates/blackmoon/src/main.rs \
  && echo 'fn main(){}' > crates/starcat/src/main.rs
 RUN cargo build --release --locked --bin blackmoon
@@ -20,6 +23,7 @@ RUN cargo build --release --locked --bin blackmoon
 FROM deps AS builder
 COPY crates/ crates/
 RUN touch crates/astrogram/src/lib.rs \
+          crates/jzod/src/lib.rs \
           crates/blackmoon/src/main.rs \
  && cargo build --release --locked --bin blackmoon
 

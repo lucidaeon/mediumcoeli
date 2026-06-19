@@ -32,7 +32,7 @@ Astrologers can have their data spread out across many tools. Consolidating reco
 
 ## How it works
 
-`blackmoon` is a thin CLI over [`astrogram`](astrogram.md). The pipeline for every conversion run is the same five steps:
+`blackmoon` is a thin CLI over [`astrogram`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/astrogram/README.md). The pipeline for every conversion run is the same five steps:
 
 1. **Read the sink first** (if it already exists or is a web account) so the resulting set never gains duplicates. For LUNA® this is a cheap listing-only fetch keyed by `(name, full datetime)`; for astro.com it's a full chart fetch with `nhor` IDs; for files it's a normal parse.
 2. **Read each input** in batch order, parsing through the per-format reader in `astrogram`. Inputs already present in the sink listing are filtered out before merge so duplicates never even reach the deduper.

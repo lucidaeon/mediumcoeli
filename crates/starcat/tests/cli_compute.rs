@@ -371,6 +371,11 @@ fn json_placements_structure() {
     assert!(json["version"].is_string(), "missing version");
     assert!(json["charts"].is_array(), "missing charts array");
     let chart = &json["charts"][0];
+    // zodiac must be an object {name: "tropical"}, not a bare string (drift fix).
+    assert_eq!(
+        chart["zodiac"]["name"], "tropical",
+        "zodiac must be an object with name=\"tropical\""
+    );
     assert!(chart["placements"].is_object(), "missing placements");
 
     // Bodies array under placements.
