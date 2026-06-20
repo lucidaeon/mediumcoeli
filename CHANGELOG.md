@@ -5,11 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/2f1243d7a2b8d19365dd1ff6c59a11a80f070456...main), [astrogram/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.1.3), [blackmoon/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.1.3), [jzod/0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.1.0), [pericynthion/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.2.0), [starcat/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.2.0), 2026.06.19
+
+### Added — `pericynthion`
+
+- **`coords::phase` — new lunar phase module.** `lunar_phase(moon_lon_deg, sun_lon_deg) -> LunarPhase` computes the synodic arc, an 8-fold `LunarPhaseName` (NewMoon → Balsamic in 45° octants), and the 28-fold lunation day — all as pure arithmetic with no ephemeris dependency. Every GUI, web service, or WASM consumer that links `pericynthion` can now retrieve the lunar phase without reimplementing the calculation.
+- **`coords::nodes::true_nn_is_retrograde(ephem, jd_tt)`** — returns whether the true North Node is retrograde at the given Julian Day by comparing positions 12 h before/after. Previously this logic existed only inline inside `starcat`.
+- **`coords::lilith::true_lilith_is_retrograde(ephem, jd_tt)`** — same pattern for true Black Moon Lilith. Both functions live in the library so every consumer benefits without drift.
+
+### Added — `jzod`
+
+- **`LunarPhaseName` enum** (8 snake_case variants: `new_moon` … `balsamic`) and **`LunarPhase` struct** (`synodic_arc_deg: f64`, `phase: LunarPhaseName`, `lunation_day: u8`) added to `jzod::chart` and re-exported from the crate root.
+- **`Chart.lunar_phase` promoted from `Option<serde_json::Value>` to `Option<LunarPhase>`.** The field is now fully typed; the wire format is unchanged for existing `null` values.
+
+### Changed — `starcat`
+
+- **Lunar phase appears in all three output modes.** JZOD output carries `"lunar_phase": {"synodic_arc_deg": …, "phase": "…", "lunation_day": …}` (or `null` for heliocentric / missing bodies). Text mode appends a `Lunar Phase: crescent  72.78°  day 6 of 28` line after lots. Page mode adds a lunar phase row to the right-side banner.
+- **Inline retrograde math removed.** The two duplicated blocks computing true-node and true-Lilith retrograde status (one in `print_jzod`, one in `print_page`) are replaced with calls to the new library functions. No inline astronomical arithmetic remains in `starcat/src/main.rs`.
+
+### Added — `pericynthion` (tests)
+
+- **Standalone phase acceptance tests** in `pericynthion/tests/acceptance_refchart.rs` covering five of the seven reference charts (Adèle Haenel, Anna Freud, Lightning Strike, William Lilly, Vettius Valens). Tests assert synodic arc (±0.1°), phase name, and lunation day from the reference-chart oracle. No ephemeris required — the body positions are read from the reference fixtures.
 
 ---
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/db1f399811ee4731aea08b50e224dbb3b6d6836e...main), [astrogram/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.1.2), [blackmoon/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.1.2), [jzod/0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.0.0), [pericynthion/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.1.2), [starcat/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.1.2), 2026.06.19
+## [2f1243d](https://github.com/lucidaeon/mediumcoeli/compare/db1f399811ee4731aea08b50e224dbb3b6d6836e...2f1243d7a2b8d19365dd1ff6c59a11a80f070456), [astrogram/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.1.2), [blackmoon/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.1.2), [jzod/0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.0.0), [pericynthion/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.1.2), [starcat/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.1.2), 2026.06.19
 
 ### Added — `jzod`
 

@@ -84,6 +84,26 @@ pub fn sn_rad(nn_rad: f64) -> f64 {
     (nn_rad + PI).rem_euclid(TAU)
 }
 
+/// Returns `true` when the true (osculating) North Node is retrograde at
+/// `jd_tt`.
+///
+/// Uses the same ±0.5-day finite-difference as [`crate::coords::body_is_retrograde`].
+/// The mean node is always retrograde by construction; this function
+/// is only meaningful for the osculating mode.
+///
+/// # Errors
+///
+/// Propagates I/O / out-of-range errors from the underlying
+/// [`true_nn_rad`] calls.
+pub fn true_nn_is_retrograde(
+    ephem: &Ephemeris,
+    jd_tt: f64,
+) -> Result<bool, crate::error::PericynthionError> {
+    let before = true_nn_rad(ephem, jd_tt - 0.5)?;
+    let after = true_nn_rad(ephem, jd_tt + 0.5)?;
+    Ok(crate::coords::signed_daily_motion(before.to_degrees(), after.to_degrees()) < 0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

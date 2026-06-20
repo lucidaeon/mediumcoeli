@@ -1,6 +1,6 @@
 [package]
 name = "astrogram"
-version = "0.1.2"
+version = "0.1.3"
 description = "Astrology data-format conversion library."
 keywords = ["astrology", "chart", "natal", "sfcht"]
 categories = ["data-structures", "encoding", "parser-implementations"]

@@ -28,9 +28,10 @@
 //!    precession, IAU 2000B nutation, mean + true obliquity, sidereal
 //!    time, the four axis modules ([`coords::acds`], [`coords::mcic`],
 //!    [`coords::vxax`]), lunar nodes ([`coords::nodes`]), Black Moon
-//!    Lilith + Priapus ([`coords::lilith`]), WGS84 topocentric
-//!    parallax, and the geo/topo/helio apparent-position facades in
-//!    [`coords::apparent`].
+//!    Lilith + Priapus ([`coords::lilith`]), lunar phase
+//!    ([`coords::phase`] — synodic arc, 8-fold name, 28-fold day),
+//!    WGS84 topocentric parallax, and the geo/topo/helio
+//!    apparent-position facades in [`coords::apparent`].
 //! 6. [`houses`] — house cusps (Whole Sign, Equal-from-Ac, Placidus,
 //!    Regiomontanus, Porphyry).
 //! 7. [`lots`] — Hellenistic sect + the eight Hermetic lots (Fortune,

@@ -29,7 +29,8 @@ pub mod uid;
 pub const FORMAT_VERSION: &str = "0.0.0";
 
 pub use chart::{
-    Birth, Chart, ChartType, CoordinateSystem, Datetime, Ephemeris, Location, Name, Sect, Zodiac,
+    Birth, Chart, ChartType, CoordinateSystem, Datetime, Ephemeris, Location, LunarPhase,
+    LunarPhaseName, Name, Sect, Zodiac,
 };
 pub use coord::{Degrees8, Position, Sign};
 pub use document::JzodDocument;

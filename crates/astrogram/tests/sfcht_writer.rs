@@ -616,16 +616,16 @@ fn chart_with_sub_chart_round_trips() {
 #[test]
 fn multiple_charts_round_trip() {
     let a = chart(
-        "Alice",
-        51.5,
-        -0.117,
-        2000,
-        1,
-        1,
-        12,
+        "Chartreuse",
+        30.04,
+        31.24,
+        1901,
+        3,
+        17,
+        6,
+        45,
         0,
-        0,
-        0.0,
+        2.0,
         EventType::Female,
         None,
         None,
@@ -633,17 +633,17 @@ fn multiple_charts_round_trip() {
         None,
     );
     let b = chart(
-        "Bob",
-        40.714,
-        -74.006,
-        1985,
-        2,
-        2,
-        8,
-        30,
+        "Ruby",
+        -34.60,
+        -58.38,
+        1958,
+        11,
+        28,
+        22,
+        10,
         0,
-        -5.0,
-        EventType::Male,
+        -3.0,
+        EventType::Female,
         None,
         None,
         Some("A"),
@@ -652,6 +652,6 @@ fn multiple_charts_round_trip() {
     let (hdr, charts) = parse_file(&write_file(&[a, b]).unwrap()).unwrap();
     assert_eq!(hdr.record_count, 2);
     assert_eq!(charts.len(), 2);
-    assert_eq!(charts[0].name, "Alice");
-    assert_eq!(charts[1].name, "Bob");
+    assert_eq!(charts[0].name, "Chartreuse");
+    assert_eq!(charts[1].name, "Ruby");
 }

@@ -111,6 +111,24 @@ pub fn priapus_rad(lilith_rad: f64) -> f64 {
     (lilith_rad + PI).rem_euclid(TAU)
 }
 
+/// Returns `true` when the true (osculating) Black Moon Lilith is retrograde
+/// at `jd_tt`.
+///
+/// Uses the same ±0.5-day finite-difference as
+/// [`crate::coords::body_is_retrograde`].  True Lilith oscillates erratically
+/// around the mean apogee and can station/retrograde briefly; mean Lilith
+/// always progrades and is never retrograde.
+///
+/// # Errors
+///
+/// Propagates I/O / out-of-range errors from the underlying
+/// [`true_lilith_rad`] calls.
+pub fn true_lilith_is_retrograde(ephem: &Ephemeris, jd_tt: f64) -> Result<bool, PericynthionError> {
+    let before = true_lilith_rad(ephem, jd_tt - 0.5)?;
+    let after = true_lilith_rad(ephem, jd_tt + 0.5)?;
+    Ok(crate::coords::signed_daily_motion(before.to_degrees(), after.to_degrees()) < 0.0)
+}
+
 fn cross(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
     [
         a[1] * b[2] - a[2] * b[1],

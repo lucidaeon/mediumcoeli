@@ -199,30 +199,30 @@ fn coords_beyond_0_1_deg_is_not_a_duplicate() {
 
 #[test]
 fn distinct_charts_all_kept() {
-    let a = chart("Alice", 51.5, -0.117, 2000, 1, 1, 12, 0, 0);
-    let b = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
-    let c = chart("Carol", 48.9, 2.35, 1970, 7, 4, 0, 0, 0);
+    let a = chart("Chartreuse", 30.04, 31.24, 1901, 3, 17, 6, 45, 0);
+    let b = chart("Ruby", -34.60, -58.38, 1958, 11, 28, 22, 10, 0);
+    let c = chart("Coral", 37.57, 126.98, 1983, 5, 9, 14, 30, 0);
     let out = merge(&[vec![a, b, c]]);
     assert_eq!(out.len(), 3);
 }
 
 #[test]
 fn merge_preserves_order_first_seen() {
-    let a = chart("Alice", 51.5, -0.117, 2000, 1, 1, 12, 0, 0);
-    let b = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
-    // Bob appears in batch 0, Alice in batch 1 (duplicate Alice dropped)
+    let a = chart("Chartreuse", 30.04, 31.24, 1901, 3, 17, 6, 45, 0);
+    let b = chart("Ruby", -34.60, -58.38, 1958, 11, 28, 22, 10, 0);
+    // Ruby appears in batch 0, Chartreuse in batch 1 (duplicate Chartreuse dropped)
     let out = merge(&[vec![b.clone(), a.clone()], vec![a.clone()]]);
     assert_eq!(out.len(), 2);
-    assert_eq!(out[0].name, "Bob");
-    assert_eq!(out[1].name, "Alice");
+    assert_eq!(out[0].name, "Ruby");
+    assert_eq!(out[1].name, "Chartreuse");
 }
 
 // --- merge_reporting: skipped name tracking ---
 
 #[test]
 fn reporting_no_dupes_empty_skipped() {
-    let a = chart("Alice", 51.5, -0.117, 2000, 1, 1, 12, 0, 0);
-    let b = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
+    let a = chart("Chartreuse", 30.04, 31.24, 1901, 3, 17, 6, 45, 0);
+    let b = chart("Ruby", -34.60, -58.38, 1958, 11, 28, 22, 10, 0);
     let (out, skipped) = merge_reporting(&[vec![a, b]]);
     assert_eq!(out.len(), 2);
     assert!(skipped.is_empty());
@@ -239,19 +239,19 @@ fn reporting_returns_skipped_name() {
 #[test]
 fn reporting_multiple_skipped_names_in_order() {
     let a = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
-    let b = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
+    let b = chart("Ruby", -34.60, -58.38, 1958, 11, 28, 22, 10, 0);
     let (out, skipped) = merge_reporting(&[
         vec![a.clone(), b.clone()],
         vec![a.clone(), b.clone()], // both duplicates
     ]);
     assert_eq!(out.len(), 2);
-    assert_eq!(skipped, vec!["Amber", "Bob"]);
+    assert_eq!(skipped, vec!["Amber", "Ruby"]);
 }
 
 #[test]
 fn reporting_result_matches_merge() {
-    let a = chart("Alice", 51.5, -0.117, 2000, 1, 1, 12, 0, 0);
-    let b = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
+    let a = chart("Chartreuse", 30.04, 31.24, 1901, 3, 17, 6, 45, 0);
+    let b = chart("Ruby", -34.60, -58.38, 1958, 11, 28, 22, 10, 0);
     let batches = vec![vec![a.clone(), b.clone()], vec![a.clone()]];
     let merged = merge(&batches);
     let (reported, _) = merge_reporting(&batches);
@@ -406,18 +406,18 @@ fn group_candidates_preserves_input_order_within_a_group() {
 #[test]
 fn three_batches_with_overlaps() {
     let amber = chart("Amber", 51.5, -0.117, 1815, 12, 10, 7, 30, 0);
-    let bob = chart("Bob", 40.7, -74.0, 1985, 2, 2, 8, 0, 0);
-    let carol = chart("Carol", 48.9, 2.35, 1970, 7, 4, 0, 0, 0);
+    let ruby = chart("Ruby", -34.60, -58.38, 1958, 11, 28, 22, 10, 0);
+    let coral = chart("Coral", 37.57, 126.98, 1983, 5, 9, 14, 30, 0);
     // Slightly rectified Amber (within 2h, same coords)
     let amber2 = chart("Amber", 51.5, -0.117, 1815, 12, 10, 8, 15, 0);
 
     let out = merge(&[
-        vec![amber.clone(), bob.clone()],
-        vec![amber2, carol.clone()],      // amber2 is a dupe of amber
-        vec![bob.clone(), carol.clone()], // both dupes
+        vec![amber.clone(), ruby.clone()],
+        vec![amber2, coral.clone()],       // amber2 is a dupe of amber
+        vec![ruby.clone(), coral.clone()], // both dupes
     ]);
     assert_eq!(out.len(), 3);
     assert_eq!(out[0].name, "Amber");
-    assert_eq!(out[1].name, "Bob");
-    assert_eq!(out[2].name, "Carol");
+    assert_eq!(out[1].name, "Ruby");
+    assert_eq!(out[2].name, "Coral");
 }

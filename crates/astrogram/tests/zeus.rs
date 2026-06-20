@@ -475,29 +475,29 @@ fn rodden_rating_stored_in_source_rating() {
 #[test]
 fn parses_multiple_records() {
     let a = record(
-        "Alice",
+        "Chartreuse",
         "2",
-        "01.01.2000",
-        "12:00:00",
-        "+00:00:00",
+        "17.03.1901",
+        "06:45:00",
+        "+02:00:00",
         "",
-        "N51.30.00",
-        "W000.07.00",
+        "N030.02.24",
+        "E031.14.24",
         "-",
         "AA",
         "",
         "",
     );
     let b = record(
-        "Bob",
+        "Ruby",
         "1",
-        "02.02.1985",
-        "08:30:00",
-        "-05:00:00",
+        "28.11.1958",
+        "22:10:00",
+        "-03:00:00",
         "",
-        "N40.42.46",
-        "W074.00.21",
-        "M",
+        "S034.36.00",
+        "W058.22.48",
+        "F",
         "A",
         "",
         "",
@@ -505,8 +505,8 @@ fn parses_multiple_records() {
     let input = format!("{a}{b}");
     let charts = parse_file(&input).unwrap();
     assert_eq!(charts.len(), 2);
-    assert_eq!(charts[0].name, "Alice");
-    assert_eq!(charts[1].name, "Bob");
+    assert_eq!(charts[0].name, "Chartreuse");
+    assert_eq!(charts[1].name, "Ruby");
 }
 
 // --- acceptance: full specimen ---

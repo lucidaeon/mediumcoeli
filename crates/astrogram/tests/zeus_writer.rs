@@ -621,39 +621,39 @@ fn none_notes_round_trips() {
 #[test]
 fn multiple_charts_round_trip() {
     let a = chart(
-        "Alice",
-        51.5,
-        -0.117,
-        2000,
-        1,
-        1,
-        12,
+        "Chartreuse",
+        30.04,
+        31.24,
+        1901,
+        3,
+        17,
+        6,
+        45,
         0,
-        0,
-        0.0,
+        2.0,
         EventType::Female,
         None,
         Some("AA"),
         None,
     );
     let b = chart(
-        "Bob",
-        40.714,
-        -74.006,
-        1985,
-        2,
-        2,
-        8,
-        30,
+        "Ruby",
+        -34.60,
+        -58.38,
+        1958,
+        11,
+        28,
+        22,
+        10,
         0,
-        -5.0,
-        EventType::Male,
+        -3.0,
+        EventType::Female,
         None,
         Some("A"),
         None,
     );
     let parsed = parse_file(&write_file(&[a, b])).unwrap();
     assert_eq!(parsed.len(), 2);
-    assert_eq!(parsed[0].name, "Alice");
-    assert_eq!(parsed[1].name, "Bob");
+    assert_eq!(parsed[0].name, "Chartreuse");
+    assert_eq!(parsed[1].name, "Ruby");
 }

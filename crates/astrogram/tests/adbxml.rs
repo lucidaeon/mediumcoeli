@@ -630,43 +630,43 @@ fn time_unknown_yes_uses_noon_placeholder() {
 fn parses_multiple_entries() {
     let entry1 = minimal_entry(
         60,
-        "Alice",
+        "Chartreuse",
         "f",
         1,
-        1980,
+        1901,
         3,
-        15,
-        "08:00",
-        "2444313.833333",
+        17,
+        "06:45",
+        "2415460.78125",
         "s",
-        "UTC",
-        "51n30",
-        "0e00",
-        "London",
-        "England",
+        "EET",
+        "30n02",
+        "31e14",
+        "Cairo",
+        "Egypt",
     );
     let entry2 = minimal_entry(
         61,
-        "Bob",
-        "m",
+        "Ruby",
+        "f",
         2,
-        1985,
-        7,
-        4,
-        "12:00",
-        "2446251.0",
+        1958,
+        11,
+        28,
+        "22:10",
+        "2436537.423611",
         "s",
-        "UTC",
-        "40n43",
-        "74w00",
-        "New York",
-        "USA",
+        "ART",
+        "34s36",
+        "58w23",
+        "Buenos Aires",
+        "Argentina",
     );
     let xml = wrap(&format!("{entry1}\n{entry2}"));
     let charts = parse_file(&xml).unwrap();
     assert_eq!(charts.len(), 2);
-    assert_eq!(charts[0].name, "Alice");
-    assert_eq!(charts[1].name, "Bob");
+    assert_eq!(charts[0].name, "Chartreuse");
+    assert_eq!(charts[1].name, "Ruby");
 }
 
 // ── acceptance: real specimen ─────────────────────────────────────────────────

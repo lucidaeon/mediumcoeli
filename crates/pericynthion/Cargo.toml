@@ -1,6 +1,6 @@
 [package]
 name = "pericynthion"
-version = "0.1.2"
+version = "0.2.0"
 description = "Astrological ephemeris computation library. Pure Rust NASA JPL DE441 reader."
 keywords = ["astrology", "chart", "natal", "ephemeris"]
 categories = ["algorithms", "mathematics"]

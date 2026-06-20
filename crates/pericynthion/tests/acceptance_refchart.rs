@@ -1714,3 +1714,91 @@ fn nodes_anna_freud() {
 fn nodes_adele_haenel() {
     run_nodes_chart(&ADELE_HAENEL);
 }
+
+// =============================================================================
+// (7) Lunar phase — synodic arc, 8-fold phase name, 28-fold lunation day
+// =============================================================================
+//
+// Uses the reference body-position table (Sun + Moon longitudes) already in
+// each chart constant; no ephemeris I/O is required so these tests run without
+// STARCAT_JPL_DATA. The arc tolerance is 0.1° — one arcminute above the
+// reference's printed precision.
+
+fn run_phase_chart(
+    chart: &Chart,
+    expected_arc: f64,
+    expected_phase: pericynthion::coords::phase::LunarPhaseName,
+    expected_day: u8,
+) {
+    use pericynthion::coords::phase::lunar_phase;
+
+    let sun_lon = chart
+        .bodies
+        .iter()
+        .find(|b| b.body == Body::Sun)
+        .map(|b| b.lon_deg);
+    let moon_lon = chart
+        .bodies
+        .iter()
+        .find(|b| b.body == Body::Moon)
+        .map(|b| b.lon_deg);
+    let (Some(sun), Some(moon)) = (sun_lon, moon_lon) else {
+        return;
+    };
+
+    let phase = lunar_phase(moon, sun);
+    let d_arc = (phase.synodic_arc_deg - expected_arc).abs();
+    println!(
+        "=== phase  {}  arc={:.3}°  expected={:.3}°  Δ={:.4}°  phase={:?}  day={}",
+        chart.id, phase.synodic_arc_deg, expected_arc, d_arc, phase.phase, phase.lunation_day
+    );
+    assert!(
+        d_arc < 0.1,
+        "{}: synodic arc {:.4}° vs expected {:.4}°, Δ={:.4}° exceeds 0.1°",
+        chart.id,
+        phase.synodic_arc_deg,
+        expected_arc,
+        d_arc
+    );
+    assert_eq!(
+        phase.phase, expected_phase,
+        "{}: phase {:?} != expected {:?}",
+        chart.id, phase.phase, expected_phase
+    );
+    assert_eq!(
+        phase.lunation_day, expected_day,
+        "{}: lunation_day {} != expected {}",
+        chart.id, phase.lunation_day, expected_day
+    );
+}
+
+#[test]
+fn phase_lightning_strike() {
+    use pericynthion::coords::phase::LunarPhaseName;
+    // +346°01' = 346.017° — Balsamic (315–360°) — day 27
+    run_phase_chart(&LIGHTNING_STRIKE, 346.017, LunarPhaseName::Balsamic, 27);
+}
+#[test]
+fn phase_william_lilly() {
+    use pericynthion::coords::phase::LunarPhaseName;
+    // +234°48' = 234.800° — Disseminating (225–270°) — day 19
+    run_phase_chart(&WILLIAM_LILLY, 234.800, LunarPhaseName::Disseminating, 19);
+}
+#[test]
+fn phase_vettius_valens() {
+    use pericynthion::coords::phase::LunarPhaseName;
+    // +253°10' = 253.167° — Disseminating (225–270°) — day 20
+    run_phase_chart(&VETTIUS_VALENS, 253.167, LunarPhaseName::Disseminating, 20);
+}
+#[test]
+fn phase_anna_freud() {
+    use pericynthion::coords::phase::LunarPhaseName;
+    // +196°22' = 196.367° — Full Moon (180–225°) — day 16
+    run_phase_chart(&ANNA_FREUD, 196.367, LunarPhaseName::FullMoon, 16);
+}
+#[test]
+fn phase_adele_haenel() {
+    use pericynthion::coords::phase::LunarPhaseName;
+    // +72°47' = 72.783° — Crescent (45–90°) — day 6
+    run_phase_chart(&ADELE_HAENEL, 72.783, LunarPhaseName::Crescent, 6);
+}

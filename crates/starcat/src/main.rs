@@ -719,6 +719,15 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         })
     };
 
+    // === Lunar phase (geo/topo only; requires both Sun and Moon in body list) ===
+    let lunar_phase = if is_helio {
+        None
+    } else {
+        find_body_lon(&positions, Body::Sun)
+            .zip(find_body_lon(&positions, Body::Moon))
+            .map(|(sun, moon)| pericynthion::coords::phase::lunar_phase(moon, sun))
+    };
+
     let is_jzod = !args.text && !args.page;
 
     // === Houses — JZOD (default) computes all systems; human renderers use --house filter ===
@@ -758,6 +767,7 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             angles.as_ref(),
             lots.as_ref(),
             houses.as_ref(),
+            lunar_phase.as_ref(),
             &ephem,
             year,
             month,
@@ -789,6 +799,7 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
                 angles.as_ref(),
                 lots.as_ref(),
                 houses.as_ref(),
+                lunar_phase.as_ref(),
                 fmt,
                 &ephem,
             );
@@ -802,6 +813,7 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             angles.as_ref(),
             lots.as_ref(),
             houses.as_ref(),
+            lunar_phase.as_ref(),
             fmt,
         );
     }
@@ -1031,6 +1043,20 @@ fn compute_angles(jd_tt: f64, lon_east_deg: f64, lat_deg: Option<f64>) -> Angles
     }
 }
 
+fn phase_name_str(name: pericynthion::coords::phase::LunarPhaseName) -> &'static str {
+    use pericynthion::coords::phase::LunarPhaseName as P;
+    match name {
+        P::NewMoon => "new moon",
+        P::Crescent => "crescent",
+        P::FirstQuarter => "first quarter",
+        P::Gibbous => "gibbous",
+        P::FullMoon => "full moon",
+        P::Disseminating => "disseminating",
+        P::LastQuarter => "last quarter",
+        P::Balsamic => "balsamic",
+    }
+}
+
 /// Compute Black Moon Lilith in the selected mode, return (Lilith, Priapus)
 /// in degrees.
 fn compute_lilith(jd_tt: f64, mode: LilithMode, ephem: &Ephemeris) -> Result<(f64, f64)> {
@@ -1068,6 +1094,7 @@ fn print_text(
     angles: Option<&Angles>,
     lots: Option<&Lots>,
     houses: Option<&Houses>,
+    lunar_phase: Option<&pericynthion::coords::phase::LunarPhase>,
     fmt: CoordFormat,
 ) {
     println!("JD UT  : {jd_ut:.6}");
@@ -1165,6 +1192,16 @@ fn print_text(
         for (label, lon_deg) in rows {
             println!("{:<11} {}", label, format_zodiac_lon(lon_deg, fmt));
         }
+    }
+
+    if let Some(lp) = lunar_phase {
+        println!();
+        println!(
+            "Lunar Phase: {}  {:.2}°  day {} of 28",
+            phase_name_str(lp.phase),
+            lp.synodic_arc_deg,
+            lp.lunation_day
+        );
     }
 
     if let Some(h) = houses {
@@ -1351,6 +1388,7 @@ fn print_page(
     angles: Option<&Angles>,
     lots: Option<&Lots>,
     houses: Option<&Houses>,
+    lunar_phase: Option<&pericynthion::coords::phase::LunarPhase>,
     fmt: CoordFormat,
     ephem: &Ephemeris,
 ) {
@@ -1411,6 +1449,14 @@ fn print_page(
         .and_then(|v| v.first().copied())
         .unwrap_or(HouseArg::Placidus);
     let house_str = primary_house_arg.label();
+    let phase_str = lunar_phase.map(|lp| {
+        format!(
+            "{}  {:.2}°  day {} of 28",
+            phase_name_str(lp.phase),
+            lp.synodic_arc_deg,
+            lp.lunation_day
+        )
+    });
 
     // === Placements collection (needed before sizing) ===
     let primary_house_cusps = houses
@@ -1449,18 +1495,14 @@ fn print_page(
         match label {
             "Nn" | "Sn" => match args.nodes {
                 NodesMode::Mean => true,
-                NodesMode::True => {
-                    use pericynthion::coords::nodes::true_nn_rad;
-                    let lon = |jd| true_nn_rad(ephem, jd).map_or(0.0, f64::to_degrees);
-                    signed_daily_motion(lon(jd_tt - 0.5), lon(jd_tt + 0.5)) < 0.0
-                }
+                NodesMode::True => pericynthion::coords::nodes::true_nn_is_retrograde(ephem, jd_tt)
+                    .unwrap_or(false),
             },
             "Lil" | "Pri" => match args.lilith {
-                LilithMode::Mean => false, // always prograde
+                LilithMode::Mean => false,
                 LilithMode::True => {
-                    use pericynthion::coords::lilith::true_lilith_rad;
-                    let lon = |jd| true_lilith_rad(ephem, jd).map_or(0.0, f64::to_degrees);
-                    signed_daily_motion(lon(jd_tt - 0.5), lon(jd_tt + 0.5)) < 0.0
+                    pericynthion::coords::lilith::true_lilith_is_retrograde(ephem, jd_tt)
+                        .unwrap_or(false)
                 }
             },
             _ => false,
@@ -1526,11 +1568,14 @@ fn print_page(
     // Banner natural width = max row's (left + right + min gap) + 4 for the
     // surrounding `│ ` … ` │`. JD UT and sect have been moved to the
     // placements table's top panel — they're considered when sizing it too.
-    let banner_rows: [(&str, &str); 3] = [
+    let mut banner_rows: Vec<(&str, &str)> = vec![
         (date_time_str.as_str(), coords_str.as_str()),
         (calendar_str, mode_str),
         (zodiac_str, house_str),
     ];
+    if let Some(s) = phase_str.as_deref() {
+        banner_rows.push(("Lunar Phase", s));
+    }
     let banner_max_content = banner_rows
         .iter()
         .map(|(l, r)| l.chars().count() + r.chars().count() + BANNER_MIN_GAP)
@@ -1793,6 +1838,7 @@ fn print_jzod(
     angles: Option<&Angles>,
     lots: Option<&Lots>,
     houses: Option<&Houses>,
+    lunar_phase: Option<&pericynthion::coords::phase::LunarPhase>,
     ephem: &Ephemeris,
     year: i32,
     month: u8,
@@ -1831,10 +1877,8 @@ fn print_jzod(
     let (nn_mean, sn_mean, nn_true, sn_true, nn_true_retro) = if has_points {
         let m = mean_nn_rad(jd_tt);
         let t = true_nn_rad(ephem, jd_tt).context("computing true north node")?;
-        let t_retro = {
-            let lon = |jd: f64| true_nn_rad(ephem, jd).map_or(0.0, f64::to_degrees);
-            signed_daily_motion(lon(jd_tt - 0.5), lon(jd_tt + 0.5)) < 0.0
-        };
+        let t_retro = pericynthion::coords::nodes::true_nn_is_retrograde(ephem, jd_tt)
+            .context("computing true node retrograde")?;
         (
             Some(m.to_degrees()),
             Some(sn_rad(m).to_degrees()),
@@ -1850,10 +1894,8 @@ fn print_jzod(
     let (lil_mean, pri_mean, lil_true, pri_true, lil_true_retro) = if has_points {
         let m = mean_lilith_rad(jd_tt);
         let t = true_lilith_rad(ephem, jd_tt).context("computing true Black Moon Lilith")?;
-        let t_retro = {
-            let llon = |jd: f64| true_lilith_rad(ephem, jd).map_or(0.0, f64::to_degrees);
-            signed_daily_motion(llon(jd_tt - 0.5), llon(jd_tt + 0.5)) < 0.0
-        };
+        let t_retro = pericynthion::coords::lilith::true_lilith_is_retrograde(ephem, jd_tt)
+            .context("computing true Lilith retrograde")?;
         (
             Some(m.to_degrees()),
             Some(priapus_rad(m).to_degrees()),
@@ -2107,7 +2149,23 @@ fn print_jzod(
             lots: lots_vec,
         },
         houses: jzod_houses,
-        lunar_phase: None,
+        lunar_phase: lunar_phase.map(|lp| {
+            use pericynthion::coords::phase::LunarPhaseName as P;
+            jzod::LunarPhase {
+                synodic_arc_deg: lp.synodic_arc_deg,
+                phase: match lp.phase {
+                    P::NewMoon => jzod::LunarPhaseName::NewMoon,
+                    P::Crescent => jzod::LunarPhaseName::Crescent,
+                    P::FirstQuarter => jzod::LunarPhaseName::FirstQuarter,
+                    P::Gibbous => jzod::LunarPhaseName::Gibbous,
+                    P::FullMoon => jzod::LunarPhaseName::FullMoon,
+                    P::Disseminating => jzod::LunarPhaseName::Disseminating,
+                    P::LastQuarter => jzod::LunarPhaseName::LastQuarter,
+                    P::Balsamic => jzod::LunarPhaseName::Balsamic,
+                },
+                lunation_day: lp.lunation_day,
+            }
+        }),
         nested: vec![],
     };
 

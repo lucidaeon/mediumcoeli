@@ -142,6 +142,33 @@ pub enum Sect {
     Unknown,
 }
 
+/// The eight traditional phases of the synodic cycle (45° octants).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[allow(missing_docs)]
+pub enum LunarPhaseName {
+    NewMoon,
+    Crescent,
+    FirstQuarter,
+    Gibbous,
+    FullMoon,
+    Disseminating,
+    LastQuarter,
+    Balsamic,
+}
+
+/// Computed lunar phase: synodic arc, 8-fold phase name, and 28-fold lunation
+/// day.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LunarPhase {
+    /// Moon–Sun elongation, degrees, range \[0, 360).
+    pub synodic_arc_deg: f64,
+    /// 8-fold phase name.
+    pub phase: LunarPhaseName,
+    /// 1-indexed position within the 28-fold lunar month, range 1–28.
+    pub lunation_day: u8,
+}
+
 /// A single JZOD chart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
@@ -175,8 +202,8 @@ pub struct Chart {
     /// House cusps by system. Omitted when empty.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub houses: Houses,
-    /// Lunar phase. Present but unspecified in 0.0.0 (`null`).
-    pub lunar_phase: Option<serde_json::Value>,
+    /// Lunar phase. `null` for heliocentric charts or when Sun/Moon are absent.
+    pub lunar_phase: Option<LunarPhase>,
     /// Nested derivative/associated charts. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nested: Vec<Chart>,
@@ -257,6 +284,19 @@ mod tests {
         assert_eq!(v["unknown"], false); // always emitted
         assert!(v.get("iana_tz").is_none());
         assert!(v.get("tod_method").is_none());
+    }
+
+    #[test]
+    fn lunar_phase_serializes_as_object() {
+        let lp = LunarPhase {
+            synodic_arc_deg: 72.783,
+            phase: LunarPhaseName::Crescent,
+            lunation_day: 6,
+        };
+        let v = serde_json::to_value(&lp).unwrap();
+        assert_eq!(v["phase"], "crescent");
+        assert_eq!(v["lunation_day"], 6);
+        assert!((v["synodic_arc_deg"].as_f64().unwrap() - 72.783).abs() < 1e-9);
     }
 
     #[test]
