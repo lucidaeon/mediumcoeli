@@ -1,0 +1,42 @@
+[package]
+name = "wristband"
+version = "0.0.0"
+description = "Consent-gated, domain-scoped reader for the user's own browser session cookies"
+categories = ["authentication", "cryptography", "os"]
+edition.workspace = true
+rust-version.workspace = true
+license = "CC0-1.0"
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# Allowlist of files to publish: src + the README and SECURITY.md (the latter
+# states the no-harvester stance and is referenced by the crate docs).
+# tests/ and dev artifacts are excluded; Cargo always also packs Cargo.toml.
+include = ["src/**", "README.md", "SECURITY.md"]
+
+[lib]
+name = "wristband"
+
+[features]
+## Enables `Cookie::for_test` — a constructor that bypasses the allow-list gate,
+## intended only for unit tests in downstream crates.  Never enable in production.
+test-support = []
+
+[dependencies]
+aes = "0.8"
+aes-gcm = "0.10"
+base64 = "0.22"
+cbc = "0.1"
+dirs = "5"
+hmac = "0.12"
+pbkdf2 = "0.12"
+psl = "2"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha1 = "0.10"
+tempfile = "3"
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

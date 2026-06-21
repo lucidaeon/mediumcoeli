@@ -92,30 +92,15 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use pericynthion::body::Body;
-use pericynthion::coords::acds::{ac_rad, ds_rad};
-use pericynthion::coords::apparent::{
-    EclipticPosition, apparent_ecliptic_position, apparent_ecliptic_position_topocentric,
-    heliocentric_ecliptic_position,
-};
-use pericynthion::coords::mcic::{ic_rad, mc_rad};
-use pericynthion::coords::nutation::nutation;
-use pericynthion::coords::obliquity::mean_obliquity_rad;
-use pericynthion::coords::sidereal_time::gast_rad;
+use pericynthion::chart::{ChartRequest, ComputedChart, ModeRequest};
 use pericynthion::coords::topocentric::ObserverLocation;
-use pericynthion::coords::{body_is_retrograde, signed_daily_motion};
 use pericynthion::ephemeris::Ephemeris;
 use pericynthion::geo::{parse_lat, parse_lon};
-use pericynthion::houses::{
-    HouseCusps, equal_as_rad, placidus_rad, porphyry_rad, regiomontanus_rad, whole_sign_rad,
-};
+use pericynthion::houses::{HouseCusps, HouseSystem};
 use pericynthion::jpl::{discover, header::parse as parse_header, reader::EphemerisFile};
-use pericynthion::lots::{
-    Sect, courage_rad, eros_rad, exaltation_rad, fortune_rad, necessity_rad, nemesis_rad, sect,
-    spirit_rad, victory_rad,
-};
+use pericynthion::lots::Sect;
 use pericynthion::time::calendar::{Calendar, CivilDate};
-use pericynthion::time::delta_t::jd_ut_to_jd_tt;
-use pericynthion::time::zone::{Zone, civil_to_jd_ut};
+use pericynthion::time::zone::Zone;
 use pericynthion::time::{parse_date, parse_time, parse_tz};
 use std::path::PathBuf;
 
@@ -377,7 +362,8 @@ enum LilithMode {
 }
 
 /// Which house system(s) the CLI should emit. Order is the canonical
-/// presentation order used when `--house` is omitted (all five).
+/// presentation order used when `--house` is omitted (all seven).
+/// This is a thin clap shim that converts to `pericynthion::houses::HouseSystem`.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum HouseArg {
     WholeSign,
@@ -414,85 +400,39 @@ enum HouseArg {
 }
 
 impl HouseArg {
-    const ALL: &'static [Self] = &[
-        Self::WholeSign,
-        Self::EqualFromAsc,
-        Self::Placidus,
-        Self::Regiomontanus,
-        Self::Porphyry,
-        Self::Alcabitius,
-        Self::Morinus,
-    ];
-
-    fn label(self) -> &'static str {
+    fn to_house_system(self) -> HouseSystem {
         match self {
-            Self::WholeSign => "Whole Sign",
-            Self::EqualFromAsc => "Equal (from ASC)",
-            Self::Placidus => "Placidus",
-            Self::Regiomontanus => "Regiomontanus",
-            Self::Porphyry => "Porphyry",
-            Self::Alcabitius => "Alcabitius",
+            Self::WholeSign => HouseSystem::WholeSign,
+            Self::EqualFromAsc => HouseSystem::EqualFromAsc,
+            Self::Placidus => HouseSystem::Placidus,
+            Self::Regiomontanus => HouseSystem::Regiomontanus,
+            Self::Porphyry => HouseSystem::Porphyry,
+            Self::Alcabitius => HouseSystem::Alcabitius,
             #[cfg(feature = "noref-houses")]
-            Self::Koch => "Koch",
+            Self::Koch => HouseSystem::Koch,
             #[cfg(feature = "noref-houses")]
-            Self::Campanus => "Campanus",
-            Self::Morinus => "Morinus",
+            Self::Campanus => HouseSystem::Campanus,
+            Self::Morinus => HouseSystem::Morinus,
             #[cfg(feature = "noref-houses")]
-            Self::Meridian => "Meridian",
+            Self::Meridian => HouseSystem::Meridian,
             #[cfg(feature = "noref-houses")]
-            Self::EqualFromMc => "Equal (from MC)",
+            Self::EqualFromMc => HouseSystem::EqualFromMc,
             #[cfg(feature = "noref-houses")]
-            Self::Horizontal => "Horizontal",
+            Self::Horizontal => HouseSystem::Horizontal,
             #[cfg(feature = "noref-houses")]
-            Self::Topocentric => "Topocentric (Polich-Page)",
+            Self::Topocentric => HouseSystem::Topocentric,
             #[cfg(feature = "noref-houses")]
-            Self::Krusinski => "Krusinski-Pisa-Goeldi",
+            Self::Krusinski => HouseSystem::Krusinski,
             #[cfg(feature = "noref-houses")]
-            Self::Sripati => "Sripati",
+            Self::Sripati => HouseSystem::Sripati,
             #[cfg(feature = "noref-houses")]
-            Self::Vehlow => "Vehlow Equal",
+            Self::Vehlow => HouseSystem::Vehlow,
             #[cfg(feature = "noref-houses")]
-            Self::Carter => "Carter Poli-Equatorial",
+            Self::Carter => HouseSystem::Carter,
             #[cfg(feature = "noref-houses")]
-            Self::PullenSd => "Pullen (Sinusoidal Delta)",
+            Self::PullenSd => HouseSystem::PullenSd,
             #[cfg(feature = "noref-houses")]
-            Self::PullenSr => "Pullen (Sinusoidal Ratio)",
-        }
-    }
-
-    fn slug(self) -> &'static str {
-        match self {
-            Self::WholeSign => "whole_sign",
-            Self::EqualFromAsc => "equal_asc",
-            Self::Placidus => "placidus",
-            Self::Regiomontanus => "regiomontanus",
-            Self::Porphyry => "porphyry",
-            Self::Alcabitius => "alcabitius",
-            #[cfg(feature = "noref-houses")]
-            Self::Koch => "koch",
-            #[cfg(feature = "noref-houses")]
-            Self::Campanus => "campanus",
-            Self::Morinus => "morinus",
-            #[cfg(feature = "noref-houses")]
-            Self::Meridian => "meridian",
-            #[cfg(feature = "noref-houses")]
-            Self::EqualFromMc => "equal_mc",
-            #[cfg(feature = "noref-houses")]
-            Self::Horizontal => "horizontal",
-            #[cfg(feature = "noref-houses")]
-            Self::Topocentric => "topocentric",
-            #[cfg(feature = "noref-houses")]
-            Self::Krusinski => "krusinski",
-            #[cfg(feature = "noref-houses")]
-            Self::Sripati => "sripati",
-            #[cfg(feature = "noref-houses")]
-            Self::Vehlow => "vehlow",
-            #[cfg(feature = "noref-houses")]
-            Self::Carter => "carter",
-            #[cfg(feature = "noref-houses")]
-            Self::PullenSd => "pullen_sd",
-            #[cfg(feature = "noref-houses")]
-            Self::PullenSr => "pullen_sr",
+            Self::PullenSr => HouseSystem::PullenSr,
         }
     }
 }
@@ -558,6 +498,7 @@ fn detect_shell() -> Option<clap_complete::Shell> {
     name.parse().ok()
 }
 
+#[cfg(test)]
 fn resolve_observer(lat_s: Option<&str>, lon_s: Option<&str>) -> Result<Option<ObserverLocation>> {
     let Some(lat_s) = lat_s else { return Ok(None) };
     let lat = parse_lat(lat_s).with_context(|| format!("invalid --lat {lat_s:?}"))?;
@@ -607,28 +548,6 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         bail!("either --tz or --lmt (with --lon) must be supplied")
     };
 
-    // UTC offset string for JZOD birth data (computed from zone or LMT longitude).
-    let utc_offset_str: String = if args.lmt {
-        let lon_deg = args
-            .lon
-            .as_deref()
-            .and_then(|s| parse_lon(s).ok())
-            .unwrap_or(0.0);
-        let h = lon_deg / 15.0;
-        let sign = if h >= 0.0 { '+' } else { '-' };
-        let abs_h = h.abs();
-        let hh = abs_h.floor() as u32;
-        let mm = ((abs_h - hh as f64) * 60.0).round() as u32;
-        format!("{sign}{hh:02}:{mm:02}")
-    } else {
-        args.tz.clone().unwrap_or_else(|| "+00:00".to_string())
-    };
-
-    // === Time scales ===
-    let calendar: Calendar = args.calendar.into();
-    let jd_ut = civil_to_jd_ut(civil, calendar, zone);
-    let jd_tt = jd_ut_to_jd_tt(jd_ut);
-
     // === Ephemeris file ===
     let (header_path, binary_path) = resolve_jpl_paths(args.jpl_data.as_deref())?;
     let header_src = std::fs::read_to_string(&header_path)
@@ -638,243 +557,92 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         .with_context(|| format!("open {}", binary_path.display()))?;
     let ephem = Ephemeris::new(&file, &header).context("build ephemeris facade")?;
 
-    // === Coordinate mode ===
-    let mode = if args.helio {
-        CoordMode::Heliocentric
-    } else if let Some(obs) = resolve_observer(args.lat.as_deref(), args.lon.as_deref())? {
-        CoordMode::Topocentric(obs)
+    // === Coordinate mode request ===
+    let mode_request = if args.helio {
+        ModeRequest::Heliocentric
+    } else if args.lat.is_some() {
+        ModeRequest::Topocentric
     } else {
-        CoordMode::Geocentric
+        ModeRequest::Geocentric
     };
+
+    // === Observer location (for Topocentric) ===
+    let obs_lat = args.lat.as_deref().and_then(|s| parse_lat(s).ok());
+    let obs_lon = args.lon.as_deref().and_then(|s| parse_lon(s).ok());
 
     // === Bodies ===
-    let bodies: Vec<Body> = match args.bodies.clone() {
-        Some(list) => list.into_iter().map(Body::from).collect(),
-        None => match mode {
-            CoordMode::Heliocentric => Body::ALL_HELIOCENTRIC.to_vec(),
-            _ => Body::ALL.to_vec(),
-        },
-    };
+    let bodies: Option<Vec<Body>> = args
+        .bodies
+        .clone()
+        .map(|list| list.into_iter().map(Body::from).collect());
 
-    // === Compute each body ===
-    let mut positions: Vec<(Body, EclipticPosition)> = Vec::with_capacity(bodies.len());
-    for body in bodies {
-        let pos = match &mode {
-            CoordMode::Geocentric => apparent_ecliptic_position(&ephem, body, jd_tt),
-            CoordMode::Topocentric(obs) => {
-                apparent_ecliptic_position_topocentric(&ephem, body, jd_tt, obs)
-            }
-            CoordMode::Heliocentric => heliocentric_ecliptic_position(&ephem, body, jd_tt),
-        }
-        .with_context(|| format!("compute position for {body:?}"))?;
-        positions.push((body, pos));
-    }
-
-    // === Angles ===
-    let angle_lon = args.lon.as_deref().and_then(|s| parse_lon(s).ok());
-    let angle_lat = args.lat.as_deref().and_then(|s| parse_lat(s).ok());
-    let mut angles = angle_lon.map(|lon| compute_angles(jd_tt, lon, angle_lat));
-    let is_helio = matches!(mode, CoordMode::Heliocentric);
-
-    // === Lunar nodes (geo/topo only — heliocentric omits Nn/Sn since
-    // the node is defined relative to Earth's orbital plane). Riding
-    // along with the angles struct; emitted only when a longitude is
-    // present so the angle block has anything to attach to. ===
-    if !is_helio {
-        if let Some(a) = angles.as_mut() {
-            let (nn, sn) = compute_nodes(jd_tt, args.nodes, &ephem)?;
-            a.nn_deg = Some(nn);
-            a.sn_deg = Some(sn);
-            a.nodes_mode = Some(match args.nodes {
-                NodesMode::Mean => "mean",
-                NodesMode::True => "true",
-            });
-            let (lilith, priapus) = compute_lilith(jd_tt, args.lilith, &ephem)?;
-            a.lilith_deg = Some(lilith);
-            a.priapus_deg = Some(priapus);
-            a.lilith_mode = Some(match args.lilith {
-                LilithMode::Mean => "mean",
-                LilithMode::True => "true",
-            });
-        }
-    }
-
-    // === Lots — need ASC + Sun + Moon for Fortune/Spirit/Exaltation
-    // (always emitted); each downstream lot additionally requires its
-    // associated planet: Eros↔Venus, Necessity↔Mercury, Courage↔Mars,
-    // Victory↔Jupiter, Nemesis↔Saturn. Geo/topo only. ===
-    let lots = if is_helio {
-        None
-    } else {
-        angles.as_ref().and_then(|a| a.ac_deg).and_then(|ac_deg| {
-            let sun = find_body_lon(&positions, Body::Sun);
-            let moon = find_body_lon(&positions, Body::Moon);
-            let mercury = find_body_lon(&positions, Body::Mercury);
-            let venus = find_body_lon(&positions, Body::Venus);
-            let mars = find_body_lon(&positions, Body::Mars);
-            let jupiter = find_body_lon(&positions, Body::Jupiter);
-            let saturn = find_body_lon(&positions, Body::Saturn);
-            sun.zip(moon)
-                .map(|(s, m)| compute_lots(ac_deg, s, m, mercury, venus, mars, jupiter, saturn))
-        })
-    };
-
-    // === Lunar phase (geo/topo only; requires both Sun and Moon in body list) ===
-    let lunar_phase = if is_helio {
-        None
-    } else {
-        find_body_lon(&positions, Body::Sun)
-            .zip(find_body_lon(&positions, Body::Moon))
-            .map(|(sun, moon)| pericynthion::coords::phase::lunar_phase(moon, sun))
-    };
-
+    // === House systems ===
     let is_jzod = !args.text && !args.page;
-
-    // === Houses — JZOD (default) computes all systems; human renderers use --house filter ===
-    let house_systems: Vec<HouseArg> = if is_jzod {
-        HouseArg::ALL.to_vec()
+    let house_systems: Vec<HouseSystem> = if is_jzod {
+        HouseSystem::DEFAULT_SET.to_vec()
     } else {
         args.houses
-            .clone()
-            .unwrap_or_else(|| HouseArg::ALL.to_vec())
+            .as_ref()
+            .map(|v| v.iter().copied().map(HouseArg::to_house_system).collect())
+            .unwrap_or_else(|| HouseSystem::DEFAULT_SET.to_vec())
     };
-    let houses = if is_helio || house_systems.is_empty() {
-        None
-    } else {
-        match (angle_lon, angle_lat) {
-            (Some(lon), Some(lat)) => {
-                use std::f64::consts::TAU;
-                let ramc = (gast_rad(jd_tt) + lon.to_radians()).rem_euclid(TAU);
-                let nut = nutation(jd_tt);
-                let obliquity = mean_obliquity_rad(jd_tt) + nut.delta_epsilon;
-                let lat_rad = lat.to_radians();
-                pericynthion::coords::acds::ac_rad(ramc, obliquity, lat_rad)
-                    .map(|ac| compute_houses(ramc, obliquity, ac, lat_rad, &house_systems))
-            }
-            _ => None,
-        }
+
+    // === Calendar ===
+    let calendar: Calendar = args.calendar.into();
+
+    // === Build request and compute ===
+    let request = ChartRequest {
+        civil,
+        calendar,
+        zone,
+        mode: mode_request,
+        lat_deg: obs_lat,
+        lon_deg: obs_lon,
+        bodies,
+        houses: house_systems,
     };
+    let computed = pericynthion::chart::compute(&ephem, &request)
+        .with_context(|| "chart computation failed")?;
 
     // === Output ===
     if is_jzod {
-        let obs_lat = args.lat.as_deref().and_then(|s| parse_lat(s).ok());
-        let obs_lon = args.lon.as_deref().and_then(|s| parse_lon(s).ok());
-        print_jzod(
-            jd_ut,
-            jd_tt,
-            &mode,
-            &positions,
-            angles.as_ref(),
-            lots.as_ref(),
-            houses.as_ref(),
-            lunar_phase.as_ref(),
-            &ephem,
+        let birth = pericynthion::jzod::ChartBirth {
             year,
             month,
             day,
             hour,
             minute,
-            second,
-            &utc_offset_str,
-            obs_lat,
-            obs_lon,
-        )?;
+            second: second.floor() as u8,
+            lat: obs_lat,
+            lon: obs_lon,
+        };
+        let chart =
+            pericynthion::jzod::to_jzod_chart(&computed, &birth, uuid::Uuid::new_v4().to_string());
+        println!(
+            "{}",
+            jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart]))
+        );
     } else if args.page {
         #[cfg(feature = "page")]
         {
-            if house_systems.len() != 1 {
+            let page_house_count = args
+                .houses
+                .as_ref()
+                .map_or(HouseSystem::DEFAULT_SET.len(), Vec::len);
+            if page_house_count != 1 {
                 bail!(
                     "page rendering requires exactly one --house system; got {} ({:?}). \
                      Specify e.g. --house placidus or --house whole-sign.",
-                    house_systems.len(),
-                    house_systems
+                    page_house_count,
+                    args.houses
                 );
             }
-            print_page(
-                &args,
-                jd_ut,
-                jd_tt,
-                &mode,
-                &positions,
-                angles.as_ref(),
-                lots.as_ref(),
-                houses.as_ref(),
-                lunar_phase.as_ref(),
-                fmt,
-                &ephem,
-            );
+            print_page(&args, &computed, fmt);
         }
     } else {
-        print_text(
-            jd_ut,
-            jd_tt,
-            &mode,
-            &positions,
-            angles.as_ref(),
-            lots.as_ref(),
-            houses.as_ref(),
-            lunar_phase.as_ref(),
-            fmt,
-        );
+        print_text(&computed, fmt, args.nodes, args.lilith);
     }
     Ok(())
-}
-
-fn find_body_lon(positions: &[(Body, EclipticPosition)], body: Body) -> Option<f64> {
-    positions
-        .iter()
-        .find(|(b, _)| *b == body)
-        .map(|(_, p)| p.longitude_deg)
-}
-
-struct Angles {
-    mc_deg: f64,
-    ic_deg: f64,
-    ac_deg: Option<f64>,
-    ds_deg: Option<f64>,
-    /// Vertex (western prime-vertical / ecliptic intersection). Requires
-    /// latitude; degenerate at equator and poles.
-    vx_deg: Option<f64>,
-    /// Anti-Vertex = Vx + 180°. Same nullability as `vx_deg`.
-    ax_deg: Option<f64>,
-    /// North Node of the Moon's orbit. Mode controlled by `--nodes`.
-    /// `None` for heliocentric mode (geocentric construct only).
-    nn_deg: Option<f64>,
-    /// South Node = Nn + 180°. Same nullability as `nn_deg`.
-    sn_deg: Option<f64>,
-    /// "mean" or "true" — which Nn computation was used. `None` when
-    /// nodes are not emitted (heliocentric mode).
-    nodes_mode: Option<&'static str>,
-    /// Black Moon Lilith (lunar apogee). Mode controlled by `--lilith`.
-    lilith_deg: Option<f64>,
-    /// Priapus (lunar perigee) = Lilith + 180°.
-    priapus_deg: Option<f64>,
-    /// "mean" or "true" — which Lilith computation was used.
-    lilith_mode: Option<&'static str>,
-}
-
-struct Lots {
-    sect: Sect,
-    fortune_deg: f64,
-    spirit_deg: f64,
-    exaltation_deg: f64,
-    eros_deg: Option<f64>,
-    necessity_deg: Option<f64>,
-    courage_deg: Option<f64>,
-    victory_deg: Option<f64>,
-    nemesis_deg: Option<f64>,
-}
-
-/// House cusps in requested-system order. Each entry's `Option` distinguishes
-/// "requested and computed" (`Some`) from "requested but undefined here"
-/// (`None`) — typically Placidus at circumpolar latitudes.
-type Houses = Vec<(HouseArg, Option<HouseCusps>)>;
-
-#[derive(Debug)]
-enum CoordMode {
-    Geocentric,
-    Topocentric(ObserverLocation),
-    Heliocentric,
 }
 
 /// Resolve the (header, binary) pair from CLI args + env.
@@ -903,146 +671,6 @@ fn resolve_jpl_paths(data_dir_arg: Option<&std::path::Path>) -> Result<(PathBuf,
 // Output rendering
 // =============================================================================
 
-#[allow(clippy::too_many_arguments)]
-fn compute_lots(
-    ac_deg: f64,
-    sun_deg: f64,
-    moon_deg: f64,
-    mercury_deg: Option<f64>,
-    venus_deg: Option<f64>,
-    mars_deg: Option<f64>,
-    jupiter_deg: Option<f64>,
-    saturn_deg: Option<f64>,
-) -> Lots {
-    let ac = ac_deg.to_radians();
-    let sun = sun_deg.to_radians();
-    let moon = moon_deg.to_radians();
-    let s = sect(sun, ac);
-    let deg = |r: f64| r.to_degrees().rem_euclid(360.0);
-    let f = deg(fortune_rad(ac, sun, moon, s));
-    let sp = deg(spirit_rad(ac, sun, moon, s));
-    let ex = deg(exaltation_rad(ac, sun, moon, s));
-    let er = venus_deg.map(|v| deg(eros_rad(ac, sun, moon, v.to_radians(), s)));
-    let nec = mercury_deg.map(|m| deg(necessity_rad(ac, sun, moon, m.to_radians(), s)));
-    let cou = mars_deg.map(|m| deg(courage_rad(ac, sun, moon, m.to_radians(), s)));
-    let vic = jupiter_deg.map(|j| deg(victory_rad(ac, sun, moon, j.to_radians(), s)));
-    let nem = saturn_deg.map(|sa| deg(nemesis_rad(ac, sun, moon, sa.to_radians(), s)));
-    Lots {
-        sect: s,
-        fortune_deg: f,
-        spirit_deg: sp,
-        exaltation_deg: ex,
-        eros_deg: er,
-        necessity_deg: nec,
-        courage_deg: cou,
-        victory_deg: vic,
-        nemesis_deg: nem,
-    }
-}
-
-fn compute_houses(
-    ramc_rad: f64,
-    obliquity_rad: f64,
-    ac_rad: f64,
-    lat_rad: f64,
-    systems: &[HouseArg],
-) -> Houses {
-    systems
-        .iter()
-        .copied()
-        .map(|sys| {
-            let cusps = match sys {
-                HouseArg::WholeSign => Some(whole_sign_rad(ac_rad)),
-                HouseArg::EqualFromAsc => Some(equal_as_rad(ac_rad)),
-                HouseArg::Placidus => placidus_rad(ramc_rad, obliquity_rad, lat_rad),
-                HouseArg::Regiomontanus => regiomontanus_rad(ramc_rad, obliquity_rad, lat_rad),
-                HouseArg::Porphyry => Some(porphyry_rad(ac_rad, mc_rad(ramc_rad, obliquity_rad))),
-                HouseArg::Alcabitius => {
-                    pericynthion::houses::alcabitius_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Koch => pericynthion::houses::koch_rad(ramc_rad, obliquity_rad, lat_rad),
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Campanus => {
-                    pericynthion::houses::campanus_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                HouseArg::Morinus => {
-                    pericynthion::houses::morinus_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Meridian => {
-                    pericynthion::houses::meridian_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                #[cfg(feature = "noref-houses")]
-                HouseArg::EqualFromMc => Some(pericynthion::houses::equal_mc_rad(
-                    pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
-                )),
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Horizontal => {
-                    pericynthion::houses::horizontal_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Topocentric => {
-                    pericynthion::houses::topocentric_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Krusinski => {
-                    pericynthion::houses::krusinski_rad(ramc_rad, obliquity_rad, lat_rad)
-                }
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Sripati => Some(pericynthion::houses::sripati_rad(
-                    ac_rad,
-                    pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
-                )),
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Vehlow => Some(pericynthion::houses::vehlow_rad(ac_rad)),
-                #[cfg(feature = "noref-houses")]
-                HouseArg::Carter => Some(pericynthion::houses::carter_rad(ac_rad, obliquity_rad)),
-                #[cfg(feature = "noref-houses")]
-                HouseArg::PullenSd => Some(pericynthion::houses::pullen_sd_rad(
-                    ac_rad,
-                    pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
-                )),
-                #[cfg(feature = "noref-houses")]
-                HouseArg::PullenSr => Some(pericynthion::houses::pullen_sr_rad(
-                    ac_rad,
-                    pericynthion::coords::mcic::mc_rad(ramc_rad, obliquity_rad),
-                )),
-            };
-            (sys, cusps)
-        })
-        .collect()
-}
-
-fn compute_angles(jd_tt: f64, lon_east_deg: f64, lat_deg: Option<f64>) -> Angles {
-    use pericynthion::coords::vxax::{ax_rad, vx_rad};
-    use std::f64::consts::TAU;
-    let ramc = (gast_rad(jd_tt) + lon_east_deg.to_radians()).rem_euclid(TAU);
-    let nut = nutation(jd_tt);
-    let obliquity = mean_obliquity_rad(jd_tt) + nut.delta_epsilon;
-    let mc = mc_rad(ramc, obliquity);
-    let ic = ic_rad(mc);
-    let ac = lat_deg.and_then(|lat| ac_rad(ramc, obliquity, lat.to_radians()));
-    let ds = ac.map(ds_rad);
-    let vx = lat_deg.and_then(|lat| vx_rad(ramc, obliquity, lat.to_radians()));
-    let ax = vx.map(ax_rad);
-    Angles {
-        mc_deg: mc.to_degrees(),
-        ic_deg: ic.to_degrees(),
-        ac_deg: ac.map(f64::to_degrees),
-        ds_deg: ds.map(f64::to_degrees),
-        vx_deg: vx.map(f64::to_degrees),
-        ax_deg: ax.map(f64::to_degrees),
-        // Nodes and Lilith are filled in by the caller (need Ephemeris).
-        nn_deg: None,
-        sn_deg: None,
-        nodes_mode: None,
-        lilith_deg: None,
-        priapus_deg: None,
-        lilith_mode: None,
-    }
-}
-
 fn phase_name_str(name: pericynthion::coords::phase::LunarPhaseName) -> &'static str {
     use pericynthion::coords::phase::LunarPhaseName as P;
     match name {
@@ -1057,58 +685,24 @@ fn phase_name_str(name: pericynthion::coords::phase::LunarPhaseName) -> &'static
     }
 }
 
-/// Compute Black Moon Lilith in the selected mode, return (Lilith, Priapus)
-/// in degrees.
-fn compute_lilith(jd_tt: f64, mode: LilithMode, ephem: &Ephemeris) -> Result<(f64, f64)> {
-    use pericynthion::coords::lilith::{mean_lilith_rad, priapus_rad, true_lilith_rad};
-    let lilith = match mode {
-        LilithMode::Mean => mean_lilith_rad(jd_tt),
-        LilithMode::True => {
-            true_lilith_rad(ephem, jd_tt).context("computing true Lilith from Moon state")?
-        }
-    };
-    let priapus = priapus_rad(lilith);
-    Ok((lilith.to_degrees(), priapus.to_degrees()))
-}
-
-/// Compute the lunar north node in the selected mode, return (Nn, Sn) in
-/// degrees. Geocentric only — caller must not invoke for heliocentric mode.
-fn compute_nodes(jd_tt: f64, mode: NodesMode, ephem: &Ephemeris) -> Result<(f64, f64)> {
-    use pericynthion::coords::nodes::{mean_nn_rad, sn_rad, true_nn_rad};
-    let nn = match mode {
-        NodesMode::Mean => mean_nn_rad(jd_tt),
-        NodesMode::True => {
-            true_nn_rad(ephem, jd_tt).context("computing true lunar node from Moon state")?
-        }
-    };
-    let sn = sn_rad(nn);
-    Ok((nn.to_degrees(), sn.to_degrees()))
-}
-
-#[allow(clippy::too_many_arguments)]
 fn print_text(
-    jd_ut: f64,
-    jd_tt: f64,
-    mode: &CoordMode,
-    positions: &[(Body, EclipticPosition)],
-    angles: Option<&Angles>,
-    lots: Option<&Lots>,
-    houses: Option<&Houses>,
-    lunar_phase: Option<&pericynthion::coords::phase::LunarPhase>,
+    computed: &ComputedChart,
     fmt: CoordFormat,
+    nodes_mode: NodesMode,
+    lilith_mode: LilithMode,
 ) {
-    println!("JD UT  : {jd_ut:.6}");
-    println!("JD TT  : {jd_tt:.6}");
-    let coord_label = match mode {
-        CoordMode::Geocentric => "geocentric".to_string(),
-        CoordMode::Topocentric(obs) => {
+    println!("JD UT  : {:.6}", computed.jd_ut);
+    println!("JD TT  : {:.6}", computed.jd_tt);
+    let coord_label = match &computed.mode {
+        pericynthion::chart::CoordMode::Geocentric => "geocentric".to_string(),
+        pericynthion::chart::CoordMode::Topocentric(obs) => {
             format!(
                 "topocentric (lat={} lon={})",
                 format_signed_deg(obs.lat_deg, fmt, 2),
                 format_signed_deg(obs.lon_deg, fmt, 3),
             )
         }
-        CoordMode::Heliocentric => "heliocentric".to_string(),
+        pericynthion::chart::CoordMode::Heliocentric => "heliocentric".to_string(),
     };
     println!("Coords : {coord_label}");
     println!();
@@ -1124,17 +718,30 @@ fn print_text(
         lat_w = lat_w,
     );
     println!("{}", "-".repeat(8 + 1 + lon_w + 1 + lat_w + 1 + 14));
-    for &(body, pos) in positions {
+    for cb in &computed.bodies {
         println!(
             "{:<8} {} {} {:>14.6}",
-            body.name(),
-            format_zodiac_lon(pos.longitude_deg, fmt),
-            format_signed_lat(pos.latitude_deg, fmt),
-            pos.distance_au
+            cb.body.name(),
+            format_zodiac_lon(cb.position.longitude_deg, fmt),
+            format_signed_lat(cb.position.latitude_deg, fmt),
+            cb.position.distance_au
         );
     }
 
-    if let Some(ang) = angles {
+    if let Some(ang) = &computed.angles {
+        // Select Nn/Sn based on nodes_mode
+        let (nn_deg, sn_deg) = match (nodes_mode, &computed.nodes) {
+            (NodesMode::Mean, Some(n)) => (Some(n.mean_nn_deg), Some(n.mean_sn_deg)),
+            (NodesMode::True, Some(n)) => (Some(n.true_nn_deg), Some(n.true_sn_deg)),
+            _ => (None, None),
+        };
+        // Select Lil/Pri based on lilith_mode
+        let (lil_deg, pri_deg) = match (lilith_mode, &computed.lilith) {
+            (LilithMode::Mean, Some(l)) => (Some(l.mean_lilith_deg), Some(l.mean_priapus_deg)),
+            (LilithMode::True, Some(l)) => (Some(l.true_lilith_deg), Some(l.true_priapus_deg)),
+            _ => (None, None),
+        };
+
         println!();
         println!("{:<8} {:>lon_w$}", "Point", "Longitude", lon_w = lon_w);
         println!("{}", "-".repeat(8 + 1 + lon_w));
@@ -1148,10 +755,10 @@ fn print_text(
             ("Ds", ang.ds_deg),
             ("Vx", ang.vx_deg),
             ("Ax", ang.ax_deg),
-            ("Nn", ang.nn_deg),
-            ("Sn", ang.sn_deg),
-            ("Lil", ang.lilith_deg),
-            ("Pri", ang.priapus_deg),
+            ("Nn", nn_deg),
+            ("Sn", sn_deg),
+            ("Lil", lil_deg),
+            ("Pri", pri_deg),
         ] {
             if let Some(lon_deg) = lon {
                 println!("{:<8} {}", label, format_zodiac_lon(lon_deg, fmt));
@@ -1159,7 +766,7 @@ fn print_text(
         }
     }
 
-    if let Some(l) = lots {
+    if let Some(l) = &computed.lots {
         println!();
         println!(
             "Sect   : {}",
@@ -1194,7 +801,7 @@ fn print_text(
         }
     }
 
-    if let Some(lp) = lunar_phase {
+    if let Some(lp) = &computed.lunar_phase {
         println!();
         println!(
             "Lunar Phase: {}  {:.2}°  day {} of 28",
@@ -1204,8 +811,8 @@ fn print_text(
         );
     }
 
-    if let Some(h) = houses {
-        for (sys, cusps) in h {
+    if !computed.houses.is_empty() {
+        for (sys, cusps) in &computed.houses {
             if let Some(c) = cusps {
                 print_house_cusps(sys.label(), c, fmt)
             } else {
@@ -1274,13 +881,8 @@ fn format_geo_deg_min(deg: f64, pos: char, neg: char, deg_width: usize) -> Strin
 /// Diurnal / Nocturnal from Sun + Ascendant. Returns `Some("Diurnal" | "Nocturnal")`
 /// when both are known; `None` for heliocentric mode or missing Ac.
 #[cfg(feature = "page")]
-fn page_sect_label(
-    positions: &[(Body, EclipticPosition)],
-    angles: Option<&Angles>,
-) -> Option<&'static str> {
-    let sun_lon = find_body_lon(positions, Body::Sun)?;
-    let ac_deg = angles?.ac_deg?;
-    match sect(sun_lon.to_radians(), ac_deg.to_radians()) {
+fn page_sect_label(computed: &ComputedChart) -> Option<&'static str> {
+    match computed.sect? {
         Sect::Day => Some("Diurnal"),
         Sect::Night => Some("Nocturnal"),
     }
@@ -1288,11 +890,11 @@ fn page_sect_label(
 
 /// Compact mode-descriptor for the banner's right column.
 #[cfg(feature = "page")]
-fn page_mode_str(mode: &CoordMode) -> &'static str {
+fn page_mode_str(mode: &pericynthion::chart::CoordMode) -> &'static str {
     match mode {
-        CoordMode::Geocentric => "Geocentric",
-        CoordMode::Topocentric(_) => "Topocentric",
-        CoordMode::Heliocentric => "Heliocentric",
+        pericynthion::chart::CoordMode::Geocentric => "Geocentric",
+        pericynthion::chart::CoordMode::Topocentric(_) => "Topocentric",
+        pericynthion::chart::CoordMode::Heliocentric => "Heliocentric",
     }
 }
 
@@ -1300,13 +902,15 @@ fn page_mode_str(mode: &CoordMode) -> &'static str {
 /// flat `(label, lon_deg)` list, then sort zodiacally from `start_lon`. The
 /// resulting order goes H1 → next degree → … → wrapping back through Pisces
 /// → finishing just before H1.
+///
+/// `nodes_mode` selects which variant (mean / true) of the lunar node to place
+/// in the sorted list. Lilith is not included in page placements.
 #[cfg(feature = "page")]
 fn page_collect_placements(
-    positions: &[(Body, EclipticPosition)],
-    angles: Option<&Angles>,
-    lots: Option<&Lots>,
+    computed: &ComputedChart,
     primary_house: Option<&HouseCusps>,
     start_lon: f64,
+    nodes_mode: NodesMode,
 ) -> Vec<(String, f64)> {
     let mut v: Vec<(String, f64)> = Vec::new();
 
@@ -1315,10 +919,10 @@ fn page_collect_placements(
             v.push((format!("H{h}"), hc.cusp(h).to_degrees().rem_euclid(360.0)));
         }
     }
-    for (body, pos) in positions {
-        v.push((body.name().to_string(), pos.longitude_deg));
+    for cb in &computed.bodies {
+        v.push((cb.body.name().to_string(), cb.position.longitude_deg));
     }
-    if let Some(ang) = angles {
+    if let Some(ang) = &computed.angles {
         if let Some(d) = ang.ac_deg {
             v.push(("Ac".into(), d));
         }
@@ -1333,14 +937,17 @@ fn page_collect_placements(
         if let Some(d) = ang.ax_deg {
             v.push(("Ax".into(), d));
         }
-        if let Some(d) = ang.nn_deg {
-            v.push(("Nn".into(), d));
-        }
-        if let Some(d) = ang.sn_deg {
-            v.push(("Sn".into(), d));
+        // Nodes: use the selected mode variant
+        if let Some(n) = &computed.nodes {
+            let (nn, sn) = match nodes_mode {
+                NodesMode::Mean => (n.mean_nn_deg, n.mean_sn_deg),
+                NodesMode::True => (n.true_nn_deg, n.true_sn_deg),
+            };
+            v.push(("Nn".into(), nn));
+            v.push(("Sn".into(), sn));
         }
     }
-    if let Some(l) = lots {
+    if let Some(l) = &computed.lots {
         v.push(("Fortune".into(), l.fortune_deg));
         v.push(("Spirit".into(), l.spirit_deg));
         if let Some(d) = l.eros_deg {
@@ -1378,20 +985,7 @@ fn banner_row(inside_width: usize, left: &str, right: &str) -> String {
 }
 
 #[cfg(feature = "page")]
-#[allow(clippy::too_many_arguments)]
-fn print_page(
-    args: &ComputeArgs,
-    jd_ut: f64,
-    jd_tt: f64,
-    mode: &CoordMode,
-    positions: &[(Body, EclipticPosition)],
-    angles: Option<&Angles>,
-    lots: Option<&Lots>,
-    houses: Option<&Houses>,
-    lunar_phase: Option<&pericynthion::coords::phase::LunarPhase>,
-    fmt: CoordFormat,
-    ephem: &Ephemeris,
-) {
+fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     use tabled::{
         builder::Builder,
         settings::{
@@ -1425,31 +1019,30 @@ fn print_page(
         }
     };
 
-    let observer = if let CoordMode::Topocentric(obs) = mode {
+    let observer = if let pericynthion::chart::CoordMode::Topocentric(obs) = &computed.mode {
         Some(obs)
     } else {
         None
     };
     let coords_str = page_coords_str(observer);
-    let sect_str = page_sect_label(positions, angles)
-        .unwrap_or("–")
-        .to_string();
+    let sect_str = page_sect_label(computed).unwrap_or("–").to_string();
 
     let calendar_str = match args.calendar {
         CalendarArg::Julian => "Julian",
         CalendarArg::Gregorian => "Gregorian",
         CalendarArg::Auto => "Auto",
     };
-    let jd_ut_str = format!("JD UT {jd_ut:.4}");
-    let mode_str = page_mode_str(mode);
+    let jd_ut_str = format!("JD UT {:.4}", computed.jd_ut);
+    let mode_str = page_mode_str(&computed.mode);
     let zodiac_str = "Tropical"; // only mode shipped
     let primary_house_arg = args
         .houses
         .as_ref()
         .and_then(|v| v.first().copied())
         .unwrap_or(HouseArg::Placidus);
-    let house_str = primary_house_arg.label();
-    let phase_str = lunar_phase.map(|lp| {
+    let primary_house_sys = primary_house_arg.to_house_system();
+    let house_str = primary_house_sys.label();
+    let phase_str = computed.lunar_phase.as_ref().map(|lp| {
         format!(
             "{}  {:.2}°  day {} of 28",
             phase_name_str(lp.phase),
@@ -1459,16 +1052,17 @@ fn print_page(
     });
 
     // === Placements collection (needed before sizing) ===
-    let primary_house_cusps = houses
-        .and_then(|hs| hs.iter().find(|(sys, _)| *sys == primary_house_arg))
+    let primary_house_cusps = computed
+        .houses
+        .iter()
+        .find(|(sys, _)| *sys == primary_house_sys)
         .and_then(|(_, c)| c.as_ref());
     let start_lon = primary_house_cusps
         .map(|hc| hc.cusp(1).to_degrees().rem_euclid(360.0))
-        .or_else(|| angles.and_then(|a| a.ac_deg))
+        .or_else(|| computed.angles.as_ref().and_then(|a| a.ac_deg))
         .unwrap_or(0.0);
 
-    let placements =
-        page_collect_placements(positions, angles, lots, primary_house_cusps, start_lon);
+    let placements = page_collect_placements(computed, primary_house_cusps, start_lon, args.nodes);
 
     // Annotate each placement with a retrograde flag based on its label.
     // The mapping covers the ten classical bodies, lunar nodes (Nn/Sn —
@@ -1490,20 +1084,20 @@ fn print_page(
             "Earth" => Some(Body::Earth),
             _ => None,
         } {
-            return body_is_retrograde(ephem, body, jd_tt, matches!(mode, CoordMode::Heliocentric));
+            return computed
+                .bodies
+                .iter()
+                .find(|cb| cb.body == body)
+                .is_some_and(|cb| cb.retrograde);
         }
         match label {
             "Nn" | "Sn" => match args.nodes {
                 NodesMode::Mean => true,
-                NodesMode::True => pericynthion::coords::nodes::true_nn_is_retrograde(ephem, jd_tt)
-                    .unwrap_or(false),
+                NodesMode::True => computed.nodes.as_ref().is_some_and(|n| n.true_retrograde),
             },
             "Lil" | "Pri" => match args.lilith {
                 LilithMode::Mean => false,
-                LilithMode::True => {
-                    pericynthion::coords::lilith::true_lilith_is_retrograde(ephem, jd_tt)
-                        .unwrap_or(false)
-                }
+                LilithMode::True => computed.lilith.as_ref().is_some_and(|l| l.true_retrograde),
             },
             _ => false,
         }
@@ -1789,391 +1383,6 @@ fn split_sign(lon_deg: f64) -> (&'static str, f64) {
     (zodiac_sign(normalised), normalised.rem_euclid(30.0))
 }
 
-// =============================================================================
-// JZOD output
-// =============================================================================
-
-fn body_to_jzod_id(body: Body) -> jzod::BodyId {
-    match body {
-        Body::Sun => jzod::BodyId::Sun,
-        Body::Moon => jzod::BodyId::Moon,
-        Body::Mercury => jzod::BodyId::Mercury,
-        Body::Venus => jzod::BodyId::Venus,
-        Body::Earth => jzod::BodyId::Earth,
-        Body::Mars => jzod::BodyId::Mars,
-        Body::Jupiter => jzod::BodyId::Jupiter,
-        Body::Saturn => jzod::BodyId::Saturn,
-        Body::Uranus => jzod::BodyId::Uranus,
-        Body::Neptune => jzod::BodyId::Neptune,
-        Body::Pluto => jzod::BodyId::Pluto,
-        Body::EarthMoonBarycenter => jzod::BodyId::EarthMoonBarycenter,
-    }
-}
-
-/// Return the 1-based house number a longitude falls in given house cusps (radians).
-fn jzod_house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
-    let lon = lon_deg.rem_euclid(360.0);
-    for h in 1u8..=12 {
-        let next = if h == 12 { 1 } else { h + 1 };
-        let start = cusps.cusp(h).to_degrees().rem_euclid(360.0);
-        let end = cusps.cusp(next).to_degrees().rem_euclid(360.0);
-        let contains = if end > start {
-            lon >= start && lon < end
-        } else {
-            lon >= start || lon < end
-        };
-        if contains {
-            return h;
-        }
-    }
-    1
-}
-
-#[allow(clippy::too_many_arguments)]
-fn print_jzod(
-    jd_ut: f64,
-    jd_tt: f64,
-    mode: &CoordMode,
-    positions: &[(Body, EclipticPosition)],
-    angles: Option<&Angles>,
-    lots: Option<&Lots>,
-    houses: Option<&Houses>,
-    lunar_phase: Option<&pericynthion::coords::phase::LunarPhase>,
-    ephem: &Ephemeris,
-    year: i32,
-    month: u8,
-    day: u8,
-    hour: u8,
-    minute: u8,
-    second: f64,
-    utc_offset: &str,
-    lat: Option<f64>,
-    lon: Option<f64>,
-) -> Result<()> {
-    use pericynthion::coords::lilith::{mean_lilith_rad, priapus_rad, true_lilith_rad};
-    use pericynthion::coords::nodes::{mean_nn_rad, sn_rad, true_nn_rad};
-
-    let is_helio = matches!(mode, CoordMode::Heliocentric);
-    let coord_system = match mode {
-        CoordMode::Geocentric => jzod::CoordinateSystem::Geocentric,
-        CoordMode::Topocentric(_) => jzod::CoordinateSystem::Topocentric,
-        CoordMode::Heliocentric => jzod::CoordinateSystem::Heliocentric,
-    };
-
-    // Sect from Sun above/below horizon.
-    let sun_lon = positions
-        .iter()
-        .find(|(b, _)| *b == Body::Sun)
-        .map(|(_, p)| p.longitude_deg);
-    let jzod_sect = angles.and_then(|a| a.ac_deg).zip(sun_lon).map(|(ac, s)| {
-        match sect(s.to_radians(), ac.to_radians()) {
-            Sect::Day => jzod::Sect::Diurnal,
-            Sect::Night => jzod::Sect::Nocturnal,
-        }
-    });
-
-    // Both node variants — geo/topo only, requires ASC (i.e. angles present).
-    let has_points = !is_helio && angles.and_then(|a| a.ac_deg).is_some();
-    let (nn_mean, sn_mean, nn_true, sn_true, nn_true_retro) = if has_points {
-        let m = mean_nn_rad(jd_tt);
-        let t = true_nn_rad(ephem, jd_tt).context("computing true north node")?;
-        let t_retro = pericynthion::coords::nodes::true_nn_is_retrograde(ephem, jd_tt)
-            .context("computing true node retrograde")?;
-        (
-            Some(m.to_degrees()),
-            Some(sn_rad(m).to_degrees()),
-            Some(t.to_degrees()),
-            Some(sn_rad(t).to_degrees()),
-            Some(t_retro),
-        )
-    } else {
-        (None, None, None, None, None)
-    };
-
-    // Both BML variants — same gating as nodes.
-    let (lil_mean, pri_mean, lil_true, pri_true, lil_true_retro) = if has_points {
-        let m = mean_lilith_rad(jd_tt);
-        let t = true_lilith_rad(ephem, jd_tt).context("computing true Black Moon Lilith")?;
-        let t_retro = pericynthion::coords::lilith::true_lilith_is_retrograde(ephem, jd_tt)
-            .context("computing true Lilith retrograde")?;
-        (
-            Some(m.to_degrees()),
-            Some(priapus_rad(m).to_degrees()),
-            Some(t.to_degrees()),
-            Some(priapus_rad(t).to_degrees()),
-            Some(t_retro),
-        )
-    } else {
-        (None, None, None, None, None)
-    };
-
-    // calculated_at timestamp.
-    let calculated_at = jzod::time::calculated_at_now();
-
-    // House assignments for a longitude across all computed systems.
-    let body_houses = |lon_deg: f64| -> std::collections::BTreeMap<String, u8> {
-        let mut map = std::collections::BTreeMap::new();
-        if let Some(hs) = houses {
-            for (sys, cusps) in hs {
-                if let Some(c) = cusps {
-                    map.insert(sys.slug().to_string(), jzod_house_for(lon_deg, c));
-                }
-            }
-        }
-        map
-    };
-
-    // Bodies array.
-    let bodies: Vec<jzod::placement::Body> = positions
-        .iter()
-        .map(|&(body, pos)| {
-            let lon_at = |jd: f64| match mode {
-                CoordMode::Heliocentric => heliocentric_ecliptic_position(ephem, body, jd)
-                    .map_or(pos.longitude_deg, |p| p.longitude_deg),
-                _ => apparent_ecliptic_position(ephem, body, jd)
-                    .map_or(pos.longitude_deg, |p| p.longitude_deg),
-            };
-            let daily_speed = signed_daily_motion(lon_at(jd_tt - 0.5), lon_at(jd_tt + 0.5));
-            let retrograde = body_is_retrograde(ephem, body, jd_tt, is_helio);
-            jzod::placement::Body {
-                id: body_to_jzod_id(body),
-                position: jzod::coord::Position::from_longitude(pos.longitude_deg),
-                ecliptic_latitude: jzod::coord::Degrees8(pos.latitude_deg),
-                daily_speed: jzod::coord::Degrees8(daily_speed),
-                retrograde,
-                distance_au: Some(pos.distance_au),
-                house: body_houses(pos.longitude_deg),
-            }
-        })
-        .collect();
-
-    // Angles array (ASC, DSC, MC, IC — in that order when present).
-    let mut angles_vec: Vec<jzod::Angle> = Vec::new();
-    if let Some(a) = angles {
-        if let Some(ac) = a.ac_deg {
-            angles_vec.push(jzod::Angle {
-                id: jzod::AngleId::Ascendant,
-                position: jzod::coord::Position::from_longitude(ac),
-            });
-        }
-        if let Some(ds) = a.ds_deg {
-            angles_vec.push(jzod::Angle {
-                id: jzod::AngleId::Descendant,
-                position: jzod::coord::Position::from_longitude(ds),
-            });
-        }
-        angles_vec.push(jzod::Angle {
-            id: jzod::AngleId::Midheaven,
-            position: jzod::coord::Position::from_longitude(a.mc_deg),
-        });
-        angles_vec.push(jzod::Angle {
-            id: jzod::AngleId::ImumCoeli,
-            position: jzod::coord::Position::from_longitude(a.ic_deg),
-        });
-    }
-
-    // Points array: vertex axis, then nodes (mean, true), then BML (mean, true).
-    // Variant schema: Option A — suffixed IDs (resolves OQ-19).
-    let mut points_vec: Vec<jzod::Point> = Vec::new();
-    if let Some(a) = angles {
-        if let Some(vx) = a.vx_deg {
-            points_vec.push(jzod::Point {
-                id: jzod::PointId::Vertex,
-                position: jzod::coord::Position::from_longitude(vx),
-                retrograde: false,
-            });
-        }
-        if let Some(ax) = a.ax_deg {
-            points_vec.push(jzod::Point {
-                id: jzod::PointId::AntiVertex,
-                position: jzod::coord::Position::from_longitude(ax),
-                retrograde: false,
-            });
-        }
-    }
-    if let (Some(nm), Some(sm)) = (nn_mean, sn_mean) {
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::NorthNodeMean,
-            position: jzod::coord::Position::from_longitude(nm),
-            retrograde: true,
-        });
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::SouthNodeMean,
-            position: jzod::coord::Position::from_longitude(sm),
-            retrograde: true,
-        });
-    }
-    if let (Some(nt), Some(st), Some(tr)) = (nn_true, sn_true, nn_true_retro) {
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::NorthNodeTrue,
-            position: jzod::coord::Position::from_longitude(nt),
-            retrograde: tr,
-        });
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::SouthNodeTrue,
-            position: jzod::coord::Position::from_longitude(st),
-            retrograde: tr,
-        });
-    }
-    if let (Some(lm), Some(pm)) = (lil_mean, pri_mean) {
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::BlackMoonLilithMean,
-            position: jzod::coord::Position::from_longitude(lm),
-            retrograde: false,
-        });
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::PriapusMean,
-            position: jzod::coord::Position::from_longitude(pm),
-            retrograde: false,
-        });
-    }
-    if let (Some(lt), Some(pt), Some(lr)) = (lil_true, pri_true, lil_true_retro) {
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::BlackMoonLilithTrue,
-            position: jzod::coord::Position::from_longitude(lt),
-            retrograde: lr,
-        });
-        points_vec.push(jzod::Point {
-            id: jzod::PointId::PriapusTrue,
-            position: jzod::coord::Position::from_longitude(pt),
-            retrograde: lr,
-        });
-    }
-
-    // Lots array.
-    let mut lots_vec: Vec<jzod::Lot> = Vec::new();
-    if let Some(l) = lots {
-        lots_vec.push(jzod::Lot {
-            id: jzod::LotId::LotOfFortune,
-            position: jzod::coord::Position::from_longitude(l.fortune_deg),
-        });
-        lots_vec.push(jzod::Lot {
-            id: jzod::LotId::LotOfSpirit,
-            position: jzod::coord::Position::from_longitude(l.spirit_deg),
-        });
-        lots_vec.push(jzod::Lot {
-            id: jzod::LotId::LotOfExaltation,
-            position: jzod::coord::Position::from_longitude(l.exaltation_deg),
-        });
-        if let Some(d) = l.necessity_deg {
-            lots_vec.push(jzod::Lot {
-                id: jzod::LotId::LotOfNecessity,
-                position: jzod::coord::Position::from_longitude(d),
-            });
-        }
-        if let Some(d) = l.eros_deg {
-            lots_vec.push(jzod::Lot {
-                id: jzod::LotId::LotOfEros,
-                position: jzod::coord::Position::from_longitude(d),
-            });
-        }
-        if let Some(d) = l.courage_deg {
-            lots_vec.push(jzod::Lot {
-                id: jzod::LotId::LotOfCourage,
-                position: jzod::coord::Position::from_longitude(d),
-            });
-        }
-        if let Some(d) = l.victory_deg {
-            lots_vec.push(jzod::Lot {
-                id: jzod::LotId::LotOfVictory,
-                position: jzod::coord::Position::from_longitude(d),
-            });
-        }
-        if let Some(d) = l.nemesis_deg {
-            lots_vec.push(jzod::Lot {
-                id: jzod::LotId::LotOfNemesis,
-                position: jzod::coord::Position::from_longitude(d),
-            });
-        }
-    }
-
-    // Houses keyed by system slug, using typed HouseCusp.
-    let mut jzod_houses: jzod::Houses = jzod::Houses::new();
-    if let Some(hs) = houses {
-        for (sys, cusps) in hs {
-            if let Some(c) = cusps {
-                let mut system_cusps: jzod::HouseSystemCusps = jzod::HouseSystemCusps::new();
-                for h in 1u8..=12 {
-                    let lon_deg = c.cusp(h).to_degrees().rem_euclid(360.0);
-                    let cusp = if *sys == HouseArg::WholeSign {
-                        jzod::HouseCusp::whole_sign_from_longitude(lon_deg)
-                    } else {
-                        jzod::HouseCusp::from_longitude(lon_deg)
-                    };
-                    system_cusps.insert(h, cusp);
-                }
-                jzod_houses.insert(sys.slug().to_string(), system_cusps);
-            }
-        }
-    }
-
-    // Build the typed chart.
-    let chart = jzod::Chart {
-        uid: uuid::Uuid::new_v4().to_string(),
-        chart_type: jzod::ChartType::Radix,
-        name: None,
-        gender: None,
-        rodden_rating: None,
-        birth: jzod::Birth {
-            datetime: jzod::Datetime {
-                year,
-                month,
-                day,
-                hour,
-                minute,
-                second: second.floor() as u8,
-                utc_offset: utc_offset.to_string(),
-                iana_tz: None,
-                unknown: false,
-                tod_method: None,
-            },
-            location: jzod::Location {
-                name: None,
-                latitude: lat,
-                longitude: lon,
-            },
-        },
-        zodiac: jzod::Zodiac::Tropical,
-        coordinate_system: coord_system,
-        sect: jzod_sect,
-        ephemeris: jzod::Ephemeris {
-            source: "DE441".to_string(),
-            calculated_at,
-            jd_ut: Some(jd_ut),
-            jd_tt: Some(jd_tt),
-        },
-        placements: jzod::Placements {
-            bodies,
-            angles: angles_vec,
-            points: points_vec,
-            lots: lots_vec,
-        },
-        houses: jzod_houses,
-        lunar_phase: lunar_phase.map(|lp| {
-            use pericynthion::coords::phase::LunarPhaseName as P;
-            jzod::LunarPhase {
-                synodic_arc_deg: lp.synodic_arc_deg,
-                phase: match lp.phase {
-                    P::NewMoon => jzod::LunarPhaseName::NewMoon,
-                    P::Crescent => jzod::LunarPhaseName::Crescent,
-                    P::FirstQuarter => jzod::LunarPhaseName::FirstQuarter,
-                    P::Gibbous => jzod::LunarPhaseName::Gibbous,
-                    P::FullMoon => jzod::LunarPhaseName::FullMoon,
-                    P::Disseminating => jzod::LunarPhaseName::Disseminating,
-                    P::LastQuarter => jzod::LunarPhaseName::LastQuarter,
-                    P::Balsamic => jzod::LunarPhaseName::Balsamic,
-                },
-                lunation_day: lp.lunation_day,
-            }
-        }),
-        nested: vec![],
-    };
-
-    let doc = jzod::JzodDocument::new(vec![chart]);
-    println!("{}", jzod::to_string_pretty(&doc));
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2203,213 +1412,6 @@ mod tests {
     #[test]
     fn no_lat_returns_none() {
         assert!(resolve_observer(None, None).unwrap().is_none());
-    }
-
-    #[test]
-    fn compute_angles_leo_asc_mc() {
-        // 1955-11-13 06:04 UT, Universal City CA. Refchart resolved coords:
-        // 34°N08'20" = 34.1389° lat, 118°W21'09" = -118.3525° lon.
-        // Ar⌖26°07'43" = 26.129° MC, Le⌖05°19'30" = 125.325° Asc.
-        use pericynthion::time::delta_t::jd_ut_to_jd_tt;
-        let jd_tt = jd_ut_to_jd_tt(2_435_424.752_8);
-        let ang = compute_angles(jd_tt, -118.352_500, Some(34.138_889));
-        let mc_expected = 0.0 + 26.0 + 7.0 / 60.0 + 43.0 / 3600.0;
-        let as_expected = 120.0 + 5.0 + 19.0 / 60.0 + 30.0 / 3600.0;
-        assert!(
-            (ang.mc_deg - mc_expected).abs() < 5.0 / 60.0,
-            "Mc {:.4} expected {:.4}",
-            ang.mc_deg,
-            mc_expected
-        );
-        assert!(
-            (ang.ac_deg.unwrap() - as_expected).abs() < 5.0 / 60.0,
-            "As {:.4} expected {:.4}",
-            ang.ac_deg.unwrap(),
-            as_expected
-        );
-    }
-
-    #[test]
-    fn compute_angles_no_lat_omits_asc() {
-        use pericynthion::time::delta_t::jd_ut_to_jd_tt;
-        let jd_tt = jd_ut_to_jd_tt(2_435_424.752_8);
-        let ang = compute_angles(jd_tt, -118.352_500, None);
-        assert!(ang.ac_deg.is_none());
-        let diff = (ang.ic_deg - ang.mc_deg).rem_euclid(360.0);
-        assert!((diff - 180.0).abs() < 1e-6, "IC-MC diff {diff:.6}");
-    }
-
-    #[test]
-    fn compute_angles_dsc_is_asc_plus_180() {
-        use pericynthion::time::delta_t::jd_ut_to_jd_tt;
-        let jd_tt = jd_ut_to_jd_tt(2_435_424.752_8);
-        let ang = compute_angles(jd_tt, -118.352_500, Some(34.138_889));
-        let ac = ang.ac_deg.expect("As present with lat");
-        let ds = ang.ds_deg.expect("Ds present with lat");
-        let diff = (ds - ac).rem_euclid(360.0);
-        assert!((diff - 180.0).abs() < 1e-9, "Ds-As diff {diff:.9}");
-    }
-
-    #[test]
-    fn compute_angles_no_lat_omits_dsc() {
-        use pericynthion::time::delta_t::jd_ut_to_jd_tt;
-        let jd_tt = jd_ut_to_jd_tt(2_435_424.752_8);
-        let ang = compute_angles(jd_tt, -118.352_500, None);
-        assert!(ang.ds_deg.is_none());
-    }
-
-    #[test]
-    fn compute_lots_leo_asc_day_chart() {
-        // Adèle Haenel: Sun=322.889° (Aqr), Moon=35.683° (Tau), ASC=124.919° (Leo).
-        // Sun above horizon → day chart. refchart PF: Lib⌖17°42'46" = 197.713°.
-        // Spirit (Day) = ASC + Sun − Moon. No planets → no Eros/Necessity/Courage/Victory/Nemesis.
-        let lots = compute_lots(124.919, 322.889, 35.683, None, None, None, None, None);
-        assert_eq!(lots.sect, Sect::Day);
-        let expected_pf = 180.0 + 17.0 + 42.0 / 60.0 + 46.0 / 3600.0_f64;
-        assert!(
-            (lots.fortune_deg - expected_pf).abs() < 5.0 / 60.0,
-            "Fortune {:.4} expected {:.4}",
-            lots.fortune_deg,
-            expected_pf
-        );
-        let expected_spirit = (124.919 + 322.889 - 35.683_f64).rem_euclid(360.0);
-        assert!(
-            (lots.spirit_deg - expected_spirit).abs() < 1e-3,
-            "Spirit {:.4} expected {:.4}",
-            lots.spirit_deg,
-            expected_spirit
-        );
-        // Exaltation always emits — day = ASC + 18° − Sun.
-        let expected_exalt = (124.919 + 18.0 - 322.889_f64).rem_euclid(360.0);
-        assert!(
-            (lots.exaltation_deg - expected_exalt).abs() < 1e-3,
-            "Exaltation {:.4} expected {:.4}",
-            lots.exaltation_deg,
-            expected_exalt
-        );
-        assert!(lots.eros_deg.is_none(), "Eros absent without Venus");
-        assert!(
-            lots.necessity_deg.is_none(),
-            "Necessity absent without Mercury"
-        );
-        assert!(lots.courage_deg.is_none(), "Courage absent without Mars");
-        assert!(lots.victory_deg.is_none(), "Victory absent without Jupiter");
-        assert!(lots.nemesis_deg.is_none(), "Nemesis absent without Saturn");
-    }
-
-    #[test]
-    fn compute_lots_lilly_night_chart() {
-        // Lilly: Sun=49.987°, Moon=284.760°, ASC=332.110° → night chart.
-        let lots = compute_lots(332.110, 49.987, 284.760, None, None, None, None, None);
-        assert_eq!(lots.sect, Sect::Night);
-        // Night PF: ASC + Sun − Moon = 97.337°
-        let expected_pf = (332.110 + 49.987 - 284.760_f64).rem_euclid(360.0);
-        assert!(
-            (lots.fortune_deg - expected_pf).abs() < 1e-3,
-            "PF {:.4} expected {:.4}",
-            lots.fortune_deg,
-            expected_pf
-        );
-        // Exaltation night = ASC + 32° − Moon.
-        let expected_exalt = (332.110 + 32.0 - 284.760_f64).rem_euclid(360.0);
-        assert!(
-            (lots.exaltation_deg - expected_exalt).abs() < 1e-3,
-            "Exaltation {:.4} expected {:.4}",
-            lots.exaltation_deg,
-            expected_exalt
-        );
-    }
-
-    #[test]
-    fn compute_lots_emits_eros_when_venus_present() {
-        // Leo ASC day chart: Sun=219.601°, Moon=324.291°, ASC=317.671°,
-        // Venus=255.325° (DE441 apparent geo from acceptance test output).
-        // Day Eros = ASC + Venus − Spirit, Spirit_day = ASC + Sun − Moon = 212.981°.
-        // Eros_day = 317.671 + 255.325 − 212.981 = 360.015° → 0.015°.
-        let lots = compute_lots(
-            317.671,
-            219.601,
-            324.291,
-            None,
-            Some(255.325),
-            None,
-            None,
-            None,
-        );
-        let eros = lots.eros_deg.expect("eros present with venus");
-        let expected = (317.671 + 255.325 - 212.981_f64).rem_euclid(360.0);
-        assert!(
-            (eros - expected).abs() < 1e-3,
-            "Eros {eros:.4} expected {expected:.4}"
-        );
-    }
-
-    fn leo_asc_frame() -> (f64, f64, f64, f64) {
-        use pericynthion::coords::acds::ac_rad;
-        use pericynthion::coords::nutation::nutation;
-        use pericynthion::coords::obliquity::mean_obliquity_rad;
-        use pericynthion::coords::sidereal_time::gast_rad;
-        use pericynthion::time::delta_t::jd_ut_to_jd_tt;
-        let jd_tt = jd_ut_to_jd_tt(2_435_424.752_8);
-        let lon_east = -118.352_500_f64;
-        let lat = 34.138_889_f64.to_radians();
-        let ramc = (gast_rad(jd_tt) + lon_east.to_radians()).rem_euclid(std::f64::consts::TAU);
-        let nut = nutation(jd_tt);
-        let obliquity = mean_obliquity_rad(jd_tt) + nut.delta_epsilon;
-        let ac = ac_rad(ramc, obliquity, lat).expect("ac exists");
-        (ramc, obliquity, ac, lat)
-    }
-
-    fn find_house(h: &Houses, sys: HouseArg) -> Option<&HouseCusps> {
-        h.iter()
-            .find(|(s, _)| *s == sys)
-            .and_then(|(_, c)| c.as_ref())
-    }
-
-    #[test]
-    fn compute_houses_leo_h1_equals_asc() {
-        // Lightning-strike frame: Asc ≈ 125.33° (Leo 5°20').
-        // Equal-from-Asc puts cusp(1) at the Asc itself; whole-sign puts
-        // it at the start of Leo (120°).
-        let (ramc, obliquity, ac, lat) = leo_asc_frame();
-        let h = compute_houses(ramc, obliquity, ac, lat, HouseArg::ALL);
-        let eq = find_house(&h, HouseArg::EqualFromAsc).expect("equal");
-        let ws = find_house(&h, HouseArg::WholeSign).expect("whole-sign");
-        assert!((eq.cusp(1) - ac).abs() < 1e-9);
-        assert!((ws.cusp(1).to_degrees() - 120.0).abs() < 1e-9);
-        assert!(find_house(&h, HouseArg::Placidus).is_some());
-    }
-
-    #[test]
-    fn compute_houses_filter_only_whole_sign() {
-        let (ramc, obliquity, ac, lat) = leo_asc_frame();
-        let h = compute_houses(ramc, obliquity, ac, lat, &[HouseArg::WholeSign]);
-        assert_eq!(h.len(), 1);
-        assert_eq!(h[0].0, HouseArg::WholeSign);
-        assert!(find_house(&h, HouseArg::EqualFromAsc).is_none());
-        assert!(find_house(&h, HouseArg::Placidus).is_none());
-    }
-
-    #[test]
-    fn compute_houses_filter_two_systems_preserves_order() {
-        let (ramc, obliquity, ac, lat) = leo_asc_frame();
-        let h = compute_houses(
-            ramc,
-            obliquity,
-            ac,
-            lat,
-            &[HouseArg::Placidus, HouseArg::WholeSign],
-        );
-        assert_eq!(h.len(), 2);
-        assert_eq!(h[0].0, HouseArg::Placidus);
-        assert_eq!(h[1].0, HouseArg::WholeSign);
-    }
-
-    #[test]
-    fn compute_houses_empty_filter_returns_empty() {
-        let (ramc, obliquity, ac, lat) = leo_asc_frame();
-        let h = compute_houses(ramc, obliquity, ac, lat, &[]);
-        assert!(h.is_empty());
     }
 
     #[test]

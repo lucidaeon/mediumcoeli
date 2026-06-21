@@ -1,13 +1,18 @@
 [package]
 name = "jzod"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "JZOD v0.0.0 typed model — open astrology chart interchange format"
+description = "Typed model for the JZOD open astrology chart interchange format"
+categories = ["data-structures", "encoding"]
+# Allowlist of files to publish: src + the JSON Schema (the format's spec
+# artifact). The example chart (anna_freud_radix.json) and tests/ stay dev-only.
+# Cargo always also packs Cargo.toml and the README.
+include = ["src/**", "README.md", "schema/**"]
 
 [dependencies]
 serde = { workspace = true }

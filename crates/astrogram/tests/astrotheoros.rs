@@ -109,8 +109,13 @@ fn anna_freud_chart() -> Chart {
 #[test]
 #[ignore = "live network: writes+deletes one allow-listed chart on astrotheoros.com"]
 fn live_create_returns_landed_entry_then_deletes() {
-    let user = std::env::var("ASTROTHEOROS_USER").expect("ASTROTHEOROS_USER");
-    let pass = std::env::var("ASTROTHEOROS_PASS").expect("ASTROTHEOROS_PASS");
+    let (Ok(user), Ok(pass)) = (
+        std::env::var("ASTROTHEOROS_USER"),
+        std::env::var("ASTROTHEOROS_PASS"),
+    ) else {
+        eprintln!("ASTROTHEOROS_USER / ASTROTHEOROS_PASS not set — skipping live test");
+        return;
+    };
     let session = AstrotheorosSession::login(&user, &pass, 500).expect("login");
 
     let source = anna_freud_chart();

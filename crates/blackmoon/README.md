@@ -42,6 +42,10 @@ Astrologers can have their data spread out across many tools. Consolidating reco
 
 Credentials come from flags or env vars (`LUNAASTROLOGY_COOKIE`, `ASTROCOM_COOKIE`, `ASTROCOM_USER`, `ASTROCOM_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--resume-from <prefix>` resumes an interrupted LUNA® fetch.
 
+Credential sources are **not** mutually exclusive. When several are available for a target (a browser cookie via `--grant-cookie-access`, a token, and/or login creds), `blackmoon` tries them in order — **cookie → token → login** — and falls through to the next when one is rejected as stale (e.g. an expired cookie falls back to your saved password). It discloses which source authenticated, naming a fall-through when one occurred.
+
+For **astro.com specifically**, the session cookie authenticates *reads only*; deleting a chart re-submits your account password. So `--delete`/`--consolidate` against astro.com requires `--astrocom-user`/`--astrocom-pass` (or `ASTROCOM_USER`/`ASTROCOM_PASS`) even when a working cookie is present — the cookie reads, the password deletes.
+
 ## In-place LUNA® consolidation
 
 `blackmoon` can dedupe a LUNA® account in place by surfacing **candidate

@@ -140,6 +140,34 @@ impl From<u8> for HouseSystem {
     }
 }
 
+impl HouseSystem {
+    /// Parse a house-system slug into a [`HouseSystem`] variant.
+    ///
+    /// The input is first lowercased and underscores are converted to hyphens,
+    /// so `"Whole_Sign"` and `"whole-sign"` both resolve to [`HouseSystem::WholeSign`].
+    /// Returns `None` for unrecognised slugs.
+    #[must_use]
+    pub fn from_str_slug(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().replace('_', "-").as_str() {
+            "placidus" => Some(Self::Placidus),
+            "koch" => Some(Self::Koch),
+            "campanus" => Some(Self::Campanus),
+            "regiomontanus" => Some(Self::Regiomontanus),
+            "porphyry" => Some(Self::Porphyry),
+            "equal" => Some(Self::Equal),
+            "whole-sign" | "whole" => Some(Self::WholeSign),
+            "alcabitius" => Some(Self::Alcabitius),
+            "topocentric" => Some(Self::Topocentric),
+            "meridian" => Some(Self::Meridian),
+            "morinus" => Some(Self::Morinus),
+            "zero-aries" | "zeroaries" => Some(Self::ZeroAries),
+            "solar-sign" | "solarsign" => Some(Self::SolarSign),
+            "hindu-bhava" | "hindubhava" => Some(Self::HinduBhava),
+            _ => None,
+        }
+    }
+}
+
 /// Zodiac system. Variants cover the 17 systems observed in Solar Fire;
 /// `Other` carries the raw id for any system not yet named here.
 #[allow(missing_docs)]
@@ -191,6 +219,25 @@ impl From<u8> for Zodiac {
     }
 }
 
+impl Zodiac {
+    /// Parse a zodiac slug into a [`Zodiac`] variant.
+    ///
+    /// The input is lowercased before matching; underscores are **not** replaced.
+    /// Returns `None` for unrecognised slugs.
+    #[must_use]
+    pub fn from_str_slug(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "tropical" => Some(Self::Tropical),
+            "fagan-allen" | "faganallen" => Some(Self::FaganAllen),
+            "lahiri" => Some(Self::Lahiri),
+            "raman" => Some(Self::Raman),
+            "krishnamurti" => Some(Self::Krishnamurti),
+            "draconic" => Some(Self::Draconic),
+            _ => None,
+        }
+    }
+}
+
 /// Coordinate reference frame.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -205,6 +252,21 @@ impl From<u8> for CoordinateSystem {
         match n {
             2 => Self::Heliocentric,
             _ => Self::Geocentric,
+        }
+    }
+}
+
+impl CoordinateSystem {
+    /// Parse a coordinate-system slug into a [`CoordinateSystem`] variant.
+    ///
+    /// Accepts `"geocentric"` / `"geo"` and `"heliocentric"` / `"helio"` (case-insensitive).
+    /// Returns `None` for unrecognised slugs.
+    #[must_use]
+    pub fn from_str_slug(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "geocentric" | "geo" => Some(Self::Geocentric),
+            "heliocentric" | "helio" => Some(Self::Heliocentric),
+            _ => None,
         }
     }
 }
@@ -267,4 +329,56 @@ pub struct Chart {
     pub coordinate_system: CoordinateSystem,
     pub sub_charts: Vec<SubChart>,
     pub notes: Option<String>,
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+    #[test]
+    fn house_slug_aliases() {
+        assert_eq!(
+            HouseSystem::from_str_slug("placidus"),
+            Some(HouseSystem::Placidus)
+        );
+        assert_eq!(
+            HouseSystem::from_str_slug("whole-sign"),
+            Some(HouseSystem::WholeSign)
+        );
+        assert_eq!(
+            HouseSystem::from_str_slug("whole"),
+            Some(HouseSystem::WholeSign)
+        );
+        assert_eq!(HouseSystem::from_str_slug("nope"), None);
+    }
+    #[test]
+    fn house_slug_normalizes_case_and_underscores() {
+        // Input is lowercased and `_` is treated as `-` before matching.
+        assert_eq!(
+            HouseSystem::from_str_slug("PLACIDUS"),
+            Some(HouseSystem::Placidus)
+        );
+        assert_eq!(
+            HouseSystem::from_str_slug("Whole_Sign"),
+            Some(HouseSystem::WholeSign)
+        );
+        assert_eq!(Zodiac::from_str_slug("Tropical"), Some(Zodiac::Tropical));
+        assert_eq!(
+            CoordinateSystem::from_str_slug("GEO"),
+            Some(CoordinateSystem::Geocentric)
+        );
+    }
+    #[test]
+    fn zodiac_and_locus_slugs() {
+        assert_eq!(Zodiac::from_str_slug("tropical"), Some(Zodiac::Tropical));
+        assert_eq!(Zodiac::from_str_slug("lahiri"), Some(Zodiac::Lahiri));
+        assert_eq!(
+            CoordinateSystem::from_str_slug("geo"),
+            Some(CoordinateSystem::Geocentric)
+        );
+        assert_eq!(
+            CoordinateSystem::from_str_slug("helio"),
+            Some(CoordinateSystem::Heliocentric)
+        );
+        assert_eq!(CoordinateSystem::from_str_slug("sideways"), None);
+    }
 }

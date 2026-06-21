@@ -33,4 +33,15 @@ pub enum ChartError {
     LongitudeOutOfRange(f64),
     #[error("latitude {0} out of range -90..=90")]
     LatitudeOutOfRange(f64),
+    /// A format was used in a direction it does not support (e.g. reading a
+    /// write-only format, writing a read-only format, or passing a web format
+    /// to a file-bytes function).
+    #[error("{0}")]
+    UnsupportedDirection(&'static str),
+    /// Bytes could not be decoded as UTF-8 text required by the parser.
+    #[error("invalid UTF-8: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+    /// A parse-level error reported by a format parser.
+    #[error("parse error: {0}")]
+    Parse(String),
 }

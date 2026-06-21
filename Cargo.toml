@@ -1,12 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/pericynthion", "crates/starcat", "crates/astrogram", "crates/blackmoon", "crates/jzod"]
+members = ["crates/pericynthion", "crates/starcat", "crates/astrogram", "crates/blackmoon", "crates/jzod", "crates/wristband"]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.85"
 license = "CC0-1.0"
-license-file = "LICENSE"
 authors = ["lucidaeon <lucidaeon@users.noreply.github.com>"]
 repository = "https://github.com/lucidaeon/mediumcoeli"
 homepage = "https://github.com/lucidaeon/mediumcoeli"
@@ -14,9 +13,10 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.2.0" }
-astrogram = { path = "crates/astrogram", version = "0.1.3" }
-jzod = { path = "crates/jzod", version = "0.1.0" }
+pericynthion = { path = "crates/pericynthion", version = "0.3.0" }
+astrogram = { path = "crates/astrogram", version = "0.2.0" }
+jzod = { path = "crates/jzod", version = "0.1.1" }
+wristband = { path = "crates/wristband", version = "0.0.0" }
 
 # Errors
 thiserror = "2"

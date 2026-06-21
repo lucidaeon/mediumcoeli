@@ -79,6 +79,29 @@ pub enum LunaError {
     PhenomIdNotFound,
 }
 
+impl LunaError {
+    /// True when this error means the credential was rejected and the caller
+    /// should fall through to the next credential in the chain.
+    ///
+    /// `FormTokensNotFound` means the listing/edit page rendered without the
+    /// authenticated form tokens — the session cookie is no longer valid.
+    /// HTTP 401/403 is delegated to [`crate::web_auth::is_unauthorized`].
+    #[must_use]
+    pub fn is_auth_failure(&self) -> bool {
+        match self {
+            Self::Http(e) => crate::web_auth::is_unauthorized(e),
+            Self::FormTokensNotFound(_) => true,
+            Self::MissingUniwheel
+            | Self::InvalidOffset(_)
+            | Self::InvalidDateTime(_)
+            | Self::InvalidCoordinate
+            | Self::Json(_)
+            | Self::HttpClientBuild(_)
+            | Self::PhenomIdNotFound => false,
+        }
+    }
+}
+
 /// One row from the `/phenomena` chart-listing page.
 #[derive(Debug, Clone)]
 pub struct ListingRow {
@@ -880,6 +903,50 @@ impl LunaSession {
         Ok(listing)
     }
 
+    /// Cheap authenticated probe: fetch the chart listing.
+    ///
+    /// A stale session cookie makes the listing page render without its
+    /// authenticated form tokens → [`LunaError::FormTokensNotFound`] (or a 401),
+    /// both fall-through signals for the credential chain.
+    ///
+    /// # Errors
+    /// Propagates the listing error; auth failures are classifiable via
+    /// [`LunaError::is_auth_failure`].
+    pub fn probe(&self) -> Result<(), LunaError> {
+        self.fetch_listing().map(|_| ())
+    }
+
+    /// Authenticate against an ordered list of candidate session-cookie values,
+    /// falling through on auth failure. Returns the live session and the index
+    /// of the cookie that authenticated.
+    ///
+    /// LUNA has no login flow, so each candidate is a session-cookie string
+    /// (e.g. a browser import, then `--luna-token`). Fall-through happens only on
+    /// [`LunaError::is_auth_failure`].
+    ///
+    /// # Errors
+    /// - The last auth failure if every cookie is rejected.
+    /// - The first non-auth error encountered.
+    /// - [`LunaError::FormTokensNotFound`] if `cookies` is empty.
+    pub fn authenticate(cookies: &[&str], delay_ms: u64) -> Result<(Self, usize), LunaError> {
+        let attempts: Vec<_> = cookies
+            .iter()
+            .map(|cookie| {
+                move || -> Result<Self, LunaError> {
+                    let session = Self::new(cookie, delay_ms)?;
+                    session.probe()?;
+                    Ok(session)
+                }
+            })
+            .collect();
+        crate::web_auth::try_chain(attempts, LunaError::is_auth_failure).map_err(|e| match e {
+            crate::web_auth::ChainError::Empty => {
+                LunaError::FormTokensNotFound("no session cookie supplied".to_string())
+            }
+            crate::web_auth::ChainError::AllFailed(inner) => inner,
+        })
+    }
+
     /// Fully hydrate all charts in the account: listing pages, then per-chart
     /// `cast.json` and sidebar.
     ///
@@ -1122,5 +1189,47 @@ impl LunaSession {
             self.sleep();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn luna_authenticate_empty_chain_errors() {
+        // LunaSession does not implement Debug (reqwest Client), so we cannot
+        // call .unwrap_err() — that would require the Ok type to be Debug.
+        // Use a match instead; the panic arm avoids {:?} on the Ok variant.
+        match LunaSession::authenticate(&[], 0) {
+            Err(LunaError::FormTokensNotFound(_)) => {}
+            Err(other) => panic!("expected FormTokensNotFound, got {other:?}"),
+            Ok(_) => panic!("expected Err(FormTokensNotFound), got Ok"),
+        }
+    }
+
+    #[test]
+    fn luna_auth_failure_classification() {
+        assert!(LunaError::FormTokensNotFound("/x".into()).is_auth_failure());
+        // Not credential problems:
+        assert!(!LunaError::MissingUniwheel.is_auth_failure());
+        assert!(!LunaError::PhenomIdNotFound.is_auth_failure());
+        assert!(!LunaError::InvalidCoordinate.is_auth_failure());
+    }
+
+    #[test]
+    #[ignore = "requires LUNA_TOKEN and network"]
+    fn probe_live_smoke() {
+        let Ok(token) = std::env::var("LUNA_TOKEN") else {
+            eprintln!("LUNA_TOKEN unset — skipping live probe");
+            return;
+        };
+        let Ok(session) = LunaSession::new(&token, 0) else {
+            eprintln!("client build failed — skipping");
+            return;
+        };
+        // A present-but-stale token surfaces as an auth failure, which is a valid
+        // outcome here; only assert it does not panic.
+        let _ = session.probe();
     }
 }

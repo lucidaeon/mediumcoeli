@@ -1,15 +1,19 @@
 [package]
 name = "pericynthion"
-version = "0.2.0"
-description = "Astrological ephemeris computation library. Pure Rust NASA JPL DE441 reader."
-keywords = ["astrology", "chart", "natal", "ephemeris"]
-categories = ["algorithms", "mathematics"]
+version = "0.3.0"
+description = "Astrological ephemeris computation library — pure-Rust NASA JPL DE441 reader"
+keywords = ["astrology", "chart", "de441", "ephemeris", "natal"]
+categories = ["algorithms", "date-and-time", "mathematics", "science"]
 edition.workspace = true
 rust-version.workspace = true
 license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# Allowlist of files to publish. New files never leak by accident; tests/
+# (incl. the large horizons golden fixtures) and dev artifacts are excluded.
+# Cargo always also packs Cargo.toml and the README.
+include = ["src/**", "README.md"]
 
 [lib]
 name = "pericynthion"
@@ -23,11 +27,15 @@ serde = ["dep:serde"]
 # Compiled and tested only under this flag. Each system graduates out of the
 # gate when refchart oracle data is captured (Alcabitius, Morinus promoted).
 noref-houses = []
+# JZOD chart export: maps ComputedChart → jzod::Chart. Optional so that
+# the numeric core can be compiled without the serialization dependency.
+jzod = ["dep:jzod"]
 
 [dependencies]
 thiserror.workspace = true
 memmap2.workspace = true
 serde = { workspace = true, optional = true }
+jzod = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true

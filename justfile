@@ -60,19 +60,42 @@ fmt:
 fmt-check:
 	cargo fmt --all -- --check
 
+# Build docs with broken intra-doc links as hard errors (or one CRATE).
+# docs.rs builds permissively and ships dead links as-is — this gate catches
+# them before publish.
+[group('qa')]
+doc CRATE='':
+	RUSTDOCFLAGS="-D warnings" cargo doc {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }} --no-deps --all-features
+
 # ── distribution ──────────────────────────────────────────────────────────────
 
-# Dry-run `cargo publish` for each crate in dependency order (or pass one CRATE).
+# Emit workspace crate names in publish-safe dependency order.
 [group('dist')]
-publish CRATE='':
+publish-order:
 	#!/usr/bin/env bash
 	set -euo pipefail
-	# Dependency order: jzod → pericynthion → astrogram → starcat → blackmoon.
-	crates=( jzod pericynthion astrogram starcat blackmoon )
-	[[ -n "{{CRATE}}" ]] && crates=( "{{CRATE}}" )
-	for crate in "${crates[@]}"; do
-	    echo ">>> cargo publish --dry-run -p $crate"
-	    cargo publish --dry-run -p "$crate"
+	members=$(for f in crates/*/Cargo.toml; do
+	    awk '/^\[package\]/{p=1} p && /^name = /{split($0,a,"\""); print a[2]; exit}' "$f"
+	done)
+	for crate in $members; do
+	    grep -E 'workspace = true' "crates/$crate/Cargo.toml" \
+	        | grep -oE '^[a-zA-Z0-9_-]+' \
+	        | grep -Fxf <(printf '%s\n' $members) \
+	        | sed "s/.*/& $crate/" \
+	        || true
+	done | tsort
+
+# Publish each crate in dependency order. DRY=--dry-run by default; pass DRY='' to publish for real.
+[group('dist')]
+publish DRY='--dry-run':
+	#!/usr/bin/env bash
+	set -euo pipefail
+	# Preflight: fail before any crate ships if docs have broken links.
+	# docs.rs builds permissively, so this is the last gate before they go public.
+	just doc
+	for crate in $(just publish-order); do
+	    echo ">>> cargo publish {{DRY}} -p $crate"
+	    cargo publish {{DRY}} -p "$crate"
 	done
 
 # ── test corpora ──────────────────────────────────────────────────────────────

@@ -1,15 +1,18 @@
 [package]
 name = "starcat"
-version = "0.2.0"
-description = "Command-line astrological ephemeris: Compute Natal Charts"
+version = "0.3.0"
+description = "Command-line astrological ephemeris and natal-chart calculator built on pericynthion"
 keywords = ["astrology", "divination", "ephemeris"]
-categories = ["command-line-utilities"]
+categories = ["command-line-utilities", "science"]
 edition.workspace = true
 rust-version.workspace = true
 license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# Allowlist of files to publish (tests/ and dev artifacts excluded). Cargo
+# always also packs Cargo.toml and the README.
+include = ["src/**", "README.md"]
 
 [[bin]]
 name = "starcat"
@@ -26,7 +29,7 @@ page = ["dep:tabled"]
 noref-houses = ["pericynthion/noref-houses"]
 
 [dependencies]
-pericynthion = { workspace = true, features = ["serde"] }
+pericynthion = { workspace = true, features = ["serde", "jzod"] }
 jzod = { workspace = true }
 clap.workspace = true
 clap_complete.workspace = true

@@ -4,6 +4,7 @@
 
 use crate::capability::ChartField;
 use crate::chart::Chart;
+use std::collections::HashSet;
 
 /// How a single field fared across a write→readback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,6 +242,48 @@ pub fn diff(
     .collect()
 }
 
+/// Temporal identity of a chart: `(year, month, day, hour, minute, second)`.
+///
+/// Birth datetime only — name is intentionally excluded (it is a field we
+/// report changes to, so it must not gate the source↔landed pairing).
+#[must_use]
+pub fn temporal_key(c: &Chart) -> (i16, u8, u8, u8, u8, u8) {
+    (c.year, c.month, c.day, c.hour, c.minute, c.second)
+}
+
+/// Return `true` if two or more charts share an exact birth datetime (temporal
+/// key), making readback pairing among that group best-effort (input order).
+#[must_use]
+pub fn has_tied_datetimes(charts: &[Chart]) -> bool {
+    let mut seen = HashSet::new();
+    charts.iter().any(|c| !seen.insert(temporal_key(c)))
+}
+
+/// Pair each source chart to the landed chart sharing its temporal key.
+///
+/// Returns, per source (in order), the index into `landed` it matched, or
+/// `None` if unmatched (creation failed / skipped as a pre-existing duplicate).
+/// Each landed chart is consumed once; tied datetimes pair in input order.
+#[must_use]
+pub fn pair_landed(sources: &[Chart], landed: &[Chart]) -> Vec<Option<usize>> {
+    let mut used = vec![false; landed.len()];
+    sources
+        .iter()
+        .map(|s| {
+            let key = temporal_key(s);
+            let found = landed
+                .iter()
+                .enumerate()
+                .find(|(i, l)| !used[*i] && temporal_key(l) == key)
+                .map(|(i, _)| i);
+            if let Some(i) = found {
+                used[i] = true;
+            }
+            found
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,5 +444,70 @@ mod tests {
         let m = diff(&src, &landed, &[]);
         assert_eq!(find(&m, "sub-charts").from, "1 sub-chart");
         assert_eq!(find(&m, "sub-charts").status, FieldStatus::Dropped);
+    }
+
+    fn mk_chart(name: &str, day: u8) -> Chart {
+        Chart {
+            name: name.into(),
+            secondary_name: None,
+            city: Some("c".into()),
+            region: None,
+            longitude: Longitude::new(0.0).unwrap(),
+            latitude: Latitude::new(0.0).unwrap(),
+            year: 2000,
+            month: 1,
+            day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            tz_offset_hours: 0.0,
+            tz_abbreviation: None,
+            is_lmt: false,
+            event_type: EventType::Unspecified,
+            source_rating: None,
+            house_system: HouseSystem::Placidus,
+            zodiac: Zodiac::Tropical,
+            coordinate_system: CoordinateSystem::Geocentric,
+            sub_charts: vec![],
+            notes: None,
+        }
+    }
+
+    #[test]
+    fn pairing_matches_by_datetime_ignoring_name() {
+        let sources = vec![mk_chart("Source A", 1), mk_chart("Source B", 2)];
+        // Landed: renamed + reordered.
+        let landed = vec![mk_chart("Renamed B", 2), mk_chart("Renamed A", 1)];
+        let pairing = super::pair_landed(&sources, &landed);
+        assert_eq!(pairing, vec![Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn pairing_reports_unmatched_as_none() {
+        let sources = vec![mk_chart("x", 1), mk_chart("x", 2)];
+        let landed = vec![mk_chart("x", 1)]; // chart 2 failed to create
+        assert_eq!(super::pair_landed(&sources, &landed), vec![Some(0), None]);
+    }
+
+    #[test]
+    fn pairing_tied_datetimes_consume_in_order() {
+        let sources = vec![mk_chart("x", 1), mk_chart("x", 1)];
+        let landed = vec![mk_chart("x", 1), mk_chart("x", 1)];
+        assert_eq!(
+            super::pair_landed(&sources, &landed),
+            vec![Some(0), Some(1)]
+        );
+    }
+
+    #[test]
+    fn has_tied_datetimes_detects_shared_birth_moment() {
+        assert!(!super::has_tied_datetimes(&[
+            mk_chart("A", 1),
+            mk_chart("B", 2)
+        ]));
+        assert!(super::has_tied_datetimes(&[
+            mk_chart("A", 1),
+            mk_chart("B", 1)
+        ]));
     }
 }

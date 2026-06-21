@@ -1,24 +1,33 @@
 [package]
 name = "astrogram"
-version = "0.1.3"
-description = "Astrology data-format conversion library."
+version = "0.2.0"
+description = "Astrology data-format conversion library"
 keywords = ["astrology", "chart", "natal", "sfcht"]
-categories = ["data-structures", "encoding", "parser-implementations"]
+categories = ["data-structures", "date-and-time", "encoding", "parser-implementations"]
 edition.workspace = true
 rust-version.workspace = true
 license = "CC0-1.0"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
+# Allowlist of files to publish (tests/ and dev artifacts excluded). Cargo
+# always also packs Cargo.toml and the README.
+include = ["src/**", "README.md"]
 
 [lib]
 name = "astrogram"
 
 [features]
 default = []
+## Enables [`astrogram::cookie_import`]: provider→domain mapping and
+## cookie→session glue backed by the `wristband` crate.
+## A GUI built on `astrogram` (without `blackmoon`) can use this feature
+## to import the user's own browser session cookies and build a provider session.
+cookie-import = ["dep:wristband"]
 
 [dependencies]
 jzod = { workspace = true }
+wristband = { workspace = true, optional = true }
 thiserror.workspace = true
 encoding_rs.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -28,3 +37,5 @@ scraper.workspace = true
 reqwest = { workspace = true }
 
 [dev-dependencies]
+# Enable Cookie::for_test in cookie_import unit tests
+wristband = { workspace = true, features = ["test-support"] }

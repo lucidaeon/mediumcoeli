@@ -13,6 +13,9 @@ be up-to-date for the correct version.
 
 Run `cargo path NAME` from inside a given crate directory to find the source directory for a dependency.
 
+Blackmoon and Starcat are thin CLI wrappers to the libraries they leverage. Do not put anything in
+the CLI tools that would have to be repeated by a GUI tool using the same libraries. 
+
 # Definitions
 
 Accurate: Documentation is a promise to the world. It needs to reflect the reality of the code base.
@@ -106,6 +109,7 @@ Credentials for web targets are read from env vars matching the slug (`ASTROTHEO
 | `astrogram` | Chart format conversion library |
 | `blackmoon` | CLI — reads any format, merges, writes any format; wraps `astrogram` |
 | `jzod` | JZOD v0.0.0 typed model — single source of truth for the chart interchange format; `astrogram` and `starcat` build and serialize through it |
+| `wristband` | Consent-gated, domain-scoped reader for the user's own browser session cookies; structural no-harvester posture — see `crates/wristband/SECURITY.md` |
 
 # astrogram architecture
 

@@ -47,6 +47,16 @@ pub mod astrotheoros;
 pub mod capability;
 pub mod chart;
 pub mod consolidate;
+/// Format-agnostic bytes dispatch: [`convert::read_bytes`] / [`convert::write_bytes`].
+pub mod convert;
+/// Cookie-import facade (requires the `cookie-import` Cargo feature).
+///
+/// Provides `import_credential` — a closed facade over the `wristband`
+/// crate that maps web providers to their session cookies and extracts the
+/// credential material to seed a fall-through auth chain.  Consumers depend
+/// only on `astrogram`; the `wristband` crate is never named directly.
+#[cfg(feature = "cookie-import")]
+pub mod cookie_import;
 pub mod decision_log;
 pub mod error;
 pub mod format;
@@ -61,4 +71,5 @@ pub mod sfcht;
 mod test_support;
 pub mod transcript;
 pub mod util;
+pub mod web_auth;
 pub mod zeus;

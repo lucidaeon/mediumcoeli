@@ -8,7 +8,7 @@
 //! - `zodiac` — object `{ "name": "tropical" }` per OQ-4
 //! - `gender` — "m"/"f"/"a" from EventType; absent for entity charts
 //! - `placements.bodies` — empty; blackmoon carries no ephemeris data
-//! - `ephemeris.source` — "blackmoon/<version>"
+//! - `ephemeris.source` — `"blackmoon/<version>"`
 //! - `uid` — deterministic from birth data (stable across repeated exports)
 
 use crate::capability::{CapabilitySet, ChartField};

@@ -58,6 +58,58 @@ pub enum AstrocomError {
     AafParse(String),
 }
 
+/// A single astro.com credential source for the fall-through chain.
+///
+/// Canonical order is `Cookie` → `Login`. A `Cookie` authenticates **reads
+/// only**; delete requires the account password (see
+/// [`AstrocomSession::from_cid`] and [`AstrocomSession::delete_charts`]).
+#[derive(Debug)]
+pub enum AstrocomCredential {
+    /// A `cid` cookie value (from `--astrocom-token` or a browser import).
+    Cookie(String),
+    /// Account email + password for a full login (also enables delete).
+    Login {
+        /// Account email.
+        email: String,
+        /// Account password.
+        password: String,
+    },
+}
+
+/// Outcome of [`AstrocomSession::authenticate`].
+pub struct AstrocomAuth {
+    /// The read-capable session that authenticated.
+    pub session: AstrocomSession,
+    /// Index in the chain of the credential that authenticated.
+    pub source: usize,
+    /// Login credentials present anywhere in the chain, retained for the
+    /// delete path (a `cid`-cookie session cannot delete). `None` when the
+    /// chain held no `Login` credential.
+    pub login: Option<(String, String)>,
+}
+
+impl AstrocomError {
+    /// True when this error means the credential was rejected and the caller
+    /// should fall through to the next credential in the chain.
+    ///
+    /// Stale-cookie sentinels count: `AafNotFound` ("session cookie may be
+    /// invalid") and `UnidTokenNotFound` ("session cookie may be expired")
+    /// both mean the `cid` cookie no longer authenticates. `LoginFailed`
+    /// means rejected credentials. HTTP 401/403 is delegated to
+    /// [`crate::web_auth::is_unauthorized`].
+    #[must_use]
+    pub fn is_auth_failure(&self) -> bool {
+        match self {
+            Self::Http(e) => crate::web_auth::is_unauthorized(e),
+            Self::LoginFailed(_) | Self::AafNotFound | Self::UnidTokenNotFound => true,
+            Self::HttpClientBuild(_)
+            | Self::NhorNotFound
+            | Self::DeleteVerifyFailed(_)
+            | Self::AafParse(_) => false,
+        }
+    }
+}
+
 /// Authenticated HTTP session for an astro.com account.
 pub struct AstrocomSession {
     client: Client,
@@ -93,6 +145,14 @@ impl AstrocomSession {
     }
 
     /// Build a session from a known `cid` cookie value.
+    ///
+    /// The `cid` cookie authenticates **reads** (listing and fetching charts).
+    /// It is *not* sufficient for [`delete_charts`](Self::delete_charts):
+    /// astro.com re-submits the account email and password in the delete POST
+    /// body (see [`delete_payload`]), so a cid-only session cannot delete.
+    /// Callers that need delete/consolidate must additionally supply the
+    /// account password — a cookie-import path should fall through to
+    /// [`login`](Self::login) for those operations.
     ///
     /// # Errors
     /// - [`AstrocomError::HttpClientBuild`] if the `cid` value produces an invalid
@@ -173,6 +233,83 @@ impl AstrocomSession {
 
     fn get_text(&self, url: &str) -> Result<String, AstrocomError> {
         Ok(self.client.get(url).send()?.error_for_status()?.text()?)
+    }
+
+    /// Cheap authenticated probe: fetch the chart-listing page and confirm the
+    /// `unid_token` is present.
+    ///
+    /// A stale `cid` cookie renders the listing without the token →
+    /// [`AstrocomError::UnidTokenNotFound`], which `is_auth_failure` treats as a
+    /// fall-through signal. Note this probe verifies **read** capability only;
+    /// delete additionally needs the account password (see [`Self::from_cid`]).
+    ///
+    /// # Errors
+    /// - [`AstrocomError::Http`] on network failure.
+    /// - [`AstrocomError::UnidTokenNotFound`] when the cookie no longer reads.
+    pub fn probe(&self) -> Result<(), AstrocomError> {
+        let html = self.get_text(&format!("{AWD_URL}?lang=e"))?;
+        extract_unid_token(&html)
+            .map(|_| ())
+            .ok_or(AstrocomError::UnidTokenNotFound)
+    }
+
+    /// Extract the first `Login` credential's `(email, password)` from a chain,
+    /// for the delete path. Independent of which credential authenticates reads.
+    #[must_use]
+    pub fn login_from_chain(chain: &[AstrocomCredential]) -> Option<(String, String)> {
+        chain.iter().find_map(|c| match c {
+            AstrocomCredential::Login { email, password } => {
+                Some((email.clone(), password.clone()))
+            }
+            AstrocomCredential::Cookie(_) => None,
+        })
+    }
+
+    /// Authenticate against an ordered chain, falling through on auth failure.
+    ///
+    /// Returns an [`AstrocomAuth`] carrying the read-capable session, the index
+    /// of the credential that authenticated, and any login creds found in the
+    /// chain (for the delete path — see [`Self::delete_charts`]). Fall-through
+    /// happens only on [`AstrocomError::is_auth_failure`].
+    ///
+    /// # Errors
+    /// - The last auth failure if every credential is rejected.
+    /// - The first non-auth error encountered.
+    /// - [`AstrocomError::LoginFailed`] if `chain` is empty.
+    pub fn authenticate(
+        chain: &[AstrocomCredential],
+        delay_ms: u64,
+    ) -> Result<AstrocomAuth, AstrocomError> {
+        let login = Self::login_from_chain(chain);
+        let attempts: Vec<_> = chain
+            .iter()
+            .map(|cred| {
+                move || -> Result<Self, AstrocomError> {
+                    let session = match cred {
+                        AstrocomCredential::Cookie(cid) => Self::from_cid(cid, delay_ms)?,
+                        AstrocomCredential::Login { email, password } => {
+                            Self::login(email, password, delay_ms)?
+                        }
+                    };
+                    session.probe()?;
+                    Ok(session)
+                }
+            })
+            .collect();
+        let (session, source) =
+            crate::web_auth::try_chain(attempts, AstrocomError::is_auth_failure).map_err(|e| {
+                match e {
+                    crate::web_auth::ChainError::Empty => {
+                        AstrocomError::LoginFailed("no credentials supplied".to_string())
+                    }
+                    crate::web_auth::ChainError::AllFailed(inner) => inner,
+                }
+            })?;
+        Ok(AstrocomAuth {
+            session,
+            source,
+            login,
+        })
     }
 
     fn sleep(&self) {
@@ -362,6 +499,12 @@ impl AstrocomSession {
     }
 
     /// Delete charts by nhor ID.  Verifies deletion and errors if any remain.
+    ///
+    /// **Requires the account password.** Unlike reads, astro.com's delete
+    /// endpoint re-authenticates by re-submitting `email` + `pass` in the POST
+    /// body (see [`delete_payload`]); the `cid` session cookie alone is not
+    /// accepted. A session built via [`from_cid`](Self::from_cid) therefore
+    /// cannot delete unless the caller also threads through valid credentials.
     ///
     /// # Errors
     /// - [`AstrocomError::Http`] if any HTTP request fails.
@@ -715,5 +858,68 @@ fn split_name(name: &str) -> (String, String) {
         // No comma → single-word name (e.g. "Madonna") or compound event name
         // (e.g. "Lightning Strike"). astro.com requires sfnm non-empty; last is optional.
         (String::new(), name.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn astrocom_auth_failure_classification() {
+        assert!(AstrocomError::LoginFailed("x".into()).is_auth_failure());
+        assert!(AstrocomError::AafNotFound.is_auth_failure());
+        assert!(AstrocomError::UnidTokenNotFound.is_auth_failure());
+        // Not credential problems:
+        assert!(!AstrocomError::NhorNotFound.is_auth_failure());
+        assert!(!AstrocomError::DeleteVerifyFailed(vec![1]).is_auth_failure());
+        assert!(!AstrocomError::AafParse("bad".into()).is_auth_failure());
+    }
+
+    #[test]
+    fn astrocom_authenticate_empty_chain_errors() {
+        match AstrocomSession::authenticate(&[], 0) {
+            Err(AstrocomError::LoginFailed(_)) => {}
+            Err(e) => panic!("expected LoginFailed, got error: {e}"),
+            Ok(_) => panic!("expected Err(LoginFailed), got Ok"),
+        }
+    }
+
+    #[test]
+    fn astrocom_authenticate_captures_login_creds_for_delete() {
+        // Even when (in a live run) the cookie would win the read probe, the
+        // login creds present in the chain must be captured for the delete path.
+        // Here we assert the capture logic directly via the helper.
+        let chain = vec![
+            AstrocomCredential::Cookie("some-cid".into()),
+            AstrocomCredential::Login {
+                email: "a@b.com".into(),
+                password: "pw".into(),
+            },
+        ];
+        let login = AstrocomSession::login_from_chain(&chain);
+        assert_eq!(login, Some(("a@b.com".into(), "pw".into())));
+
+        let cookie_only = vec![AstrocomCredential::Cookie("x".into())];
+        assert_eq!(AstrocomSession::login_from_chain(&cookie_only), None);
+    }
+
+    #[test]
+    #[ignore = "requires ASTROCOM_USER/PASS and network"]
+    fn probe_live_smoke() {
+        let (Ok(user), Ok(pass)) = (
+            std::env::var("ASTROCOM_USER"),
+            std::env::var("ASTROCOM_PASS"),
+        ) else {
+            eprintln!("ASTROCOM_USER/PASS unset — skipping live probe");
+            return;
+        };
+        let Ok(session) = AstrocomSession::login(&user, &pass, 0) else {
+            eprintln!("login failed (offline?) — skipping");
+            return;
+        };
+        session
+            .probe()
+            .expect("probe of a fresh login session should succeed");
     }
 }

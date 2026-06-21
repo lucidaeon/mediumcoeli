@@ -95,6 +95,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod body;
+pub mod chart;
 pub mod chebyshev;
 pub mod coords;
 pub mod ephemeris;
@@ -102,7 +103,15 @@ pub mod error;
 pub mod geo;
 pub mod houses;
 pub mod jpl;
+#[cfg(feature = "jzod")]
+pub mod jzod;
 pub mod lots;
 pub mod time;
 
+pub use chart::{
+    Angles, ChartRequest, ComputedBody, ComputedChart, CoordMode, LilithPoints, Lots, ModeRequest,
+    NodePoints, compute,
+};
 pub use coords::topocentric::ObserverLocation;
+#[cfg(feature = "jzod")]
+pub use jzod::{ChartBirth, house_for, to_jzod_chart};

@@ -5,7 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/2f1243d7a2b8d19365dd1ff6c59a11a80f070456...main), [astrogram/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.1.3), [blackmoon/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.1.3), [jzod/0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.1.0), [pericynthion/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.2.0), [starcat/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.2.0), 2026.06.19
+## [Unreleased]
+
+---
+
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/bc317a221d7e71cadae83816615ff5703c24a2dd...main), [astrogram/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.0), [blackmoon/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.0), [jzod/0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.1.1), [pericynthion/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.3.0), [starcat/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.3.0), [wristband/0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.0), 2026.06.20
+
+### Added — `wristband` (new crate)
+
+- **Consent-gated, domain-scoped reader for the user's own browser session cookies.** It exists so `astrogram`/`blackmoon` can authenticate to web targets with a cookie the user already holds, without ever becoming a general cookie harvester. The consent and scoping invariants are enshrined in `crates/wristband/SECURITY.md` and proven by a no-network conformance suite.
+- **`Domain` is registrable-only** (validated via the public-suffix list, `psl`): no zone/TLD globbing, malformed hostnames rejected eagerly in `Domain::explicit`. Cookies are filtered to the requested registrable domain *before* any decryption — the gate is the only path to plaintext (invariants INV-2/3/6).
+- **Firefox** end-to-end: plaintext `cookies.sqlite` reader with `userContextId` container scoping (anchored match — container `2` never matches `20`).
+- **Chromium family** (Chrome, Edge, Brave, Opera, …) across all three desktop OSes:
+  - macOS — Keychain key + PBKDF2-SHA1 (1003 iterations) + AES-128-CBC, with an independent KAT for the key derivation.
+  - Linux — desktop-environment detection, keyring dispatch, PBKDF2 (1 iteration) + AES-128-CBC; unknown environments fall back to `BASICTEXT`.
+  - Windows — DPAPI via PowerShell + AES-256-GCM (v10), with **no `unsafe`**.
+  - Shared v10/v11 framing, meta-version hash strip, and per-row read.
+- **Safari** — `binarycookies` parser plus Safari 17+ per-profile `WebsiteDataStore` discovery; file-derived page/cookie counts are capped to refuse pathological allocations.
+- **All-installed-stores aggregation** (the `None` selector) reads every discovered profile and picks across them; copy-before-read SQLite access copies `-wal`/`-shm` sidecars (INV-5) so a live browser lock never blocks a read.
+
+### Added — `astrogram`
+
+- **`web_auth::try_chain` credential fall-through combinator** with HTTP 401/403 detection: browser-cookie, token, and login sources are attempted in order, advancing only when a source is rejected as stale. Each web session (luna, astrocom, astrotheoros) gains an `authenticate()` entry point and an authenticated `probe()`, and classifies auth failures through its own error enum. Replaces the previous cookie-*or*-login behaviour.
+- **`cookie-import` feature** (optional `dep:wristband`): provider→domain mapping and cookie→session glue, where `import_credential` yields chainable credential material. A GUI built on `astrogram` without `blackmoon` can import the user's own session cookies.
+- **`convert` module** — `read_bytes` / `write_bytes` format dispatch, the single byte↔`Chart` call sites a non-CLI consumer needs.
+- **`from_str_slug` parsers** for `HouseSystem` / `Zodiac` / `CoordinateSystem`; `temporal_key` / `has_tied_datetimes` / `pair_landed` moved into the `transcript` module.
+
+### Added — `pericynthion`
+
+- **`HouseSystem` registry enum** (`label` / `slug` / `compute`).
+- **`chart` module** — Angles, Lots, Node, and Lilith point computation, orchestrated by `ChartRequest` + `compute()` into a full `ComputedChart`. Nodes and Lilith are now computed for every geocentric/topocentric chart (the Ascendant gate was dropped).
+- **`jzod` feature** — `ComputedChart` → `jzod::Chart` mapping, optional so the numeric core compiles without the serialization dependency.
+
+### Added — `blackmoon`
+
+- **`--grant-cookie-access[=browser]`** — consent-by-grant cookie import with an upfront disclosure of which store won (invariant INV-4); **`--verbose`** additionally shows each store's `__session` expiry.
+- **Unified credential fall-through chain per web target**, wired to the new `astrogram` `authenticate()` entry points.
+
+### Changed
+
+- **`blackmoon` is now a thin wrapper** over `astrogram`'s `convert` / `transcript` / `chart` APIs, and **`starcat` is now a thin wrapper** over `pericynthion::chart` + `pericynthion::jzod` — no astronomical arithmetic or format logic remains in either binary. `starcat` also drops a redundant `--page` guard and a dead `lilith_mode` parameter.
+- **LMT `utc_offset` rounds at the minute level** in `pericynthion` (matches prior `starcat` behaviour).
+
+### Fixed — `astrotheoros`
+
+- Capture the `__client` cookie at login so JWT refresh authenticates; cookie-imported sessions seed `__client` and force a refresh; probe via `fetch_settings` rather than a forced token refresh. Cookie-imported astro.com sessions use `--astrocom-user`/`--pass` for delete (read is cookie-gated, delete is password-gated).
+
+### Documented
+
+- astro.com's read/write auth asymmetry: a `cid` cookie authenticates reads, but delete re-submits the account password (`AstrocomSession::from_cid` / `delete_charts` doc comments; astrogram & blackmoon READMEs).
+
+### Changed — workspace & packaging
+
+- `include` publish-allowlists added to every crate manifest (tests and dev artifacts excluded); crate metadata tidied (categories, descriptions, keywords); the workspace `license-file` was dropped in favour of the SPDX `license` only.
+- New `just doc` gate builds workspace docs with `RUSTDOCFLAGS="-D warnings"` and runs in the `just publish` preflight; all 13 rustdoc intra-doc-link warnings resolved to zero. Live cookie/astrotheoros tests skip cleanly when credentials/sessions are absent.
+
+---
+
+## [bc317a2](https://github.com/lucidaeon/mediumcoeli/compare/2f1243d7a2b8d19365dd1ff6c59a11a80f070456...bc317a221d7e71cadae83816615ff5703c24a2dd), [astrogram/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.1.3), [blackmoon/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.1.3), [jzod/0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.1.0), [pericynthion/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.2.0), [starcat/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.2.0), 2026.06.19
 
 ### Added — `pericynthion`
 

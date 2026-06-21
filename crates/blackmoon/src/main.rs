@@ -6,15 +6,16 @@
 #![allow(clippy::doc_markdown)]
 
 use anyhow::{Context, Result, bail};
-use astrogram::astrocom::AstrocomSession;
-use astrogram::astrotheoros::AstrotheorosSession;
+use astrogram::astrocom::{AstrocomCredential, AstrocomSession};
+use astrogram::astrotheoros::{AstrotheorosCredential, AstrotheorosSession};
+use astrogram::consolidate;
+use astrogram::cookie_import::Browser;
 use astrogram::format::{Format, Kind};
 use astrogram::luna::LunaSession;
 use astrogram::normalize::normalize_chart;
 use astrogram::util::{expand_now, utc_timestamp};
-use astrogram::{aaf, adbxml, consolidate, jzod, raw, sfcht, zeus};
 use clap::Parser;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +35,69 @@ fn parse_format(s: &str) -> Result<Target, String> {
             slugs.join(", ")
         )
     })
+}
+
+// ── cookie-import: browser value parser + grant-decision types ────────────────
+
+/// Parse `--grant-cookie-access[=<browser>]` into a `GrantArg`.
+///
+/// - `"all"` → `GrantArg::All` (enumerate all installed stores)
+/// - a browser name → `GrantArg::One(Browser::…)`
+/// - anything else → `Err` with the list of valid names
+fn parse_browser(s: &str) -> Result<GrantArg, String> {
+    match s {
+        "all" => Ok(GrantArg::All),
+        "chrome" => Ok(GrantArg::One(Browser::Chrome)),
+        "chromium" => Ok(GrantArg::One(Browser::Chromium)),
+        "brave" => Ok(GrantArg::One(Browser::Brave)),
+        "edge" => Ok(GrantArg::One(Browser::Edge)),
+        "opera" => Ok(GrantArg::One(Browser::Opera)),
+        "vivaldi" => Ok(GrantArg::One(Browser::Vivaldi)),
+        "whale" => Ok(GrantArg::One(Browser::Whale)),
+        "firefox" => Ok(GrantArg::One(Browser::Firefox)),
+        "safari" => Ok(GrantArg::One(Browser::Safari)),
+        other => Err(format!(
+            "unknown browser '{other}'; valid values: \
+             all, chrome, chromium, brave, edge, opera, vivaldi, whale, firefox, safari"
+        )),
+    }
+}
+
+/// Thin clap-level wrapper so clap's type system sees a single concrete type
+/// for `--grant-cookie-access[=<browser>]` rather than a doubly-nested `Option`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GrantArg {
+    /// `"all"` / bare flag — search every installed store.
+    All,
+    /// A specific browser slug.
+    One(Browser),
+}
+
+/// The consent decision derived from `--grant-cookie-access[=<browser>]`.
+///
+/// - `None` (flag absent) → `NoGrant` — cookies are never touched.
+/// - `Some(GrantArg::All)` (bare flag or `=all`) → `AllStores` — all installed stores.
+/// - `Some(GrantArg::One(b))` (specific browser) → `One(b)` — that browser only.
+#[derive(Debug, PartialEq)]
+enum GrantChoice {
+    /// Flag was absent — fall back to token/login auth.
+    NoGrant,
+    /// Bare `--grant-cookie-access` (or `=all`) — search all installed stores.
+    AllStores,
+    /// `--grant-cookie-access=<browser>` — restrict to one browser.
+    One(Browser),
+}
+
+/// Pure mapping from the clap field value to a `GrantChoice`.
+///
+/// `None` = flag absent (no cookie access); `Some(GrantArg::All)` = all
+/// stores; `Some(GrantArg::One(b))` = that specific browser.
+fn grant_choice(flag: &Option<GrantArg>) -> GrantChoice {
+    match flag {
+        None => GrantChoice::NoGrant,
+        Some(GrantArg::All) => GrantChoice::AllStores,
+        Some(GrantArg::One(b)) => GrantChoice::One(*b),
+    }
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -172,6 +236,21 @@ struct Cli {
     #[arg(long, short)]
     verbose: bool,
 
+    /// Import a session from a browser cookie store — the verb *grant* is the
+    /// explicit consent (INV-4).  Omit the value (bare flag) or pass `all` to
+    /// search all installed browsers; pass a browser name to restrict to one
+    /// (chrome, chromium, brave, edge, opera, vivaldi, whale, firefox, safari).
+    /// When present, blackmoon reads the provider's session cookie(s) from the
+    /// browser instead of requiring --{provider}-token or --{provider}-user/pass.
+    #[arg(long, value_name = "BROWSER", num_args = 0..=1, default_missing_value = "all",
+          value_parser = parse_browser)]
+    grant_cookie_access: Option<GrantArg>,
+
+    /// Browser profile name or path to use with --grant-cookie-access.
+    /// Defaults to the newest-modified store for the chosen browser.
+    #[arg(long, value_name = "NAME", requires = "grant_cookie_access")]
+    cookies_profile: Option<String>,
+
     /// Print a shell completion script to stdout.
     #[arg(long = "generate-completion", value_name = "SHELL", num_args = 0..=1, default_missing_value = "auto", hide = true)]
     generate_completion: Option<String>,
@@ -234,51 +313,6 @@ fn main() -> Result<()> {
     cmd_convert(&cli)
 }
 
-// ── fill helpers ─────────────────────────────────────────────────────────────
-
-fn parse_house(s: &str) -> Result<astrogram::chart::HouseSystem> {
-    use astrogram::chart::HouseSystem::*;
-    Ok(match s.to_ascii_lowercase().replace('_', "-").as_str() {
-        "placidus" => Placidus,
-        "koch" => Koch,
-        "campanus" => Campanus,
-        "regiomontanus" => Regiomontanus,
-        "porphyry" => Porphyry,
-        "equal" => Equal,
-        "whole-sign" | "whole" => WholeSign,
-        "alcabitius" => Alcabitius,
-        "topocentric" => Topocentric,
-        "meridian" => Meridian,
-        "morinus" => Morinus,
-        "zero-aries" | "zeroaries" => ZeroAries,
-        "solar-sign" | "solarsign" => SolarSign,
-        "hindu-bhava" | "hindubhava" => HinduBhava,
-        other => bail!("unknown house system '{other}'"),
-    })
-}
-
-fn parse_zodiac(s: &str) -> Result<astrogram::chart::Zodiac> {
-    use astrogram::chart::Zodiac::*;
-    Ok(match s.to_ascii_lowercase().as_str() {
-        "tropical" => Tropical,
-        "fagan-allen" | "faganallen" => FaganAllen,
-        "lahiri" => Lahiri,
-        "raman" => Raman,
-        "krishnamurti" => Krishnamurti,
-        "draconic" => Draconic,
-        other => bail!("unknown zodiac '{other}'"),
-    })
-}
-
-fn parse_locus(s: &str) -> Result<astrogram::chart::CoordinateSystem> {
-    use astrogram::chart::CoordinateSystem::*;
-    Ok(match s.to_ascii_lowercase().as_str() {
-        "geocentric" | "geo" => Geocentric,
-        "heliocentric" | "helio" => Heliocentric,
-        other => bail!("unknown locus '{other}' (expected geocentric|heliocentric)"),
-    })
-}
-
 /// Flag → TTY prompt (with suggested value) → error.
 /// `flag_suffix` is the exact flag name suffix (e.g. "house" for `--fill-house`).
 fn resolve_fill<T>(
@@ -338,7 +372,10 @@ fn apply_fills(
                 "house",
                 cli.fill_house.as_deref(),
                 "placidus",
-                parse_house,
+                |s| {
+                    astrogram::chart::HouseSystem::from_str_slug(s)
+                        .ok_or_else(|| anyhow::anyhow!("unknown house system '{s}'"))
+                },
                 sink,
             )?),
             ChartField::Zodiac => Fill::Zodiac(resolve_fill(
@@ -346,7 +383,10 @@ fn apply_fills(
                 "zodiac",
                 cli.fill_zodiac.as_deref(),
                 "tropical",
-                parse_zodiac,
+                |s| {
+                    astrogram::chart::Zodiac::from_str_slug(s)
+                        .ok_or_else(|| anyhow::anyhow!("unknown zodiac '{s}'"))
+                },
                 sink,
             )?),
             ChartField::CoordinateSystem => Fill::Locus(resolve_fill(
@@ -354,7 +394,11 @@ fn apply_fills(
                 "locus",
                 cli.fill_locus.as_deref(),
                 "geocentric",
-                parse_locus,
+                |s| {
+                    astrogram::chart::CoordinateSystem::from_str_slug(s).ok_or_else(|| {
+                        anyhow::anyhow!("unknown locus '{s}' (expected geocentric|heliocentric)")
+                    })
+                },
                 sink,
             )?),
             _ => continue, // only NON_OMITTABLE fields ever appear in `fills`
@@ -380,14 +424,275 @@ fn is_web_target(t: Target) -> bool {
     matches!(t.spec().kind, Kind::Web)
 }
 
+/// Which kind of credential occupies a chain position — drives the disclosure
+/// line so the user sees *which* source authenticated after a fall-through.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum SourceKind {
+    Cookie,
+    Token,
+    Login,
+}
+
+/// Human label for the chain position `idx` given the kinds present.
+fn source_label(kinds: &[SourceKind], idx: usize) -> &'static str {
+    match kinds.get(idx) {
+        Some(SourceKind::Cookie) => "browser cookie",
+        Some(SourceKind::Token) => "token",
+        Some(SourceKind::Login) => "login",
+        None => "unknown source",
+    }
+}
+
+/// Captured cookie-import disclosure, printed before authentication so the
+/// user sees which browser/profile the cookie came from (INV-4).
+struct CookieDisclosure {
+    domain: String,
+    found_in: Vec<(Browser, String, i64)>,
+    winner: String,
+}
+
+impl CookieDisclosure {
+    fn print(&self, verbose: bool) {
+        let labels: Vec<String> = self
+            .found_in
+            .iter()
+            .map(|(b, p, _)| store_label(*b, p))
+            .collect();
+        let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+        if self.found_in.len() > 1 {
+            eprintln!(
+                "found {} logged in on {}. Using {} as it is the most recent.",
+                self.domain,
+                oxford_join(&label_refs),
+                self.winner,
+            );
+        } else {
+            eprintln!(
+                "found {} logged in on {}.",
+                self.domain,
+                oxford_join(&label_refs)
+            );
+        }
+        if verbose {
+            let now = now_secs() as i64;
+            for (b, p, freshness) in &self.found_in {
+                let label = store_label(*b, p);
+                if *freshness > 1_000_000_000 {
+                    let delta = freshness - now;
+                    let when = if delta >= 0 {
+                        format!("session expires in {delta}s")
+                    } else {
+                        format!("session expired {}s ago (stale on-disk snapshot)", -delta)
+                    };
+                    eprintln!("  {label}: {when}");
+                } else {
+                    eprintln!("  {label}: session present (no expiry signal)");
+                }
+            }
+        }
+    }
+}
+
+/// Announce which credential source authenticated, naming a fall-through when
+/// the chain advanced past earlier sources.
+fn announce_source(kinds: &[SourceKind], used: usize) {
+    let label = source_label(kinds, used);
+    if used > 0 {
+        eprintln!("authenticated via {label} (earlier source(s) were stale).");
+    } else {
+        eprintln!("authenticated via {label}.");
+    }
+}
+
 fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
+    use astrogram::cookie_import;
+
+    let choice = grant_choice(&cli.grant_cookie_access);
+    let want_cookie = choice != GrantChoice::NoGrant;
+    let browser: Option<Browser> = match &choice {
+        GrantChoice::AllStores | GrantChoice::NoGrant => None,
+        GrantChoice::One(b) => Some(*b),
+    };
+
     match target {
+        Target::Astrotheoros => {
+            let mut kinds: Vec<SourceKind> = Vec::new();
+            let mut chain: Vec<AstrotheorosCredential> = Vec::new();
+            let mut disclosure: Option<CookieDisclosure> = None;
+
+            if want_cookie {
+                match cookie_import::import_credential(
+                    Format::Astrotheoros,
+                    browser,
+                    cli.cookies_profile.as_deref(),
+                ) {
+                    Ok(out) => {
+                        if let cookie_import::ProviderCredential::Astrotheoros(c) = out.credential {
+                            disclosure = Some(CookieDisclosure {
+                                domain: out.domain.clone(),
+                                found_in: out.found_in.clone(),
+                                winner: store_label(out.browser, &out.profile),
+                            });
+                            kinds.push(SourceKind::Cookie);
+                            chain.push(c);
+                        }
+                    }
+                    Err(e) => eprintln!(
+                        "note: no usable astrotheoros.com cookie ({e}); trying other sources"
+                    ),
+                }
+            }
+            if let Some(token) = cli.astrotheoros_token.as_deref() {
+                let parts: Vec<&str> = token.splitn(3, ':').collect();
+                if parts.len() != 3 {
+                    bail!("--astrotheoros-token must be 'jwt:session_id:client_uat'");
+                }
+                kinds.push(SourceKind::Token);
+                chain.push(AstrotheorosCredential::Token {
+                    jwt: parts[0].to_string(),
+                    session_id: parts[1].to_string(),
+                    client_uat: parts[2].to_string(),
+                });
+            }
+            match (&cli.astrotheoros_user, &cli.astrotheoros_pass) {
+                (Some(u), Some(p)) => {
+                    kinds.push(SourceKind::Login);
+                    chain.push(AstrotheorosCredential::Login {
+                        email: u.clone(),
+                        password: p.clone(),
+                    });
+                }
+                (Some(_), None) => bail!(
+                    "--astrotheoros-pass (or ASTROTHEOROS_PASS) required with --astrotheoros-user"
+                ),
+                (None, Some(_)) => bail!(
+                    "--astrotheoros-user (or ASTROTHEOROS_USER) required with --astrotheoros-pass"
+                ),
+                (None, None) => {}
+            }
+            if chain.is_empty() {
+                bail!(
+                    "no astrotheoros.com credentials: pass --grant-cookie-access, \
+                     --astrotheoros-token, or --astrotheoros-user/--pass"
+                );
+            }
+            if let Some(d) = &disclosure {
+                d.print(cli.verbose);
+            }
+            let (session, used) = AstrotheorosSession::authenticate(&chain, cli.delay)
+                .context("astrotheoros.com authentication failed for every source")?;
+            announce_source(&kinds, used);
+            Ok(WebProvider::Astrotheoros {
+                session,
+                uuid_map: std::collections::HashMap::new(),
+            })
+        }
+
+        Target::Astrocom => {
+            let mut kinds: Vec<SourceKind> = Vec::new();
+            let mut chain: Vec<AstrocomCredential> = Vec::new();
+            let mut disclosure: Option<CookieDisclosure> = None;
+
+            if want_cookie {
+                match cookie_import::import_credential(
+                    Format::Astrocom,
+                    browser,
+                    cli.cookies_profile.as_deref(),
+                ) {
+                    Ok(out) => {
+                        if let cookie_import::ProviderCredential::Astrocom(c) = out.credential {
+                            disclosure = Some(CookieDisclosure {
+                                domain: out.domain.clone(),
+                                found_in: out.found_in.clone(),
+                                winner: store_label(out.browser, &out.profile),
+                            });
+                            kinds.push(SourceKind::Cookie);
+                            chain.push(c);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("note: no usable astro.com cookie ({e}); trying other sources")
+                    }
+                }
+            }
+            if let Some(cid) = cli.astrocom_token.as_deref() {
+                kinds.push(SourceKind::Token);
+                chain.push(AstrocomCredential::Cookie(cid.to_string()));
+            }
+            match (&cli.astrocom_user, &cli.astrocom_pass) {
+                (Some(u), Some(p)) => {
+                    kinds.push(SourceKind::Login);
+                    chain.push(AstrocomCredential::Login {
+                        email: u.clone(),
+                        password: p.clone(),
+                    });
+                }
+                (Some(_), None) => {
+                    bail!("--astrocom-pass (or ASTROCOM_PASS) required with --astrocom-user")
+                }
+                (None, Some(_)) => {
+                    bail!("--astrocom-user (or ASTROCOM_USER) required with --astrocom-pass")
+                }
+                (None, None) => {}
+            }
+            if chain.is_empty() {
+                bail!(
+                    "no astro.com credentials: pass --grant-cookie-access, \
+                     --astrocom-token, or --astrocom-user/--pass"
+                );
+            }
+            if let Some(d) = &disclosure {
+                d.print(cli.verbose);
+            }
+            let auth = AstrocomSession::authenticate(&chain, cli.delay)
+                .context("astro.com authentication failed for every source")?;
+            announce_source(&kinds, auth.source);
+            Ok(WebProvider::Astrocom {
+                session: auth.session,
+                creds: auth.login,
+                nhor_id_map: std::collections::HashMap::new(),
+            })
+        }
+
         Target::Luna => {
-            let cookie = cli
-                .luna_token
-                .as_deref()
-                .context("--luna-token (or LUNA_TOKEN) is required when --from/--to luna")?;
-            let session = LunaSession::new(cookie, cli.delay).context("building LUNA session")?;
+            let mut kinds: Vec<SourceKind> = Vec::new();
+            let mut cookies: Vec<String> = Vec::new();
+            let mut disclosure: Option<CookieDisclosure> = None;
+
+            if want_cookie {
+                match cookie_import::import_credential(
+                    Format::Luna,
+                    browser,
+                    cli.cookies_profile.as_deref(),
+                ) {
+                    Ok(out) => {
+                        if let cookie_import::ProviderCredential::Luna(tok) = out.credential {
+                            disclosure = Some(CookieDisclosure {
+                                domain: out.domain.clone(),
+                                found_in: out.found_in.clone(),
+                                winner: store_label(out.browser, &out.profile),
+                            });
+                            kinds.push(SourceKind::Cookie);
+                            cookies.push(tok);
+                        }
+                    }
+                    Err(e) => eprintln!("note: no usable LUNA cookie ({e}); trying other sources"),
+                }
+            }
+            if let Some(token) = cli.luna_token.as_deref() {
+                kinds.push(SourceKind::Token);
+                cookies.push(token.to_string());
+            }
+            if cookies.is_empty() {
+                bail!("no LUNA credentials: pass --grant-cookie-access or --luna-token");
+            }
+            if let Some(d) = &disclosure {
+                d.print(cli.verbose);
+            }
+            let refs: Vec<&str> = cookies.iter().map(String::as_str).collect();
+            let (session, used) = LunaSession::authenticate(&refs, cli.delay)
+                .context("LUNA authentication failed for every source")?;
+            announce_source(&kinds, used);
             Ok(WebProvider::Luna {
                 session,
                 resume_from: cli.luna_resume_from.clone(),
@@ -396,75 +701,29 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                 phenom_ids: Vec::new(),
             })
         }
-        Target::Astrocom => match (&cli.astrocom_user, &cli.astrocom_pass) {
-            (Some(user), Some(pass)) => {
-                println!("astro.com: logging in as {user}…");
-                let session = AstrocomSession::login(user, pass, cli.delay)
-                    .context("astro.com login failed")?;
-                Ok(WebProvider::Astrocom {
-                    session,
-                    creds: Some((user.clone(), pass.clone())),
-                    nhor_id_map: std::collections::HashMap::new(),
-                })
-            }
-            (Some(_), None) => {
-                bail!("--astrocom-pass (or ASTROCOM_PASS) required with --astrocom-user")
-            }
-            (None, Some(_)) => {
-                bail!("--astrocom-user (or ASTROCOM_USER) required with --astrocom-pass")
-            }
-            (None, None) => {
-                let cid = cli.astrocom_token.as_deref().context(
-                    "--astrocom-token (or ASTROCOM_TOKEN) is required when --from/--to astrocom",
-                )?;
-                let session = AstrocomSession::from_cid(cid, cli.delay)
-                    .context("building astro.com session")?;
-                Ok(WebProvider::Astrocom {
-                    session,
-                    creds: None,
-                    nhor_id_map: std::collections::HashMap::new(),
-                })
-            }
-        },
-        Target::Astrotheoros => match (&cli.astrotheoros_user, &cli.astrotheoros_pass) {
-            (Some(user), Some(pass)) => {
-                println!("astrotheoros.com: logging in as {user}…");
-                let session = AstrotheorosSession::login(user, pass, cli.delay)
-                    .context("astrotheoros.com login failed")?;
-                Ok(WebProvider::Astrotheoros {
-                    session,
-                    uuid_map: std::collections::HashMap::new(),
-                })
-            }
-            (Some(_), None) => {
-                bail!(
-                    "--astrotheoros-pass (or ASTROTHEOROS_PASS) required with --astrotheoros-user"
-                )
-            }
-            (None, Some(_)) => {
-                bail!(
-                    "--astrotheoros-user (or ASTROTHEOROS_USER) required with --astrotheoros-pass"
-                )
-            }
-            (None, None) => {
-                let token = cli.astrotheoros_token.as_deref().context(
-                    "--astrotheoros-user/--astrotheoros-pass (or ASTROTHEOROS_USER/PASS) \
-                     required when --from/--to astrotheoros",
-                )?;
-                let parts: Vec<&str> = token.splitn(3, ':').collect();
-                if parts.len() != 3 {
-                    bail!("--astrotheoros-token must be 'jwt:session_id:client_uat'");
-                }
-                let session =
-                    AstrotheorosSession::from_jwt(parts[0], parts[1], parts[2], cli.delay)
-                        .context("building astrotheoros.com session")?;
-                Ok(WebProvider::Astrotheoros {
-                    session,
-                    uuid_map: std::collections::HashMap::new(),
-                })
-            }
-        },
+
         other => unreachable!("resolve_provider called for non-web target {other:?}"),
+    }
+}
+
+/// Display label for a (browser, profile) store: just the browser's proper
+/// name for a default profile, else `"Browser (profile)"`.
+fn store_label(browser: Browser, profile: &str) -> String {
+    if profile.is_empty() || profile.eq_ignore_ascii_case("default") {
+        browser.display_name().to_string()
+    } else {
+        format!("{} ({profile})", browser.display_name())
+    }
+}
+
+/// Join names with commas and a serial "and":
+/// `[a]` → `a`, `[a, b]` → `a and b`, `[a, b, c]` → `a, b, and c`.
+fn oxford_join(items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [a] => (*a).to_string(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }
 
@@ -954,30 +1213,24 @@ fn default_decision_log_path() -> PathBuf {
 // ── target I/O ────────────────────────────────────────────────────────────────
 
 fn read_file_target(path: &Path, target: Target) -> Result<Vec<astrogram::chart::Chart>> {
+    // Friendly messages for directions convert::read_bytes rejects as UnsupportedDirection.
     match target {
-        Target::Sfcht => {
-            let bytes = std::fs::read(path)?;
-            let (_, charts) = sfcht::parse_file(&bytes)?;
-            Ok(charts)
-        }
-        Target::Zeus => {
-            let text = std::fs::read_to_string(path)?;
-            Ok(zeus::parse_file(&text)?)
-        }
-        Target::Adb => {
-            let text = std::fs::read_to_string(path)?;
-            Ok(adbxml::parse_file(&text)?)
-        }
-        Target::Aaf => {
-            let text = std::fs::read_to_string(path)?;
-            Ok(aaf::parse_file(&text)?)
-        }
         Target::Luna => bail!("use --from luna rather than passing a file path"),
         Target::Astrocom => bail!("use --from astrocom rather than passing a file path"),
         Target::Astrotheoros => bail!("use --from astrotheoros rather than passing a file path"),
         Target::Json => bail!("JZOD (json) is a write-only format; reading is not supported"),
         Target::Raw => bail!("raw is a write-only format; reading is not supported"),
+        _ => {}
     }
+    let bytes = if path == Path::new("-") {
+        use std::io::Read as _;
+        let mut buf = Vec::new();
+        std::io::stdin().read_to_end(&mut buf)?;
+        buf
+    } else {
+        std::fs::read(path)?
+    };
+    astrogram::convert::read_bytes(target, &bytes).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Write bytes to a file or to stdout when `path` is `"-"`.
@@ -995,42 +1248,26 @@ fn write_file_target(
     target: Target,
     charts: &[astrogram::chart::Chart],
 ) -> Result<()> {
+    // Friendly messages for directions convert::write_bytes rejects as UnsupportedDirection.
     match target {
-        Target::Sfcht => {
-            // stdout mode: no existing file to read description from (None is fine).
-            let existing_desc = if path != Path::new("-") {
-                std::fs::read(path)
-                    .ok()
-                    .and_then(|b| sfcht::parse_file(&b).ok())
-                    .map(|(hdr, _)| hdr.description)
-            } else {
-                None
-            };
-            let bytes = sfcht::write_file_with_description(charts, existing_desc.as_deref())?;
-            write_bytes_to(path, &bytes)?;
-        }
-        Target::Zeus => {
-            let text = zeus::write_file(charts);
-            write_bytes_to(path, text.as_bytes())?;
-        }
-        Target::Adb => {
-            let text = adbxml::write_file(charts);
-            write_bytes_to(path, text.as_bytes())?;
-        }
-        Target::Json => {
-            let text = jzod::write_file(charts);
-            write_bytes_to(path, text.as_bytes())?;
-        }
-        Target::Raw => {
-            let text = raw::write_file(charts);
-            write_bytes_to(path, text.as_bytes())?;
-        }
         Target::Aaf => bail!("AAF is a read-only format; choose a writable --to/--output"),
         Target::Luna => bail!("use --to luna for writing to LUNA"),
         Target::Astrocom => bail!("use --to astrocom for writing to astro.com"),
         Target::Astrotheoros => bail!("use --to astrotheoros for writing to astrotheoros.com"),
+        _ => {}
     }
-    Ok(())
+    // For SFcht, read the existing file header description so it is preserved.
+    let existing_desc = if target == Target::Sfcht && path != Path::new("-") {
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| astrogram::sfcht::parse_file(&b).ok())
+            .map(|(hdr, _)| hdr.description)
+    } else {
+        None
+    };
+    let out = astrogram::convert::write_bytes(target, charts, existing_desc.as_deref())
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    write_bytes_to(path, &out)
 }
 
 fn detect_shell() -> Option<clap_complete::Shell> {
@@ -1045,46 +1282,6 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-/// Temporal identity of a chart: birth datetime only (NOT name — name is a
-/// field we report changes to, so it must not gate the source↔landed pairing).
-fn temporal_key(c: &astrogram::chart::Chart) -> (i16, u8, u8, u8, u8, u8) {
-    (c.year, c.month, c.day, c.hour, c.minute, c.second)
-}
-
-/// True if two or more charts share an exact birth datetime (temporal key),
-/// making readback pairing among that group best-effort (input order).
-fn has_tied_datetimes(charts: &[astrogram::chart::Chart]) -> bool {
-    let mut seen = HashSet::new();
-    charts.iter().any(|c| !seen.insert(temporal_key(c)))
-}
-
-/// Pair each source chart to the landed chart sharing its temporal key.
-///
-/// Returns, per source (in order), the index into `landed` it matched, or
-/// `None` if unmatched (creation failed / skipped as a pre-existing duplicate).
-/// Each landed chart is consumed once; tied datetimes pair in input order.
-fn pair_landed(
-    sources: &[astrogram::chart::Chart],
-    landed: &[astrogram::chart::Chart],
-) -> Vec<Option<usize>> {
-    let mut used = vec![false; landed.len()];
-    sources
-        .iter()
-        .map(|s| {
-            let key = temporal_key(s);
-            let found = landed
-                .iter()
-                .enumerate()
-                .find(|(i, l)| !used[*i] && temporal_key(l) == key)
-                .map(|(i, _)| i);
-            if let Some(i) = found {
-                used[i] = true;
-            }
-            found
-        })
-        .collect()
 }
 
 /// One-line status tally for a chart's transcript.
@@ -1140,14 +1337,14 @@ fn verify_and_report(
     written: &[astrogram::chart::Chart],
     write_results: &[Option<String>],
 ) -> Result<()> {
-    if has_tied_datetimes(written) {
+    if astrogram::transcript::has_tied_datetimes(written) {
         eprintln!(
             "note: some charts share a birth datetime; readback pairing for those is best-effort (input order)"
         );
     }
     let global = provider.fetch_global_settings()?;
     let (landed_all, _ids) = provider.fetch_all_with_ids()?;
-    let pairing = pair_landed(written, &landed_all);
+    let pairing = astrogram::transcript::pair_landed(written, &landed_all);
     let total_new = write_results.iter().filter(|r| r.is_some()).count();
     let w = total_new.to_string().len();
     let mut new_idx = 0usize;
@@ -1230,6 +1427,133 @@ fn report_drops(
 }
 
 #[cfg(test)]
+mod cookie_import_tests {
+    use super::*;
+
+    // ── parse_browser ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_browser_all_returns_grant_all() {
+        assert_eq!(parse_browser("all"), Ok(GrantArg::All));
+    }
+
+    #[test]
+    fn parse_browser_firefox_returns_one_firefox() {
+        assert_eq!(
+            parse_browser("firefox"),
+            Ok(GrantArg::One(Browser::Firefox))
+        );
+    }
+
+    #[test]
+    fn parse_browser_chrome_returns_one_chrome() {
+        assert_eq!(parse_browser("chrome"), Ok(GrantArg::One(Browser::Chrome)));
+    }
+
+    #[test]
+    fn parse_browser_safari_returns_one_safari() {
+        assert_eq!(parse_browser("safari"), Ok(GrantArg::One(Browser::Safari)));
+    }
+
+    #[test]
+    fn parse_browser_unknown_returns_err() {
+        let result = parse_browser("nope");
+        assert!(result.is_err(), "expected Err for unknown browser 'nope'");
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("nope"),
+            "error should name the unknown value, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_browser_all_valid_names_succeed() {
+        // All documented browser slugs must parse without error.
+        for name in &[
+            "chrome", "chromium", "brave", "edge", "opera", "vivaldi", "whale", "firefox",
+            "safari", "all",
+        ] {
+            assert!(
+                parse_browser(name).is_ok(),
+                "parse_browser({name:?}) should succeed"
+            );
+        }
+    }
+
+    // ── grant_choice ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn grant_choice_none_flag_is_no_grant() {
+        assert_eq!(grant_choice(&None), GrantChoice::NoGrant);
+    }
+
+    #[test]
+    fn grant_choice_grant_all_is_all_stores() {
+        assert_eq!(grant_choice(&Some(GrantArg::All)), GrantChoice::AllStores);
+    }
+
+    #[test]
+    fn grant_choice_grant_one_chrome_is_one_chrome() {
+        assert_eq!(
+            grant_choice(&Some(GrantArg::One(Browser::Chrome))),
+            GrantChoice::One(Browser::Chrome)
+        );
+    }
+
+    #[test]
+    fn grant_choice_grant_one_firefox_is_one_firefox() {
+        assert_eq!(
+            grant_choice(&Some(GrantArg::One(Browser::Firefox))),
+            GrantChoice::One(Browser::Firefox)
+        );
+    }
+
+    // ── CLI flag parsing ──────────────────────────────────────────────────────
+
+    #[test]
+    fn flag_absent_yields_no_grant() {
+        let cli = Cli::parse_from(["blackmoon"]);
+        assert_eq!(grant_choice(&cli.grant_cookie_access), GrantChoice::NoGrant);
+    }
+
+    #[test]
+    fn bare_flag_yields_all_stores() {
+        let cli = Cli::parse_from(["blackmoon", "--grant-cookie-access"]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::AllStores
+        );
+    }
+
+    #[test]
+    fn flag_equals_all_yields_all_stores() {
+        let cli = Cli::parse_from(["blackmoon", "--grant-cookie-access=all"]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::AllStores
+        );
+    }
+
+    #[test]
+    fn flag_equals_firefox_yields_one_firefox() {
+        let cli = Cli::parse_from(["blackmoon", "--grant-cookie-access=firefox"]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::One(Browser::Firefox)
+        );
+    }
+
+    #[test]
+    fn flag_equals_chrome_yields_one_chrome() {
+        let cli = Cli::parse_from(["blackmoon", "--grant-cookie-access=chrome"]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::One(Browser::Chrome)
+        );
+    }
+}
+
+#[cfg(test)]
 mod provider_tests {
     use super::*;
     use clap::Parser;
@@ -1272,23 +1596,45 @@ mod provider_tests {
     }
 
     #[test]
-    fn resolve_provider_luna_token_succeeds() {
+    fn resolve_provider_luna_token_chain_assembled() {
         let _guard = clear_cred_env();
         let cli = Cli::parse_from(["blackmoon", "--luna-token", "abc123"]);
-        // LunaSession::new only builds a reqwest client — no network call.
-        assert!(resolve_provider(Target::Luna, &cli).is_ok());
+        // Chain assembly succeeded (token present). The result is either Ok (if the
+        // session builds without a network probe) or an Err that is NOT a "no creds" bail.
+        match resolve_provider(Target::Luna, &cli) {
+            Ok(_) => {} // session built — acceptable
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("luna-token") && !msg.contains("no LUNA credentials"),
+                    "unexpected early bail (no creds?): {msg}"
+                );
+            }
+        }
     }
 
     #[test]
-    fn resolve_provider_astrocom_token_only() {
+    fn resolve_provider_astrocom_token_chain_assembled() {
         let _guard = clear_cred_env();
         let cli = Cli::parse_from(["blackmoon", "--astrocom-token", "test_cid"]);
-        let provider = resolve_provider(Target::Astrocom, &cli).unwrap();
-        // creds must be None (token path, not login path).
-        assert!(matches!(
-            provider,
-            WebProvider::Astrocom { creds: None, .. }
-        ));
+        // Chain assembly succeeded. Result is either Ok (session built) or a
+        // network/auth error — NOT a "no credentials" bail.
+        // When Ok, login field must be None (no login creds in chain).
+        match resolve_provider(Target::Astrocom, &cli) {
+            Ok(provider) => {
+                assert!(
+                    matches!(provider, WebProvider::Astrocom { creds: None, .. }),
+                    "token-only chain must yield creds: None"
+                );
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("astrocom-token") && !msg.contains("no astro.com credentials"),
+                    "unexpected early bail (no creds?): {msg}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1314,11 +1660,17 @@ mod provider_tests {
     }
 
     #[test]
-    fn resolve_provider_astrotheoros_token_only() {
+    fn resolve_provider_astrotheoros_token_attempts_network() {
         let _guard = clear_cred_env();
         let cli = Cli::parse_from(["blackmoon", "--astrotheoros-token", "jwt:sess:uat"]);
-        // AstrotheorosSession::from_jwt only constructs a struct — no network call.
-        assert!(resolve_provider(Target::Astrotheoros, &cli).is_ok());
+        // authenticate probes the network; chain assembly succeeded so we get an
+        // auth/network error rather than a "no credentials" bail.
+        let err = resolve_provider(Target::Astrotheoros, &cli).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("no astrotheoros.com credentials"),
+            "unexpected early bail (no creds?): {msg}"
+        );
     }
 
     #[test]
@@ -1380,6 +1732,21 @@ mod provider_tests {
         assert!(!is_web_target(Target::Zeus));
         assert!(!is_web_target(Target::Adb));
         assert!(!is_web_target(Target::Aaf));
+    }
+}
+
+#[cfg(test)]
+mod chain_label_tests {
+    use super::*;
+
+    #[test]
+    fn source_label_describes_each_chain_position() {
+        let kinds = [SourceKind::Cookie, SourceKind::Token, SourceKind::Login];
+        assert_eq!(source_label(&kinds, 0), "browser cookie");
+        assert_eq!(source_label(&kinds, 1), "token");
+        assert_eq!(source_label(&kinds, 2), "login");
+        let two = [SourceKind::Cookie, SourceKind::Login];
+        assert_eq!(source_label(&two, 1), "login");
     }
 }
 
@@ -1478,115 +1845,17 @@ mod convert_tests {
     use super::*;
 
     #[test]
-    fn pairing_matches_by_datetime_ignoring_name() {
-        use astrogram::chart::{
-            Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
-        };
-        let mk = |name: &str, day: u8| Chart {
-            name: name.into(),
-            secondary_name: None,
-            city: Some("c".into()),
-            region: None,
-            longitude: Longitude::new(0.0).unwrap(),
-            latitude: Latitude::new(0.0).unwrap(),
-            year: 2000,
-            month: 1,
-            day,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            tz_offset_hours: 0.0,
-            tz_abbreviation: None,
-            is_lmt: false,
-            event_type: EventType::Unspecified,
-            source_rating: None,
-            house_system: HouseSystem::Placidus,
-            zodiac: Zodiac::Tropical,
-            coordinate_system: CoordinateSystem::Geocentric,
-            sub_charts: vec![],
-            notes: None,
-        };
-        let sources = vec![mk("Source A", 1), mk("Source B", 2)];
-        // Landed: renamed + reordered.
-        let landed = vec![mk("Renamed B", 2), mk("Renamed A", 1)];
-        let pairing = pair_landed(&sources, &landed);
-        assert_eq!(pairing, vec![Some(1), Some(0)]);
-    }
-
-    #[test]
-    fn pairing_reports_unmatched_as_none() {
-        use astrogram::chart::{
-            Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
-        };
-        let mk = |day: u8| Chart {
-            name: "x".into(),
-            secondary_name: None,
-            city: Some("c".into()),
-            region: None,
-            longitude: Longitude::new(0.0).unwrap(),
-            latitude: Latitude::new(0.0).unwrap(),
-            year: 2000,
-            month: 1,
-            day,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            tz_offset_hours: 0.0,
-            tz_abbreviation: None,
-            is_lmt: false,
-            event_type: EventType::Unspecified,
-            source_rating: None,
-            house_system: HouseSystem::Placidus,
-            zodiac: Zodiac::Tropical,
-            coordinate_system: CoordinateSystem::Geocentric,
-            sub_charts: vec![],
-            notes: None,
-        };
-        let sources = vec![mk(1), mk(2)];
-        let landed = vec![mk(1)]; // chart 2 failed to create
-        assert_eq!(pair_landed(&sources, &landed), vec![Some(0), None]);
-    }
-
-    #[test]
-    fn pairing_tied_datetimes_consume_in_order() {
-        use astrogram::chart::{
-            Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
-        };
-        let mk = || Chart {
-            name: "x".into(),
-            secondary_name: None,
-            city: Some("c".into()),
-            region: None,
-            longitude: Longitude::new(0.0).unwrap(),
-            latitude: Latitude::new(0.0).unwrap(),
-            year: 2000,
-            month: 1,
-            day: 1,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            tz_offset_hours: 0.0,
-            tz_abbreviation: None,
-            is_lmt: false,
-            event_type: EventType::Unspecified,
-            source_rating: None,
-            house_system: HouseSystem::Placidus,
-            zodiac: Zodiac::Tropical,
-            coordinate_system: CoordinateSystem::Geocentric,
-            sub_charts: vec![],
-            notes: None,
-        };
-        let sources = vec![mk(), mk()];
-        let landed = vec![mk(), mk()];
-        assert_eq!(pair_landed(&sources, &landed), vec![Some(0), Some(1)]);
-    }
-
-    #[test]
     fn resolve_fill_house_parses_flag() {
         use astrogram::chart::HouseSystem;
-        assert_eq!(parse_house("placidus").unwrap(), HouseSystem::Placidus);
-        assert_eq!(parse_house("whole-sign").unwrap(), HouseSystem::WholeSign);
-        assert!(parse_house("nonsense").is_err());
+        assert_eq!(
+            HouseSystem::from_str_slug("placidus"),
+            Some(HouseSystem::Placidus)
+        );
+        assert_eq!(
+            HouseSystem::from_str_slug("whole-sign"),
+            Some(HouseSystem::WholeSign)
+        );
+        assert!(HouseSystem::from_str_slug("nonsense").is_none());
     }
 
     #[test]
@@ -1673,39 +1942,6 @@ mod convert_tests {
             HouseSystem::Placidus,
             "ADB source chart must receive the filled house system"
         );
-    }
-
-    #[test]
-    fn has_tied_datetimes_detects_shared_birth_moment() {
-        use astrogram::chart::{
-            Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
-        };
-        let mk = |name: &str, day: u8| Chart {
-            name: name.into(),
-            secondary_name: None,
-            city: Some("c".into()),
-            region: None,
-            longitude: Longitude::new(0.0).unwrap(),
-            latitude: Latitude::new(0.0).unwrap(),
-            year: 2000,
-            month: 1,
-            day,
-            hour: 0,
-            minute: 0,
-            second: 0,
-            tz_offset_hours: 0.0,
-            tz_abbreviation: None,
-            is_lmt: false,
-            event_type: EventType::Unspecified,
-            source_rating: None,
-            house_system: HouseSystem::Placidus,
-            zodiac: Zodiac::Tropical,
-            coordinate_system: CoordinateSystem::Geocentric,
-            sub_charts: vec![],
-            notes: None,
-        };
-        assert!(!has_tied_datetimes(&[mk("A", 1), mk("B", 2)]));
-        assert!(has_tied_datetimes(&[mk("A", 1), mk("B", 1)]));
     }
 
     #[test]

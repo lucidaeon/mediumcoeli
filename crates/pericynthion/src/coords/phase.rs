@@ -11,7 +11,7 @@
 //!
 //! This module contains no ephemeris I/O — callers supply the two
 //! geocentric ecliptic longitudes already computed by
-//! [`coords::apparent::apparent_ecliptic_position`].
+//! [`apparent_ecliptic_position`](crate::coords::apparent::apparent_ecliptic_position).
 
 /// The eight traditional phases of the synodic cycle.
 ///
