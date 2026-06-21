@@ -17,7 +17,7 @@ Given a date, time, calendar, and zone (or LMT longitude), `starcat compute` emi
 - Hellenistic sect and the eight Hermetic lots (Fortune, Spirit, Exaltation, Necessity, Eros, Courage, Victory, Nemesis).
 - Output as human-readable text, JSON (`--json`), or an opt-in TUI page (`--page`, feature-gated).
 
-Coordinates render in `--dd`, `--dms`, `--ddm`, `--dm`, or `--d`. The JSON shape includes a `placements` wrapper with `calculated_at`, daily-motion floats at 8dp, and whole-sign cusps as exact multiples of 30°.
+Coordinates render in `--dd`, `--dms`, `--ddm`, `--dm`, or `--d`. The [`jzod`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/JZOD.md) JSON shape includes a `placements` wrapper with `calculated_at`, daily-motion floats at 8dp, and whole-sign cusps as exact multiples of 30°.
 
 ## Why it exists
 

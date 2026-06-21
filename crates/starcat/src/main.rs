@@ -671,20 +671,6 @@ fn resolve_jpl_paths(data_dir_arg: Option<&std::path::Path>) -> Result<(PathBuf,
 // Output rendering
 // =============================================================================
 
-fn phase_name_str(name: pericynthion::coords::phase::LunarPhaseName) -> &'static str {
-    use pericynthion::coords::phase::LunarPhaseName as P;
-    match name {
-        P::NewMoon => "new moon",
-        P::Crescent => "crescent",
-        P::FirstQuarter => "first quarter",
-        P::Gibbous => "gibbous",
-        P::FullMoon => "full moon",
-        P::Disseminating => "disseminating",
-        P::LastQuarter => "last quarter",
-        P::Balsamic => "balsamic",
-    }
-}
-
 fn print_text(
     computed: &ComputedChart,
     fmt: CoordFormat,
@@ -805,7 +791,7 @@ fn print_text(
         println!();
         println!(
             "Lunar Phase: {}  {:.2}°  day {} of 28",
-            phase_name_str(lp.phase),
+            lp.phase.label(),
             lp.synodic_arc_deg,
             lp.lunation_day
         );
@@ -1045,7 +1031,7 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     let phase_str = computed.lunar_phase.as_ref().map(|lp| {
         format!(
             "{}  {:.2}°  day {} of 28",
-            phase_name_str(lp.phase),
+            lp.phase.label(),
             lp.synodic_arc_deg,
             lp.lunation_day
         )
@@ -1361,26 +1347,18 @@ fn format_unsigned_deg(deg_total: f64, fmt: CoordFormat, deg_width: usize) -> St
 
 /// Three-letter zodiac sign abbreviation for a tropical ecliptic
 /// longitude in degrees `[0, 360)`.
+#[cfg(test)]
 fn zodiac_sign(lon_deg: f64) -> &'static str {
-    const SIGNS: [&str; 12] = [
-        "Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Sco", "Sag", "Cap", "Aqu", "Pis",
-    ];
-    // rem_euclid(360) is non-negative and < 360, /30 < 12 — fits in 0..12.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let idx = (lon_deg.rem_euclid(360.0) / 30.0).floor() as usize;
-    SIGNS[idx]
+    jzod::coord::Sign::split_longitude(lon_deg).0.abbrev()
 }
 
-/// Display-precision (sign, degree-in-sign) split that keeps the two
-/// pieces consistent. Whole-sign cusps and other points landing exactly
-/// on a sign boundary survive a `to_radians`/`to_degrees` round-trip as
-/// 29.999…° instead of 30.000°; raw display would print `30.0000° Ari`
-/// (number rounds up, sign doesn't). We round to the display precision
-/// before splitting so both pieces agree.
+/// Display-precision (sign, degree-in-sign) split, delegated to
+/// [`jzod::coord::Sign::split_longitude`] which owns the cusp-rounding
+/// invariant (29.999…° snaps up to the next sign rather than printing
+/// `30.0000° Ari`).
 fn split_sign(lon_deg: f64) -> (&'static str, f64) {
-    let rounded = ((lon_deg.rem_euclid(360.0)) * 1e4).round() / 1e4;
-    let normalised = rounded.rem_euclid(360.0);
-    (zodiac_sign(normalised), normalised.rem_euclid(30.0))
+    let (sign, deg_in_sign) = jzod::coord::Sign::split_longitude(lon_deg);
+    (sign.abbrev(), deg_in_sign)
 }
 
 #[cfg(test)]

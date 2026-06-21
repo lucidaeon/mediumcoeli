@@ -1,4 +1,4 @@
-# wristband — Security stance
+# Wristband — Security stance
 
 ## Legitimate use
 

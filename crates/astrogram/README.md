@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/astrogram/badge.svg)](https://docs.rs/astrogram)
 [![License](https://img.shields.io/crates/l/astrogram.svg)](https://github.com/lucidaeon/mediumcoeli#license)
 
-The chart-format conversion engine behind [`Blackmoon`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/blackmoon/README.md). A pure-Rust library for reading, writing, merging, and normalizing astrology chart data across every documented platform format.
+The chart-format conversion engine behind [Blackmoon](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/blackmoon/README.md). A pure-Rust library for reading, writing, merging, and normalizing astrology chart data across every documented platform format.
 
 ## What it does
 
@@ -20,6 +20,7 @@ Modules currently shipping:
 - **`astro`** — astro.com HTTP session: credential login, full CRUD against the AWD endpoint with `nhor`-keyed identity.
 - **`consolidate`** — duplicate detection (exact name + date, time within ±2h, lat/lon within 0.1°) and batch merge.
 - **`normalize`** — strips characters not representable in cp1252 and collapses whitespace, the mandatory pre-step before any `.SFcht` write.
+- **`jzod`** — JZOD writer; maps `chart::Chart` to `jzod::Chart` and delegates serialization to the [`jzod`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/README.md) crate. See [`JZOD.md`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/JZOD.md) for the format spec.
 
 ## Why it exists
 

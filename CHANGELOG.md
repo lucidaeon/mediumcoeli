@@ -9,7 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/bc317a221d7e71cadae83816615ff5703c24a2dd...main), [astrogram/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.0), [blackmoon/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.0), [jzod/0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.1.1), [pericynthion/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.3.0), [starcat/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.3.0), [wristband/0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.0), 2026.06.20
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/0809052f5004901b7e5d9d97b11cb09fc2aab10c...main), [astrogram/0.2.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.1), [blackmoon/0.2.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.1), [jzod/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.2.0), [pericynthion/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.4.0), [starcat/0.3.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.3.1), [wristband/0.0.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.1), 2026.06.20
+
+### Added — `jzod`
+
+- **`Sign::abbrev()`** — three-letter display abbreviation (`Ari`, `Tau`, … `Pis`). Presentation helper; does not affect the `snake_case` wire format.
+- **`Sign::split_longitude(lon_deg)`** — converts an absolute ecliptic longitude to `(Sign, f64)` with a cusp-rounding invariant: float noise at sign boundaries (e.g. `29.9999…°`) snaps up to the next sign instead of rendering as `29°…` of the previous one.
+- `Position::from_longitude` refactored to delegate to `split_longitude`, eliminating duplicate cusp logic.
+
+### Added — `pericynthion`
+
+- **`LunarPhaseName::label()`** — human-readable label for each of the eight phase names (`"new moon"`, `"first quarter"`, …), shared by every front-end so the CLI, a GUI, and a WASM consumer all print identical strings without reimplementing the mapping.
+
+### Changed — `starcat`
+
+- **Delegates coordinate helpers to `jzod` and `pericynthion` libraries.** Local `zodiac_sign`, `split_sign`, and `phase_name_str` functions replaced with `jzod::coord::Sign::abbrev()` / `split_longitude()` and `pericynthion::LunarPhaseName::label()`. No arithmetic changes; output is identical.
+
+### Fixed — `wristband`
+
+- **Safari module gated to macOS and test builds** (`#[cfg(any(test, target_os = "macos"))]`), silencing 14 `dead_code` warnings on Linux.
+
+### Documented
+
+- **`jzod` format spec extracted to `JZOD.md`.** The full JZOD interchange format specification lives at `crates/jzod/JZOD.md`; `crates/jzod/README.md` is now a standard crate overview (What / Why / How) consistent with the rest of the workspace. Cross-links in `starcat`, `astrogram`, and `jzod/src/lib.rs` updated accordingly.
+- **README housekeeping across all crates** — project names capitalized as proper nouns in headers and prose; `wristband` cross-linked from `blackmoon --grant-cookie-access`; `jzod` cross-linked from `starcat` JSON output description.
+
+---
+
+## [0809052](https://github.com/lucidaeon/mediumcoeli/compare/bc317a221d7e71cadae83816615ff5703c24a2dd...0809052f5004901b7e5d9d97b11cb09fc2aab10c), [astrogram/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.0), [blackmoon/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.0), [jzod/0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.1.1), [pericynthion/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.3.0), [starcat/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.3.0), [wristband/0.0.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.0), 2026.06.20
 
 ### Added — `wristband` (new crate)
 

@@ -1,6 +1,6 @@
 [package]
 name = "wristband"
-version = "0.0.0"
+version = "0.0.1"
 description = "Consent-gated, domain-scoped reader for the user's own browser session cookies"
 categories = ["authentication", "cryptography", "os"]
 edition.workspace = true

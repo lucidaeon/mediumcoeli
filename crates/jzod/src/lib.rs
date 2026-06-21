@@ -10,7 +10,7 @@
 //! model from their own domain types and serialize through
 //! [`to_string_pretty`].
 //!
-//! [JZOD]: https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/README.md
+//! [JZOD]: https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/JZOD.md
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic)]

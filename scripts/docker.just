@@ -58,6 +58,7 @@ push TAG=tag CRATE='': (_buildx '--push' TAG CRATE)
 release +TAGS:
 	#!/usr/bin/env bash
 	set -euo pipefail
+	cargo generate-lockfile
 	cd "{{justfile_directory()}}"   # repo root: `.` context + Dockerfile glob resolve here
 	# Optional native-amd64 remote builder (vs. slow / OOM-prone QEMU emulation).
 	builder_args=()

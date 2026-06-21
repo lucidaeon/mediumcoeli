@@ -1,10 +1,15 @@
-# wristband
+# Wristband
+
+[![Crates.io](https://img.shields.io/crates/v/wristband.svg)](https://crates.io/crates/wristband)
+[![Documentation](https://docs.rs/wristband/badge.svg)](https://docs.rs/wristband)
+[![License](https://img.shields.io/crates/l/wristband.svg)](https://github.com/lucidaeon/mediumcoeli#license)
+
 
 Consent-gated, domain-scoped reader for the user's own browser session cookies.
 
 ## Purpose
 
-`wristband` lets a CLI tool (e.g. `blackmoon --grant-cookie-access`) read the
+`wristband` lets a CLI tool (e.g. [`blackmoon`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/blackmoon/README.md) `--grant-cookie-access`) read the
 current user's own browser cookies for a specific, named set of domains, in
 order to reuse a session the user already has open. It has a strict security
 posture: cookies are filtered by an explicit allow-list **before** decryption,
@@ -28,7 +33,7 @@ These invariants are structural, not merely policy:
 
 ## Non-goals
 
-See `SECURITY.md`.
+See [`SECURITY.md`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/wristband/SECURITY.md).
 
 ## Known limitations
 
@@ -40,7 +45,7 @@ so a current Chrome may yield fewer cookies for an allowed domain. See
 ## Usage
 
 `wristband` is a library crate. It is not a standalone binary. The intended
-consumer is `blackmoon`, which gates access behind `--grant-cookie-access` and
+consumer is [`blackmoon`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/blackmoon/README.md), which gates access behind `--grant-cookie-access` and
 presents the operator with a domain summary before proceeding.
 
 ## License

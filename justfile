@@ -93,10 +93,13 @@ publish DRY='--dry-run':
 	# Preflight: fail before any crate ships if docs have broken links.
 	# docs.rs builds permissively, so this is the last gate before they go public.
 	just doc
-	for crate in $(just publish-order); do
-	    echo ">>> cargo publish {{DRY}} -p $crate"
-	    cargo publish {{DRY}} -p "$crate"
-	done
+	# One coordinated workspace publish (cargo's `package-workspace` feature):
+	# cargo orders the crates by dependency and resolves intra-workspace versions
+	# from the local tree, so a first-time cross-version bump — and its --dry-run —
+	# succeeds without each sibling already being on crates.io. Supersedes the
+	# old per-crate `publish-order` loop, which could neither dry-run a fresh
+	# cross-bump nor satisfy each crate's isolated verify build.
+	cargo publish --workspace {{DRY}}
 
 # ── test corpora ──────────────────────────────────────────────────────────────
 

@@ -30,6 +30,7 @@ pub(crate) mod chromium;
 pub(crate) mod discover;
 pub(crate) mod firefox;
 pub(crate) mod gate;
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) mod safari;
 pub(crate) mod sqlite_copy;
 

@@ -36,6 +36,24 @@ pub enum LunarPhaseName {
     Balsamic,
 }
 
+impl LunarPhaseName {
+    /// Lower-case human label for the phase (`"new moon"`, `"first quarter"`,
+    /// …). Shared by every front-end so the CLI and a GUI print identical names.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            LunarPhaseName::NewMoon => "new moon",
+            LunarPhaseName::Crescent => "crescent",
+            LunarPhaseName::FirstQuarter => "first quarter",
+            LunarPhaseName::Gibbous => "gibbous",
+            LunarPhaseName::FullMoon => "full moon",
+            LunarPhaseName::Disseminating => "disseminating",
+            LunarPhaseName::LastQuarter => "last quarter",
+            LunarPhaseName::Balsamic => "balsamic",
+        }
+    }
+}
+
 /// Computed lunar phase: synodic arc, phase name, and lunation day.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LunarPhase {
@@ -89,6 +107,15 @@ pub fn lunar_phase(moon_lon_deg: f64, sun_lon_deg: f64) -> LunarPhase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phase_labels_cover_all_eight() {
+        assert_eq!(LunarPhaseName::NewMoon.label(), "new moon");
+        assert_eq!(LunarPhaseName::FirstQuarter.label(), "first quarter");
+        assert_eq!(LunarPhaseName::FullMoon.label(), "full moon");
+        assert_eq!(LunarPhaseName::Disseminating.label(), "disseminating");
+        assert_eq!(LunarPhaseName::Balsamic.label(), "balsamic");
+    }
 
     // Use arc directly: lunar_phase(arc, 0.0) gives synodic_arc == arc.
 
