@@ -21,48 +21,9 @@ In natal astrology, the person for whom a chart is cast is called the **native**
 
 Gender handling requires care. New software and specifications should include "nonbinary" and "any" as a gender options, with "x" and "a" as the short forms respectively. They should also support arbitrary strings supplied by the user, since gender is self-described.
 
-## PII and Example Data
+## Test fixtures, sample data, PII and more
 
-Birth data — date, time, and place of birth — is personally identifying information. When writing any files to disk for research or usage examples, only the following publicly documented figures should be used unless otherwise directed. If you require additional chart data that contains attributes not covered by the allow lists below, describe the attributes you need and it will be provided for you. Do **not** use any other real or synthesized birth/event data without explicit permission.
-
-```
-test 4 name: Anna Freud
-test 4 date: 1895.12.03
-test 4 time: 15h15
-test 4 location: Vienna, Austria
-test 4 note: 
-test 4 refchart resolved timezone: CET
-test 4 refchart resolved offset: UTC+01:00:00
-test 4 refchart resolved coords: 48°12'30"N 16°22'18"E
-test 3 name: Lightning Strike
-test 3 date: 1955.11.12
-test 3 time: 22h04
-test 3 location: Universal City CA USA
-test 3 note: ignore sfcht time "offset"
-test 3 refchart resolved time: 22:04 PST +8:00
-test 3 refchart resolved coords: 34ºN08'20" 118ºW21'09"
-test 2 name: UNIX Time 32bit All-ones
-test 2 date: 2038.01.19
-test 2 time: 03:14:07
-test 2 location: London, GB
-test 2 note: ignore sfcht time "offset" **heliocentric** 
-test 2 refchart resolved time: 03:14:07 UT +0:00
-test 2 refchart resolved coords: 51ºN30' 000ºW10'
-test 1 name: William Lilly
-test 1 date: 1602.05.11
-test 1 time: 02h00
-test 1 location: Diseworth England
-test 1 note: LMT offset is not the same as UTC offset
-test 1 refchart resolved time: 02:00 LMT +0:04:44
-test 1 refchart resolved coords: 52ºN47' 001ºW11'
-test 0 name: Vettius Valens
-test 0 date: 0120.02.08
-test 0 time: 18h35
-test 0 location: Antioch (Antakya) Türkiye
-test 0 note: LMT offset is not the same as UTC offset
-test 0 refchart resolved time: 18:35 LMT -2:24:28
-test 0 refchart resolved coords: 36ºN14' 036ºE07'
-```
+Birth data — date, time, and place of birth — is personally identifying information. When writing any files to disk for testing, examples, usage, etc, only the reference charts found in the [fixtures/](fixtures/) directory may be used. If test fixures are missing attributes you need such as character sets / encoding, certain edge case dates times locations or names, stop and flag the issue. Do not invent or use real birth data. Do **not** use any other real or synthesized birth/event data without explicit permission.
 
 ## Time and Location
 
