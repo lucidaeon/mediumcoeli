@@ -14,7 +14,7 @@
 //! Sripati, Vehlow Equal, Carter Poli-Equatorial, Pullen Sinusoidal
 //! Delta, Pullen Sinusoidal Ratio) are available with the
 //! `noref-houses` Cargo feature — these have implementations but no
-//! refchart oracle yet; see `docs/superpowers/plans/HOUSE_PROMOTION.md`.
+//! refchart oracle yet.
 //!
 //! # Chart points
 //!
@@ -42,25 +42,27 @@
 //!     [--lat 34.1389 --lon=-118.3525]   # topocentric \
 //!     [--helio]                          # heliocentric \
 //!     [--bodies sun,moon,mercury,...] \
-//!     [--house whole-sign,equal-from-asc,placidus,regiomontanus,porphyry] \
+//!     [--house whole-sign,equal-from-asc,placidus,regiomontanus,porphyry,alcabitius,morinus] \
 //!     [--dd | --dms | --ddm | --dm]      # coord format (page: --dm; text: --dd) \
-//!     [--jpl-data DIR] \
+//!     [--jpl-data PATH] \
 //!     [--text | --page]                  # output style (default = jzod)
+//!     [--asteroids ceres,vesta,...]      # asteroid apparent positions (all output modes)
+//!     [--spk PATH]                       # explicit BSP file; auto-discovered when omitted
 //! ```
 //!
 //! # JPL data resolution
 //!
-//! The library needs both the ASCII header and binary ephemeris file
-//! from a JPL DE-series release. Resolution order:
+//! Resolution order:
 //!
-//! 1. `--jpl-data DIR` (directory containing both files).
+//! 1. `--jpl-data PATH` — any directory in the JPL mirror hierarchy.
 //! 2. `$STARCAT_JPL_DATA` env var (same as `--jpl-data`).
 //!
 //! No default path — one of the two must be supplied.
 //!
-//! When given a directory, the library auto-discovers the highest-
-//! numbered ephemeris release (DE441, DE442, …) and picks
-//! little-endian binaries on x86/ARM hosts.
+//! `PATH` may point to the de441 dir, `ascii/`, `Linux/`, `planets/`,
+//! `eph/`, `ftp/`, or the `ssd.jpl.nasa.gov` root. Binary and ASCII
+//! datasets are both supported; the library auto-discovers and opens
+//! whichever is present.
 //!
 //! For ancient charts with no civil time zone, use `--lmt` + `--lon`
 //! to derive Local Mean Time from the observer's longitude:
@@ -97,8 +99,10 @@ use pericynthion::coords::topocentric::ObserverLocation;
 use pericynthion::ephemeris::Ephemeris;
 use pericynthion::geo::{parse_lat, parse_lon};
 use pericynthion::houses::{HouseCusps, HouseSystem};
-use pericynthion::jpl::{discover, header::parse as parse_header, reader::EphemerisFile};
+use pericynthion::jpl::discover;
+use pericynthion::jpl::oracle;
 use pericynthion::lots::Sect;
+use pericynthion::spk::{SpkEphemeris, locate_default_bsp};
 use pericynthion::time::calendar::{Calendar, CivilDate};
 use pericynthion::time::zone::Zone;
 use pericynthion::time::{parse_date, parse_time, parse_tz};
@@ -132,8 +136,8 @@ CHART POINTS EMITTED
   Lots     Fortune, Spirit, Exaltation (need ASC + Sun + Moon),
            Eros (+Venus), Necessity (+Mercury), Courage (+Mars),
            Victory (+Jupiter), Nemesis (+Saturn), Sect; geo/topo only
-  Houses   Whole Sign, Equal-from-ASC, Placidus, Regiomontanus, Porphyry
-           (need lat + lon; geo/topo only)
+  Houses   Whole Sign, Equal-from-ASC, Placidus, Regiomontanus, Porphyry,
+           Alcabitius, Morinus (need lat + lon; geo/topo only)
 
 Run 'starcat compute --help' for the full argument reference.",
     arg_required_else_help = true
@@ -149,24 +153,136 @@ struct Cli {
 enum Command {
     /// Compute tropical ecliptic-of-date apparent geocentric positions.
     Compute(ComputeArgs),
+    /// List the points and bodies starcat can compute (names only; no inputs).
+    Catalogue,
+    /// Fetch SPK ephemerides for a body class from the JPL Horizons API.
+    Horizons(HorizonsArgs),
+    /// Inspect the local JPL mirror: verify files or list the packaging subset.
+    Data(DataArgs),
     /// Print a shell completion script to stdout.
     #[command(hide = true)]
     GenerateCompletion { shell: Option<clap_complete::Shell> },
+    /// Print the generated placements catalog as Markdown (feeds docs/placements.md).
+    #[command(hide = true)]
+    Placements,
+}
+
+/// Arguments for the `data` subcommand.
+#[derive(Args, Debug)]
+struct DataArgs {
+    #[command(subcommand)]
+    cmd: DataCmd,
+}
+
+/// `data` sub-operations.
+#[derive(Subcommand, Debug)]
+enum DataCmd {
+    /// Verify mirror files against the built-in BLAKE3 oracle.
+    ///
+    /// `verify` (default scope) checks only the files for the placements
+    /// starcat supports; `verify all` checks the entire ~190 GB oracle.
+    Verify(VerifyArgs),
+    /// List the data files needed to package starcat's supported placements,
+    /// one per line. Paths are printed exactly as supplied (relative or
+    /// absolute) — never canonicalized — so CI/CD can gather them directly.
+    Prod(ProdArgs),
+}
+
+/// Arguments for `data verify`.
+#[derive(Args, Debug)]
+struct VerifyArgs {
+    /// What to verify: `supported` (default) for the supported-placements
+    /// subset, or `all` for the entire oracle (~190 GB, several minutes).
+    #[arg(value_enum, default_value_t = VerifyScope::Supported)]
+    scope: VerifyScope,
+    /// Mirror root — the directory that directly contains `ssd.jpl.nasa.gov/`.
+    /// Falls back to `$STARCAT_JPL_DATA`, walked up to the mirror root.
+    #[arg(long)]
+    root: Option<PathBuf>,
+}
+
+/// Arguments for the `horizons` subcommand.
+#[derive(Args, Debug)]
+struct HorizonsArgs {
+    /// Which class of bodies to fetch (the in-house catalog list for it).
+    noun: HorizonsNoun,
+    /// SPK span start (Horizons format, e.g. `1900-01-01`). Defaults to
+    /// Uranus's discovery, 1781-03-13.
+    #[arg(long)]
+    from: Option<String>,
+    /// SPK span stop. Defaults to the 2038 32-bit `time_t` overflow.
+    #[arg(long)]
+    to: Option<String>,
+    /// Directory to write `<naif_id>.bsp` files into. Falls back to
+    /// `$STARCAT_HORIZONS_DATA`. Kept separate from the JPL mirror.
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+/// Class of minor body for `horizons`, mapping to a
+/// [`pericynthion::placements::Category`].
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum HorizonsNoun {
+    /// Dwarf planets.
+    Dp,
+    /// Asteroids.
+    Ast,
+    /// Centaurs.
+    Cent,
+    /// Kuiper-belt objects.
+    Kbo,
+    /// Trans-Neptunian objects.
+    Tno,
+}
+
+impl HorizonsNoun {
+    fn category(self) -> pericynthion::placements::Category {
+        use pericynthion::placements::Category;
+        match self {
+            HorizonsNoun::Dp => Category::DwarfPlanet,
+            HorizonsNoun::Ast => Category::Asteroid,
+            HorizonsNoun::Cent => Category::Centaur,
+            HorizonsNoun::Kbo => Category::Kbo,
+            HorizonsNoun::Tno => Category::Tno,
+        }
+    }
+}
+
+/// Arguments for `data prod`.
+#[derive(Args, Debug)]
+struct ProdArgs {
+    /// Mirror root — the directory that directly contains `ssd.jpl.nasa.gov/`.
+    /// Falls back to `$STARCAT_JPL_DATA`, walked up to the mirror root. The
+    /// listed paths keep whichever form (relative or absolute) was supplied.
+    #[arg(long)]
+    root: Option<PathBuf>,
+}
+
+/// Scope for `data verify`.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum VerifyScope {
+    /// Only the DE441 + small-body files for supported placements (~3 GB).
+    Supported,
+    /// The complete mirror oracle (~190 GB).
+    All,
 }
 
 #[derive(Args, Debug)]
 struct ComputeArgs {
     /// Date in YYYY-MM-DD form (proleptic; negative years allowed for BCE).
+    /// Required to compute a chart.
     #[arg(long)]
-    date: String,
+    date: Option<String>,
 
     /// Time in `HH:MM[:SS]` form, in the zone specified by `--tz` or `--lmt`.
+    /// Required to compute a chart.
     #[arg(long)]
-    time: String,
+    time: Option<String>,
 
     /// Which calendar the date is recorded in. No default — caller must choose.
+    /// Required to compute a chart.
     #[arg(long)]
-    calendar: CalendarArg,
+    calendar: Option<CalendarArg>,
 
     /// UT offset for the recorded time, as ±HH:MM (e.g. -05:00). Mutually
     /// exclusive with `--lmt`.
@@ -207,8 +323,8 @@ struct ComputeArgs {
     #[arg(long, value_delimiter = ',')]
     bodies: Option<Vec<BodyArg>>,
 
-    /// Comma-separated house system(s) to emit. Defaults to all three
-    /// implemented systems (whole-sign,equal-from-asc,placidus).
+    /// Comma-separated house system(s) to emit. Defaults to all seven
+    /// always-on systems (whole-sign,equal-from-asc,placidus,regiomontanus,porphyry,alcabitius,morinus).
     #[arg(long = "house", value_delimiter = ',')]
     houses: Option<Vec<HouseArg>>,
 
@@ -225,10 +341,11 @@ struct ComputeArgs {
     #[arg(long = "lilith", default_value = "true")]
     lilith: LilithMode,
 
-    /// Directory containing a JPL DE-series ephemeris release (must
-    /// contain a `header.NNN` and matching `linux_*.NNN` or
-    /// `xnp_*.NNN` binary). Falls back to `$STARCAT_JPL_DATA` when
-    /// omitted; one or the other must be set.
+    /// Any directory in the JPL mirror hierarchy: the de441 dir itself,
+    /// `ascii/`, `Linux/`, `planets/`, `eph/`, `ftp/`, or the
+    /// `ssd.jpl.nasa.gov` root. Binary and ASCII datasets are both
+    /// supported. Falls back to `$STARCAT_JPL_DATA` when omitted; one
+    /// or the other must be set.
     #[arg(long)]
     jpl_data: Option<PathBuf>,
 
@@ -274,6 +391,32 @@ struct ComputeArgs {
     /// Mutually exclusive with `--dd` / `--dms` / `--ddm` / `--dm`.
     #[arg(long = "d", group = "coord_format")]
     d: bool,
+
+    /// Comma-separated body slugs (catalog names, case-insensitive) to compute
+    /// alongside the classical bodies. Accepts any body in the placements catalog
+    /// (asteroids, centaurs, KBOs, TNOs, dwarf planets). Example:
+    /// `--asteroids ceres,chiron,eris`. Bundled bodies (Ceres, Pallas, Juno,
+    /// Vesta, Hygiea) are available from the JPL mirror; all others must be
+    /// fetched first with `starcat horizons <class>`.
+    #[arg(long = "asteroids", value_delimiter = ',')]
+    asteroids: Vec<String>,
+
+    /// Explicit path to a DAF/SPK file (e.g. `sb441-n16.bsp`), opened in
+    /// addition to the auto-discovered sb441 bundle and any `.bsp` files in
+    /// `$STARCAT_HORIZONS_DATA`. A body is computed from whichever opened SPK
+    /// covers its NAIF id.
+    #[arg(long = "spk")]
+    spk: Option<PathBuf>,
+
+    /// Compute and render a chart containing every body starcat currently
+    /// supports — all planets/points/lots plus **all** named asteroids
+    /// automatically, when the SPK is available. All output modes
+    /// (`--text`, `--page`, jzod) work normally.
+    ///
+    /// For just the list of supported points and bodies (no chart, no inputs),
+    /// see `starcat catalogue`.
+    #[arg(long = "omniscient")]
+    omniscient: bool,
 }
 
 /// Output format for sexagesimal coordinates.
@@ -474,6 +617,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Compute(args) => cmd_compute(args),
+        Command::Catalogue => {
+            print!("{}", pericynthion::placements::supported_list());
+            Ok(())
+        }
+        Command::Horizons(args) => cmd_horizons(&args),
+        Command::Data(args) => cmd_data(&args),
         Command::GenerateCompletion { shell } => {
             use clap::CommandFactory;
             let Some(shell) = shell.or_else(detect_shell) else {
@@ -487,6 +636,10 @@ fn main() -> Result<()> {
                 "starcat",
                 &mut std::io::stdout(),
             );
+            Ok(())
+        }
+        Command::Placements => {
+            print!("{}", pericynthion::placements::markdown());
             Ok(())
         }
     }
@@ -519,11 +672,30 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     // === Output format (read before any partial moves of `args`) ===
     let fmt = CoordFormat::from_args(&args);
 
+    // === Ephemeris file ===
+    let dir = resolve_jpl_dir(args.jpl_data.as_deref())?;
+
+    // === Compute always builds a chart — date/time/calendar are required ===
+    let missing: Vec<&str> = [
+        args.date.is_none().then_some("--date"),
+        args.time.is_none().then_some("--time"),
+        args.calendar.is_none().then_some("--calendar"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !missing.is_empty() {
+        bail!("a chart needs: {}", missing.join(", "));
+    }
+    let date_str = args.date.as_deref().unwrap();
+    let time_str = args.time.as_deref().unwrap();
+    let calendar_arg = args.calendar.unwrap();
+
     // === Parse date and time ===
     let (year, month, day) =
-        parse_date(&args.date).with_context(|| format!("invalid --date {:?}", args.date))?;
+        parse_date(date_str).with_context(|| format!("invalid --date {date_str:?}"))?;
     let (hour, minute, second) =
-        parse_time(&args.time).with_context(|| format!("invalid --time {:?}", args.time))?;
+        parse_time(time_str).with_context(|| format!("invalid --time {time_str:?}"))?;
     let civil = CivilDate {
         year,
         month,
@@ -548,14 +720,9 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         bail!("either --tz or --lmt (with --lon) must be supplied")
     };
 
-    // === Ephemeris file ===
-    let (header_path, binary_path) = resolve_jpl_paths(args.jpl_data.as_deref())?;
-    let header_src = std::fs::read_to_string(&header_path)
-        .with_context(|| format!("read {}", header_path.display()))?;
-    let header = parse_header(&header_src).context("parse JPL ASCII header")?;
-    let file = EphemerisFile::open(&binary_path, &header)
-        .with_context(|| format!("open {}", binary_path.display()))?;
-    let ephem = Ephemeris::new(&file, &header).context("build ephemeris facade")?;
+    let (header, source) = discover::open_dataset(&dir)
+        .with_context(|| format!("locate + open JPL ephemeris under {}", dir.display()))?;
+    let ephem = Ephemeris::new(&*source, &header).context("build ephemeris facade")?;
 
     // === Coordinate mode request ===
     let mode_request = if args.helio {
@@ -588,7 +755,36 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     };
 
     // === Calendar ===
-    let calendar: Calendar = args.calendar.into();
+    let calendar: Calendar = calendar_arg.into();
+
+    // === Open every available SPK: sb441 bundle + Horizons dir + explicit --spk ===
+    let mut spk_files: Vec<SpkEphemeris> = Vec::new();
+    if let Some(p) = args.spk.as_deref() {
+        spk_files
+            .push(SpkEphemeris::open(p).with_context(|| format!("open --spk {}", p.display()))?);
+    }
+    if let Some(bsp) = locate_default_bsp(&dir) {
+        if let Ok(s) = SpkEphemeris::open(&bsp) {
+            spk_files.push(s);
+        }
+    }
+    if let Ok(hz) = resolve_horizons_dir(None) {
+        spk_files.extend(pericynthion::spk::open_dir(&hz));
+    }
+    let spk_refs: Vec<&SpkEphemeris> = spk_files.iter().collect();
+    let covered = |id: i32| spk_refs.iter().any(|s| s.center_of(id).is_some());
+
+    // === Asteroids: slug → NAIF id (error clearly on unknown slug) ===
+    // --omniscient computes every body covered by the open SPKs.
+    let asteroid_naif_ids: Vec<i32> = if args.omniscient {
+        omniscient_body_ids(covered)
+    } else {
+        let mut ids = Vec::new();
+        for slug in &args.asteroids {
+            ids.push(resolve_body_id(slug, covered)?);
+        }
+        ids
+    };
 
     // === Build request and compute ===
     let request = ChartRequest {
@@ -600,8 +796,9 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         lon_deg: obs_lon,
         bodies,
         houses: house_systems,
+        asteroids: asteroid_naif_ids,
     };
-    let computed = pericynthion::chart::compute(&ephem, &request)
+    let computed = pericynthion::chart::compute_with_spk(&ephem, &spk_refs, &request)
         .with_context(|| "chart computation failed")?;
 
     // === Output ===
@@ -642,29 +839,282 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     } else {
         print_text(&computed, fmt, args.nodes, args.lilith);
     }
+
     Ok(())
 }
 
-/// Resolve the (header, binary) pair from CLI args + env.
-///
-/// Precedence:
-///   1. `--jpl-data DIR` → autodiscover within DIR.
-///   2. `$STARCAT_JPL_DATA` → autodiscover.
-fn resolve_jpl_paths(data_dir_arg: Option<&std::path::Path>) -> Result<(PathBuf, PathBuf)> {
-    let dir = if let Some(d) = data_dir_arg {
-        d.to_path_buf()
-    } else if let Ok(env) = std::env::var("STARCAT_JPL_DATA") {
-        PathBuf::from(env)
-    } else {
+/// Resolve a body slug (catalog name, case-insensitive) to the NAIF id that is
+/// actually available, preferring the sb441 (`2_000_000 + mpc`) id when present,
+/// else the Horizons (`20_000_000 + mpc`) id. `covered(id)` reports whether any
+/// open SPK covers `id`.
+fn resolve_body_id(slug: &str, covered: impl Fn(i32) -> bool) -> Result<i32> {
+    let placement = pericynthion::placements::find_by_slug(slug)
+        .ok_or_else(|| anyhow::anyhow!("unknown body {slug:?} (not in the placements catalog)"))?;
+    let (Some(sb441), Some(horizons)) = (placement.sb441_naif_id(), placement.horizons_naif_id())
+    else {
         bail!(
-            "no JPL data location supplied. Pass --jpl-data DIR or set the \
-             STARCAT_JPL_DATA environment variable to a directory \
-             containing header.NNN and a matching linux_*.NNN binary."
+            "{} is not an SPK minor body (computed from DE441, not --asteroids)",
+            placement.name
         );
     };
-    let paths = discover::discover(&dir)
-        .with_context(|| format!("autodiscover JPL ephemeris in {}", dir.display()))?;
-    Ok((paths.header, paths.binary))
+    if covered(sb441) {
+        Ok(sb441)
+    } else if covered(horizons) {
+        Ok(horizons)
+    } else {
+        bail!(
+            "{} is not available locally — fetch it first with \
+             `starcat horizons <class>` (e.g. its category) into $STARCAT_HORIZONS_DATA",
+            placement.name
+        )
+    }
+}
+
+/// Every catalog minor body whose sb441 or Horizons id is covered by the open
+/// SPKs — the set `--omniscient` computes.
+fn omniscient_body_ids(covered: impl Fn(i32) -> bool) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for p in pericynthion::placements::CATALOG {
+        let (Some(sb441), Some(horizons)) = (p.sb441_naif_id(), p.horizons_naif_id()) else {
+            continue;
+        };
+        if covered(sb441) {
+            ids.push(sb441);
+        } else if covered(horizons) {
+            ids.push(horizons);
+        }
+    }
+    ids
+}
+
+/// Resolve the JPL start path from CLI args + env.
+///
+/// Precedence:
+///   1. `--jpl-data PATH` → use as the start node.
+///   2. `$STARCAT_JPL_DATA` → use as the start node.
+///
+/// The returned path is passed to `discover::open_dataset`, which walks up and
+/// down the JPL mirror hierarchy to find the actual header + data files.
+fn resolve_jpl_dir(data_dir_arg: Option<&std::path::Path>) -> Result<PathBuf> {
+    if let Some(d) = data_dir_arg {
+        return Ok(d.to_path_buf());
+    }
+    if let Ok(env) = std::env::var("STARCAT_JPL_DATA") {
+        return Ok(PathBuf::from(env));
+    }
+    bail!(
+        "no JPL data location supplied. Pass --jpl-data PATH or set the \
+         STARCAT_JPL_DATA environment variable to any directory in the JPL \
+         mirror hierarchy (the de441 dir, ascii/, Linux/, planets/, eph/, \
+         ftp/, or the ssd.jpl.nasa.gov root). Binary and ASCII datasets are \
+         both supported."
+    );
+}
+
+/// Resolve the JPL mirror root (the directory directly containing
+/// `ssd.jpl.nasa.gov/`) from `--root` or `$STARCAT_JPL_DATA`.
+///
+/// The returned path preserves whichever form (relative or absolute) was
+/// supplied — it is never canonicalized.
+fn resolve_mirror_root(root_arg: Option<&std::path::Path>) -> Result<PathBuf> {
+    if let Some(r) = root_arg {
+        return Ok(r.to_path_buf());
+    }
+    if let Ok(env) = std::env::var("STARCAT_JPL_DATA") {
+        let start = PathBuf::from(env);
+        return oracle::mirror_root_from(&start).ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not find a directory containing `ssd.jpl.nasa.gov/` by walking up \
+                 from $STARCAT_JPL_DATA. Pass --root pointing directly at the mirror root \
+                 (the directory that contains `ssd.jpl.nasa.gov/`)."
+            )
+        });
+    }
+    bail!(
+        "no mirror root supplied. Pass --root PATH (the directory containing \
+         `ssd.jpl.nasa.gov/`) or set $STARCAT_JPL_DATA to any path within the mirror."
+    )
+}
+
+/// Dispatch the `data` subcommand.
+fn cmd_data(args: &DataArgs) -> Result<()> {
+    match &args.cmd {
+        DataCmd::Verify(v) => cmd_data_verify(v),
+        DataCmd::Prod(p) => cmd_data_prod(p),
+    }
+}
+
+/// Dispatch `data verify` by scope.
+///
+/// `Supported` checks the [`oracle::production_entries`] subset — the files
+/// needed for the placements starcat supports — and treats a *missing* file as
+/// a failure (all of them are required). `All` checks integrity of whatever is
+/// actually present across the full oracle under the JPL path: absent files are
+/// skipped (not a failure), but any present file that fails its size/hash check
+/// is. Either path exits non-zero when a verified file fails.
+fn cmd_data_verify(args: &VerifyArgs) -> Result<()> {
+    let root = resolve_mirror_root(args.root.as_deref())?;
+    match args.scope {
+        VerifyScope::Supported => verify_required_subset(&root),
+        VerifyScope::All => verify_present_integrity(&root),
+    }
+}
+
+/// A run fails on the required subset when any file is not OK — a missing or
+/// corrupt file both count, because every file in the subset is needed.
+fn required_subset_failed(reports: &[oracle::VerifyReport]) -> bool {
+    reports
+        .iter()
+        .any(|r| !matches!(r.status, oracle::VerifyStatus::Ok))
+}
+
+/// A present-integrity run fails only when a file that IS present fails its
+/// check. Absent files are not a failure (you simply do not have them yet).
+fn present_integrity_failed(reports: &[oracle::VerifyReport]) -> bool {
+    reports.iter().any(|r| {
+        !matches!(
+            r.status,
+            oracle::VerifyStatus::Ok | oracle::VerifyStatus::Missing
+        )
+    })
+}
+
+/// Verify the supported-placements subset: every file must be present AND pass.
+fn verify_required_subset(root: &std::path::Path) -> Result<()> {
+    let entries = oracle::production_entries();
+    let reports: Vec<oracle::VerifyReport> = entries
+        .iter()
+        .map(|e| oracle::verify_entry(root, e))
+        .collect();
+    let ok = reports
+        .iter()
+        .filter(|r| matches!(r.status, oracle::VerifyStatus::Ok))
+        .count();
+    println!("{ok}/{} supported data files verified OK", reports.len());
+    for r in reports
+        .iter()
+        .filter(|r| !matches!(r.status, oracle::VerifyStatus::Ok))
+    {
+        eprintln!("FAIL {} — {:?}", r.path, r.status);
+    }
+    if required_subset_failed(&reports) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Verify integrity of whatever oracle files are present under `root`. Absent
+/// files are skipped (not a failure); a present file that fails exits non-zero.
+fn verify_present_integrity(root: &std::path::Path) -> Result<()> {
+    eprintln!("Note: hashing present mirror files can take several minutes.");
+    let entries = oracle::entries();
+    let reports: Vec<oracle::VerifyReport> = entries
+        .iter()
+        .map(|e| oracle::verify_entry(root, e))
+        .collect();
+    let present: Vec<&oracle::VerifyReport> = reports
+        .iter()
+        .filter(|r| !matches!(r.status, oracle::VerifyStatus::Missing))
+        .collect();
+    let ok = present
+        .iter()
+        .filter(|r| matches!(r.status, oracle::VerifyStatus::Ok))
+        .count();
+    let absent = reports.len() - present.len();
+    println!(
+        "{ok}/{} present files verified OK ({absent} absent, skipped)",
+        present.len()
+    );
+    for r in present
+        .iter()
+        .filter(|r| !matches!(r.status, oracle::VerifyStatus::Ok))
+    {
+        eprintln!("FAIL {} — {:?}", r.path, r.status);
+    }
+    if present_integrity_failed(&reports) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// List the supported-placements data files, one per line, paths as supplied.
+fn cmd_data_prod(args: &ProdArgs) -> Result<()> {
+    let root = resolve_mirror_root(args.root.as_deref())?;
+    for entry in oracle::production_entries() {
+        println!("{}", root.join(&entry.path).display());
+    }
+    Ok(())
+}
+
+/// Resolve the directory for Horizons-fetched SPKs from `--out` or
+/// `$STARCAT_HORIZONS_DATA`. Deliberately separate from the JPL mirror.
+fn resolve_horizons_dir(out: Option<&std::path::Path>) -> Result<PathBuf> {
+    if let Some(o) = out {
+        return Ok(o.to_path_buf());
+    }
+    if let Ok(env) = std::env::var("STARCAT_HORIZONS_DATA") {
+        return Ok(PathBuf::from(env));
+    }
+    bail!(
+        "no output directory. Pass --out PATH or set $STARCAT_HORIZONS_DATA \
+         (kept separate from the JPL mirror in $STARCAT_JPL_DATA)."
+    )
+}
+
+/// Fetch SPKs for every minor body in a class, skipping ones already on disk.
+fn cmd_horizons(args: &HorizonsArgs) -> Result<()> {
+    use pericynthion::horizons::{self, FetchTarget};
+    let category = args.noun.category();
+    let dir = resolve_horizons_dir(args.out.as_deref())?;
+    let (def_start, def_stop) = horizons::default_span();
+    let start = args.from.as_deref().unwrap_or(def_start);
+    let stop = args.to.as_deref().unwrap_or(def_stop);
+
+    // Candidates: minor bodies in this class with an MPC number. Skip any whose
+    // <naif_id>.bsp is already present (idempotent re-runs; courteous to JPL).
+    let mut targets = Vec::new();
+    let mut already = 0_usize;
+    for placement in pericynthion::placements::CATALOG
+        .iter()
+        .filter(|p| p.category == category)
+    {
+        let (Some(command), Some(naif_id)) =
+            (placement.horizons_command(), placement.horizons_naif_id())
+        else {
+            continue;
+        };
+        if dir.join(format!("{naif_id}.bsp")).exists() {
+            println!("skip {} ({naif_id}.bsp already present)", placement.name);
+            already += 1;
+            continue;
+        }
+        targets.push(FetchTarget {
+            label: placement.name.to_string(),
+            command,
+            naif_id,
+        });
+    }
+
+    if targets.is_empty() {
+        println!("nothing to fetch ({already} body/bodies already present)");
+        return Ok(());
+    }
+
+    eprintln!(
+        "Fetching {} body/bodies for {:?}, {start} .. {stop}, into {} \
+         (sequential, throttled — be kind to JPL)",
+        targets.len(),
+        args.noun,
+        dir.display()
+    );
+    let failures = horizons::fetch_all(&targets, &dir, start, stop, |t, res| match res {
+        Ok((path, n)) => println!("ok   {:<12} {:>9} bytes  {}", t.label, n, path.display()),
+        Err(e) => eprintln!("FAIL {:<12} {e}", t.label),
+    })?;
+    if failures > 0 {
+        bail!("{failures} body/bodies failed to fetch");
+    }
+    Ok(())
 }
 
 // =============================================================================
@@ -711,6 +1161,16 @@ fn print_text(
             format_zodiac_lon(cb.position.longitude_deg, fmt),
             format_signed_lat(cb.position.latitude_deg, fmt),
             cb.position.distance_au
+        );
+    }
+    // Asteroids share the body table: same columns, appended after planets.
+    for ca in &computed.asteroids {
+        println!(
+            "{:<8} {} {} {:>14.6}",
+            ca.name,
+            format_zodiac_lon(ca.position.longitude_deg, fmt),
+            format_signed_lat(ca.position.latitude_deg, fmt),
+            ca.position.distance_au
         );
     }
 
@@ -908,6 +1368,9 @@ fn page_collect_placements(
     for cb in &computed.bodies {
         v.push((cb.body.name().to_string(), cb.position.longitude_deg));
     }
+    for ca in &computed.asteroids {
+        v.push((ca.name.to_string(), ca.position.longitude_deg));
+    }
     if let Some(ang) = &computed.angles {
         if let Some(d) = ang.ac_deg {
             v.push(("Ac".into(), d));
@@ -981,8 +1444,17 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     };
 
     // === Banner content assembly ===
-    let (hour, minute, second) = parse_time(&args.time).unwrap_or((0, 0, 0.0));
-    let (year, month, day) = parse_date(&args.date).unwrap_or((0, 1, 1));
+    // date/time are guaranteed present by cmd_compute's pre-flight check
+    let (hour, minute, second) = args
+        .time
+        .as_deref()
+        .and_then(|s| parse_time(s).ok())
+        .unwrap_or((0, 0, 0.0));
+    let (year, month, day) = args
+        .date
+        .as_deref()
+        .and_then(|s| parse_date(s).ok())
+        .unwrap_or((0, 1, 1));
     let civil = CivilDate {
         year,
         month,
@@ -1013,7 +1485,8 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     let coords_str = page_coords_str(observer);
     let sect_str = page_sect_label(computed).unwrap_or("–").to_string();
 
-    let calendar_str = match args.calendar {
+    // calendar is guaranteed present by cmd_compute's pre-flight check
+    let calendar_str = match args.calendar.unwrap_or(CalendarArg::Gregorian) {
         CalendarArg::Julian => "Julian",
         CalendarArg::Gregorian => "Gregorian",
         CalendarArg::Auto => "Auto",
@@ -1075,6 +1548,10 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
                 .iter()
                 .find(|cb| cb.body == body)
                 .is_some_and(|cb| cb.retrograde);
+        }
+        // Asteroid retrograde by display name
+        if let Some(ca) = computed.asteroids.iter().find(|a| a.name == label) {
+            return ca.retrograde;
         }
         match label {
             "Nn" | "Sn" => match args.nodes {
@@ -1145,17 +1622,30 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     let panel_natural_width =
         jd_ut_str.chars().count() + sect_str.chars().count() + BANNER_MIN_GAP + 4;
 
-    // Banner natural width = max row's (left + right + min gap) + 4 for the
-    // surrounding `│ ` … ` │`. JD UT and sect have been moved to the
-    // placements table's top panel — they're considered when sizing it too.
-    let mut banner_rows: Vec<(&str, &str)> = vec![
+    // Lunar phase line natural width (inner content only, rendered flush-left).
+    // Example: "Lunar Phase  Waxing Crescent  45.23°  day 5 of 28"
+    // Must be included in panel width calculation so the box never truncates it.
+    let phase_line_width = phase_str
+        .as_deref()
+        .map(|s| "Lunar Phase  ".chars().count() + s.chars().count())
+        .unwrap_or(0);
+    // The phase line sits inside the bottom box (same border accounting as panel).
+    let phase_natural_width = if phase_line_width > 0 {
+        phase_line_width + 4
+    } else {
+        0
+    };
+
+    // ── TOP BOX = INPUTS ──
+    // This box holds ONLY user-supplied CLI inputs: date/time, location,
+    // calendar, coordinate system, zodiac, and house system.
+    // Computed values (JD, sect, lunar phase, placements) must NOT go here —
+    // they belong in the BOTTOM BOX below.
+    let banner_rows: Vec<(&str, &str)> = vec![
         (date_time_str.as_str(), coords_str.as_str()),
         (calendar_str, mode_str),
         (zodiac_str, house_str),
     ];
-    if let Some(s) = phase_str.as_deref() {
-        banner_rows.push(("Lunar Phase", s));
-    }
     let banner_max_content = banner_rows
         .iter()
         .map(|(l, r)| l.chars().count() + r.chars().count() + BANNER_MIN_GAP)
@@ -1167,7 +1657,8 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     // the target expands to match.
     let target_width = table_width(&col_widths)
         .max(banner_natural_width)
-        .max(panel_natural_width);
+        .max(panel_natural_width)
+        .max(phase_natural_width);
 
     // If table is narrower than target, distribute the slack across columns
     // (round-robin from col 0) so the table totals `target_width`.
@@ -1179,7 +1670,7 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
         extra -= 1;
     }
 
-    // === Banner render (manual box drawing) ===
+    // ── TOP BOX = INPUTS render ──
     let inside = target_width - 4;
     let bar = "─".repeat(target_width - 2);
     println!("╭{bar}╮");
@@ -1187,6 +1678,12 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
         println!("{}", banner_row(inside, l, r));
     }
     println!("╰{bar}╯");
+
+    // ── divider: everything ABOVE is user INPUT, everything BELOW is computed OUTPUT ──
+
+    // ── BOTTOM BOX = OUTPUTS ──
+    // This box holds computed results: JD, sect, lunar phase, and the
+    // placements table. Any new computed field belongs here, not in the top box.
 
     // === Placements table (via tabled) ===
     //
@@ -1225,19 +1722,48 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
         let pad = inner.saturating_sub(used);
         format!("{}{}{}", jd_ut_str, " ".repeat(pad), sect_str)
     };
+    // Lunar Phase panel row: rendered immediately below JD/sect, flush-left,
+    // inside the same bordered box. Only emitted when computed.lunar_phase is Some.
+    let lunar_phase_panel_text = phase_str.as_deref().map(|s| {
+        let inner = target_width - 4;
+        let content = format!("Lunar Phase  {s}");
+        format!("{content:<inner$}")
+    });
     // Style:
     // - Top border: plain `─` (no column tee marks above the panel row).
-    // - Row 1 rule (under panel): also a plain `─` — the JD UT / sect line
-    //   is conceptually a banner row, not a table-column row, so no `┼`s.
-    // - Row 2 rule (under column headers): standard `┼` intersections,
-    //   marking the start of the data grid.
+    // - Row 1 rule (under JD/sect panel): plain `─` — not a data-column row.
+    // - Row 2 rule: if lunar phase present, another plain `─` under it;
+    //   otherwise this is the column-header rule with standard `┼`.
+    // - Row 3 rule (when lunar phase present): column-header rule with `┼`.
     let panel_rule = HorizontalLine::full('─', '─', '├', '┤');
     let column_rule = HorizontalLine::full('─', '┼', '├', '┤');
-    table.with(Panel::header(panel_text)).with(
-        Style::rounded()
-            .intersection_top('─')
-            .horizontals([(1, panel_rule), (2, column_rule)]),
-    );
+    // Insert panels in reverse order: second panel first (lunar phase), then
+    // JD/sect — each Panel::header prepends a row, so the last insert ends up
+    // at row 0, giving us: row 0 = JD/sect, row 1 = lunar phase (if any),
+    // then the column headers row.
+    if let Some(lp_text) = lunar_phase_panel_text {
+        // Lunar phase present: 3 header rows (JD/sect, lunar phase, col headers).
+        // JD/sect and lunar phase are grouped with NO rule between them (they're
+        // all top-of-chart scalars); the only rules are row 2 (plain ─ under the
+        // lunar-phase row, separating the header block from the table) and row 3
+        // (┼-intersected column rule under the column-header row).
+        table.with(Panel::header(lp_text));
+        table.with(Panel::header(panel_text));
+        table.with(
+            Style::rounded()
+                .intersection_top('─')
+                .horizontals([(2, panel_rule), (3, column_rule)]),
+        );
+    } else {
+        // No lunar phase: 2 header rows (JD/sect, col headers).
+        // Row 1 rule (under JD/sect): plain ─, row 2 rule (under col headers): ┼.
+        table.with(Panel::header(panel_text));
+        table.with(
+            Style::rounded()
+                .intersection_top('─')
+                .horizontals([(1, panel_rule), (2, column_rule)]),
+        );
+    }
     println!("{table}");
 }
 
@@ -1366,6 +1892,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn data_subcommand_tree_is_wired() {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        let data = cli
+            .get_subcommands()
+            .find(|c| c.get_name() == "data")
+            .expect("`data` subcommand exists");
+        let names: Vec<&str> = data
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect();
+        assert!(names.contains(&"verify"), "data has `verify`: {names:?}");
+        assert!(names.contains(&"prod"), "data has `prod`: {names:?}");
+        // The old top-level name is gone.
+        assert!(
+            cli.get_subcommands().all(|c| c.get_name() != "verify-data"),
+            "verify-data must be renamed to data"
+        );
+    }
+
+    #[test]
+    fn data_verify_parses_supported_and_all() {
+        use clap::Parser;
+        // `data verify` → supported (default); `data verify all` → all.
+        let sup = Cli::try_parse_from(["starcat", "data", "verify"]).unwrap();
+        let all = Cli::try_parse_from(["starcat", "data", "verify", "all"]).unwrap();
+        match (sup.command, all.command) {
+            (Command::Data(a), Command::Data(b)) => {
+                assert!(matches!(
+                    a.cmd,
+                    DataCmd::Verify(VerifyArgs {
+                        scope: VerifyScope::Supported,
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    b.cmd,
+                    DataCmd::Verify(VerifyArgs {
+                        scope: VerifyScope::All,
+                        ..
+                    })
+                ));
+            }
+            _ => panic!("expected Data command"),
+        }
+    }
+
+    #[test]
     fn lon_drives_topocentric() {
         let obs = resolve_observer(Some("34.14"), Some("-118.35"))
             .unwrap()
@@ -1457,5 +2031,109 @@ mod tests {
         let s = format_zodiac_lon(209.995_833_3, CoordFormat::D);
         assert!(s.trim_end().ends_with(" Lib"), "expected Lib, got {s:?}");
         assert!(s.contains("29°"), "expected 29°, got {s:?}");
+    }
+
+    #[test]
+    fn catalogue_is_a_top_level_command() {
+        use clap::CommandFactory;
+        let cli = Cli::command();
+        assert!(
+            cli.get_subcommands().any(|c| c.get_name() == "catalogue"),
+            "catalogue is a top-level subcommand"
+        );
+    }
+
+    #[test]
+    fn horizons_noun_parses_and_maps_to_category() {
+        use clap::Parser;
+        use pericynthion::placements::Category;
+        let cli = Cli::try_parse_from(["starcat", "horizons", "cent"]).unwrap();
+        match cli.command {
+            Command::Horizons(args) => {
+                assert!(matches!(args.noun, HorizonsNoun::Cent));
+                assert_eq!(args.noun.category(), Category::Centaur);
+            }
+            _ => panic!("expected Horizons"),
+        }
+        // The noun is required.
+        assert!(Cli::try_parse_from(["starcat", "horizons"]).is_err());
+    }
+
+    #[test]
+    fn resolve_body_id_prefers_available_scheme() {
+        // Pretend only the Horizons (20M) Chiron is present.
+        let covered = |id: i32| id == 20_002_060;
+        assert_eq!(resolve_body_id("chiron", covered).unwrap(), 20_002_060);
+        // Unknown slug → error mentioning the name.
+        assert!(resolve_body_id("nonsuch", |_| true).is_err());
+        // Known body but not present anywhere → error suggesting a fetch.
+        let none = |_id: i32| false;
+        let err = resolve_body_id("chiron", none).unwrap_err().to_string();
+        assert!(err.contains("chiron") || err.contains("Chiron"));
+        assert!(err.to_lowercase().contains("horizons") || err.to_lowercase().contains("fetch"));
+    }
+
+    #[test]
+    fn resolve_body_id_prefers_sb441_over_horizons() {
+        // Both sb441 (2_002_060) and Horizons (20_002_060) covered → prefer sb441.
+        let covered = |id: i32| id == 2_002_060 || id == 20_002_060;
+        assert_eq!(resolve_body_id("chiron", covered).unwrap(), 2_002_060);
+    }
+
+    #[test]
+    fn resolve_body_id_non_spk_body_errors() {
+        // Sun has no MPC number → not an SPK minor body.
+        let err = resolve_body_id("sun", |_| true).unwrap_err().to_string();
+        assert!(err.to_lowercase().contains("sun") || err.to_lowercase().contains("de441"));
+    }
+
+    #[test]
+    fn omniscient_body_ids_returns_covered_subset() {
+        // Only Chiron's sb441 id is "covered".
+        let chiron_sb441 = 2_002_060_i32;
+        let covered = move |id: i32| id == chiron_sb441;
+        let ids = omniscient_body_ids(covered);
+        assert!(ids.contains(&chiron_sb441));
+        // Non-covered bodies must not appear.
+        assert!(!ids.contains(&2_000_001_i32)); // Ceres sb441 — not covered here
+    }
+
+    #[test]
+    fn omniscient_is_a_bare_flag() {
+        use clap::Parser;
+        // `--omniscient` takes no value now (its only mode was `bodies`).
+        let cli = Cli::try_parse_from(["starcat", "compute", "--omniscient"]).unwrap();
+        match cli.command {
+            Command::Compute(args) => assert!(args.omniscient),
+            _ => panic!("expected Compute"),
+        }
+        // The old value forms (`ls`, `prod`, `bodies`) are no longer accepted.
+        assert!(Cli::try_parse_from(["starcat", "compute", "--omniscient", "ls"]).is_err());
+    }
+
+    #[test]
+    fn verify_scopes_treat_missing_files_differently() {
+        use pericynthion::jpl::oracle::{VerifyReport, VerifyStatus};
+        let missing = VerifyReport {
+            path: "a".into(),
+            status: VerifyStatus::Missing,
+        };
+        let ok = VerifyReport {
+            path: "b".into(),
+            status: VerifyStatus::Ok,
+        };
+        let corrupt = VerifyReport {
+            path: "c".into(),
+            status: VerifyStatus::HashMismatch {
+                expected: "x",
+                actual: "y".into(),
+            },
+        };
+        // Required subset: a missing file IS a failure.
+        assert!(required_subset_failed(&[missing.clone(), ok.clone()]));
+        // Present-integrity: missing alongside OK is fine (absent is allowed).
+        assert!(!present_integrity_failed(&[missing.clone(), ok.clone()]));
+        // Present-integrity: a present corrupt file fails even amid absences.
+        assert!(present_integrity_failed(&[missing, corrupt]));
     }
 }

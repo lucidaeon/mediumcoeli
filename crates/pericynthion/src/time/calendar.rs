@@ -368,7 +368,7 @@ mod tests {
         );
     }
 
-    // === Test-chart dates from pericynthion.md ===
+    // === Test-chart dates from the reference chart set ===
     //
     // Reference values are computed via the same Meeus formula (cross-
     // checked against multiple independent JD calculators including

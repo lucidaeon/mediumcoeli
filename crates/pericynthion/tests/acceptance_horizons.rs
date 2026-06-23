@@ -120,8 +120,14 @@ fn dlt(d: f64, tol: f64) -> (&'static str, &'static str) {
 
 fn locate_jpl_paths() -> Option<(PathBuf, PathBuf)> {
     let dir = std::env::var("STARCAT_JPL_DATA").ok().map(PathBuf::from)?;
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("STARCAT_JPL_DATA autodiscovery failed: {e}"));
+    let loc =
+        discover::locate(&dir).unwrap_or_else(|e| panic!("STARCAT_JPL_DATA locate failed: {e}"));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
     Some((paths.header, paths.binary))
 }
 

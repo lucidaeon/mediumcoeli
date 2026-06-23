@@ -287,7 +287,7 @@ fn parses_north_lat_with_seconds() {
 
 #[test]
 fn parses_south_lat() {
-    // Jakarta -6.21°, 106.85° (docs/ref_synthetics.md) → DMS 6°12'36"S, 106°51'E.
+    // Jakarta -6.21°, 106.85° (skills/astrologer/fixtures/ref_synthetics.md) → DMS 6°12'36"S, 106°51'E.
     // ADB "6s1236" = 6°12'36" S = -(6 + 12/60 + 36/3600).
     let xml = wrap(&minimal_entry(
         12,
@@ -449,7 +449,7 @@ fn rrc_maps_to_rating_strings() {
 
 #[test]
 fn ctimetype_l_sets_is_lmt() {
-    // Synthetic record (Lima -12.05°, -77.04° from docs/ref_synthetics.md →
+    // Synthetic record (Lima -12.05°, -77.04° from skills/astrologer/fixtures/ref_synthetics.md →
     // DMS 12°03'S, 77°02'24"W). ctimetype "l" must set is_lmt.
     let xml = wrap(&minimal_entry(
         30,

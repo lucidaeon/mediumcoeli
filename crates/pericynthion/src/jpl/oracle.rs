@@ -1,0 +1,374 @@
+//! Hardcoded BLAKE3 oracle of the JPL `eph/` data mirror.
+//!
+//! This module is a *dataset oracle for posterity*: it records every file
+//! we mirror under `ssd.jpl.nasa.gov/ftp/eph/{planets,satellites,small_bodies}/`,
+//! its byte size, and its unkeyed BLAKE3 hash. It lets us verify a user's
+//! local copy is bit-identical to the reference mirror, and detect silent
+//! corruption or truncated downloads.
+
+#[path = "oracle_data.rs"]
+mod oracle_data;
+
+use crate::error::PericynthionError;
+use std::path::{Path, PathBuf};
+
+/// One file's identity: byte size + lowercase-hex BLAKE3, keyed by name
+/// within an [`OracleDir`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OracleFile {
+    /// File name (no directory component).
+    pub name: &'static str,
+    /// Size in bytes.
+    pub size: u64,
+    /// Unkeyed BLAKE3 of the file's bytes, lowercase hex (64 chars).
+    pub blake3_hex: &'static str,
+}
+
+/// A directory of files sharing a common path prefix. Grouping keeps the
+/// generated table readable — the long mirror path is written once.
+#[derive(Debug, Clone, Copy)]
+pub struct OracleDir {
+    /// Path prefix relative to the mirror root, e.g.
+    /// `ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441`.
+    pub prefix: &'static str,
+    /// Files directly in this directory.
+    pub files: &'static [OracleFile],
+}
+
+/// A flattened row: full relative path + size + hash. Not `Copy` — owns a `String`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OracleEntry {
+    /// Full path relative to the mirror root.
+    pub path: String,
+    /// Size in bytes.
+    pub size: u64,
+    /// Unkeyed BLAKE3, lowercase hex.
+    pub blake3_hex: &'static str,
+}
+
+/// Compute the lowercase-hex unkeyed BLAKE3 of a file's bytes.
+///
+/// # Errors
+/// Returns [`PericynthionError::Io`] if the file cannot be read.
+pub fn hash_file(path: &Path) -> Result<String, PericynthionError> {
+    let mut hasher = blake3::Hasher::new();
+    let mut file = std::fs::File::open(path).map_err(|source| PericynthionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    std::io::copy(&mut file, &mut hasher).map_err(|source| PericynthionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+/// Outcome of checking one oracle entry against a file on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifyStatus {
+    /// Size and hash both match.
+    Ok,
+    /// File present but wrong size (hash not computed — fast fail).
+    SizeMismatch {
+        /// Expected size from the oracle.
+        expected: u64,
+        /// Actual size on disk.
+        actual: u64,
+    },
+    /// Size matches but BLAKE3 differs.
+    HashMismatch {
+        /// Expected hash from the oracle.
+        expected: &'static str,
+        /// Actual hash computed from the file on disk.
+        actual: String,
+    },
+    /// File not found under the root.
+    Missing,
+}
+
+/// Per-file verification result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifyReport {
+    /// Path relative to the mirror root (same as [`OracleEntry::path`]).
+    pub path: String,
+    /// Verification outcome for this file.
+    pub status: VerifyStatus,
+}
+
+/// Verify a single oracle entry against a file on disk.
+///
+/// `root` is the directory that directly contains `ssd.jpl.nasa.gov/`; the
+/// full path checked is `root.join(&entry.path)`.  Size is checked first; if
+/// it differs the file is not hashed (fast fail).
+#[must_use]
+pub fn verify_entry(root: &Path, entry: &OracleEntry) -> VerifyReport {
+    let full = root.join(&entry.path);
+    let status = match std::fs::metadata(&full) {
+        Err(_) => VerifyStatus::Missing,
+        Ok(m) if m.len() != entry.size => VerifyStatus::SizeMismatch {
+            expected: entry.size,
+            actual: m.len(),
+        },
+        Ok(_) => match hash_file(&full) {
+            Ok(actual) if actual == entry.blake3_hex => VerifyStatus::Ok,
+            Ok(actual) => VerifyStatus::HashMismatch {
+                expected: entry.blake3_hex,
+                actual,
+            },
+            Err(_) => VerifyStatus::Missing,
+        },
+    };
+    VerifyReport {
+        path: entry.path.clone(),
+        status,
+    }
+}
+
+/// Verify every oracle entry resolved under `root`, returning one
+/// [`VerifyReport`] per file.
+///
+/// `root` is the directory that directly contains `ssd.jpl.nasa.gov/`.
+/// Delegates to [`verify_entry`] for each entry from [`entries()`].
+#[must_use]
+pub fn verify_against_root(root: &Path) -> Vec<VerifyReport> {
+    entries().iter().map(|e| verify_entry(root, e)).collect()
+}
+
+/// All mirrored directories with their files.
+#[must_use]
+pub fn dirs() -> &'static [OracleDir] {
+    oracle_data::DIRS
+}
+
+/// Total number of files in the oracle.
+#[must_use]
+pub fn file_count() -> usize {
+    oracle_data::DIRS.iter().map(|d| d.files.len()).sum()
+}
+
+/// Flatten the `oracle_data::DIRS` oracle table into full-path rows.
+///
+/// Each [`OracleEntry`] has a `path` formed by joining the [`OracleDir::prefix`]
+/// with the [`OracleFile::name`] via `/`.
+#[must_use]
+pub fn entries() -> Vec<OracleEntry> {
+    oracle_data::DIRS
+        .iter()
+        .flat_map(|d| {
+            d.files.iter().map(move |f| OracleEntry {
+                path: format!("{}/{}", d.prefix, f.name),
+                size: f.size,
+                blake3_hex: f.blake3_hex,
+            })
+        })
+        .collect()
+}
+
+/// The oracle subset for starcat's currently-supported placements: the DE441
+/// binary dataset (header + ephemeris) plus the headline small-body SPK.
+///
+/// This is the ~3 GB `starcat data verify` checks and `starcat data prod`
+/// lists. It is drawn from the oracle table itself — so the BLAKE3 hashes are
+/// already known and selection needs no disk access — unlike
+/// [`crate::manifest::production_data_files`], which discovers whatever DE
+/// dataset (binary or ASCII) actually exists under a given path.
+#[must_use]
+pub fn production_entries() -> Vec<OracleEntry> {
+    entries()
+        .into_iter()
+        .filter(|e| is_production_path(&e.path))
+        .collect()
+}
+
+/// True when an oracle path belongs to the supported-placements subset:
+/// the DE441 binary layout (`Linux/de441/header.441` + `linux_*.441`) or the
+/// headline small-body SPK (`sb441-n16.bsp`).
+fn is_production_path(path: &str) -> bool {
+    let de441_binary = path.contains("/planets/Linux/de441/")
+        && (path.ends_with("/header.441") || path.contains("/linux_"));
+    let small_body = path.ends_with("/sb441-n16.bsp");
+    de441_binary || small_body
+}
+
+/// Walk `start` and its ancestors looking for a directory that directly
+/// contains an `ssd.jpl.nasa.gov/` child directory.
+///
+/// Returns `Some(d)` for the first such ancestor (including `start` itself),
+/// or `None` if no ancestor matches.
+///
+/// # Return semantics
+///
+/// The returned path is the *mirror root* — the directory you pass to
+/// [`verify_against_root`].  Oracle paths begin with
+/// `ssd.jpl.nasa.gov/ftp/…`, so the mirror root is the directory that
+/// **directly contains** `ssd.jpl.nasa.gov/`.
+///
+/// # Examples
+///
+/// Given a mirror laid out as `.../nasa/ssd.jpl.nasa.gov/ftp/eph/…`:
+///
+/// - `mirror_root_from(".../nasa/ssd.jpl.nasa.gov/ftp/eph/planets")` → `Some(".../nasa")`
+/// - `mirror_root_from(".../nasa")` → `Some(".../nasa")`
+/// - `mirror_root_from("/tmp/unrelated")` → `None`
+#[must_use]
+pub fn mirror_root_from(start: &Path) -> Option<PathBuf> {
+    let mut current = start;
+    loop {
+        if current.join("ssd.jpl.nasa.gov").is_dir() {
+            return Some(current.to_path_buf());
+        }
+        current = current.parent()?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// BLAKE3 of `"hello world\n"` — shared with A1/A3 tests.
+    pub(super) const TEST_HELLO_HASH: &str =
+        "dc5a4edb8240b018124052c330270696f96771a63b45250a5c17d3000e823355";
+
+    #[test]
+    fn verify_entry_reports_ok_missing_and_mismatch() {
+        use std::io::Write;
+        let tmp = tempdir::TempDir::new("oracle-verify").unwrap();
+        let root = tmp.path();
+        let entry = super::OracleEntry {
+            path: "ssd.jpl.nasa.gov/ftp/eph/x/hello.txt".into(),
+            size: 12,
+            // b3sum of "hello world\n" — same value as Task A1 `want`.
+            blake3_hex: TEST_HELLO_HASH,
+        };
+        // Missing:
+        assert!(matches!(
+            super::verify_entry(root, &entry).status,
+            super::VerifyStatus::Missing
+        ));
+        // Create correct file → Ok:
+        let full = root.join(&entry.path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::File::create(&full)
+            .unwrap()
+            .write_all(b"hello world\n")
+            .unwrap();
+        assert!(matches!(
+            super::verify_entry(root, &entry).status,
+            super::VerifyStatus::Ok
+        ));
+        // Corrupt size → SizeMismatch:
+        std::fs::File::create(&full)
+            .unwrap()
+            .write_all(b"short")
+            .unwrap();
+        assert!(matches!(
+            super::verify_entry(root, &entry).status,
+            super::VerifyStatus::SizeMismatch {
+                expected: 12,
+                actual: 5
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_entry_reports_hash_mismatch_on_same_size_wrong_bytes() {
+        use std::io::Write;
+        let tmp = tempdir::TempDir::new("oracle-hashmismatch").unwrap();
+        let root = tmp.path();
+        // Entry claims 12 bytes hashing to TEST_HELLO_HASH ("hello world\n").
+        let entry = super::OracleEntry {
+            path: "ssd.jpl.nasa.gov/ftp/eph/x/hello.txt".into(),
+            size: 12,
+            blake3_hex: TEST_HELLO_HASH,
+        };
+        let full = root.join(&entry.path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        // Same byte length (12) but different content → size check passes,
+        // hash check fails: exercises the HashMismatch arm.
+        std::fs::File::create(&full)
+            .unwrap()
+            .write_all(b"HELLO world\n")
+            .unwrap();
+        match super::verify_entry(root, &entry).status {
+            super::VerifyStatus::HashMismatch { expected, actual } => {
+                assert_eq!(expected, TEST_HELLO_HASH);
+                assert_ne!(actual, TEST_HELLO_HASH);
+                assert_eq!(actual.len(), 64);
+                assert!(actual.bytes().all(|b| b.is_ascii_hexdigit()));
+            }
+            other => panic!("expected HashMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hash_file_matches_known_blake3() {
+        use std::io::Write;
+        let tmp = tempdir::TempDir::new("oracle-hash").unwrap();
+        let p = tmp.path().join("hello.txt");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(b"hello world\n").unwrap();
+        // b3sum of "hello world\n":
+        let want = "dc5a4edb8240b018124052c330270696f96771a63b45250a5c17d3000e823355";
+        let got = super::hash_file(&p).unwrap();
+        assert_eq!(got.len(), 64);
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn mirror_root_from_finds_ancestor_containing_ssd_dir() {
+        let tmp = tempdir::TempDir::new("oracle-mirror-root").unwrap();
+        let root = tmp.path();
+        // Build root/ssd.jpl.nasa.gov/ftp/eph/planets/deep/
+        let deep = root.join("ssd.jpl.nasa.gov/ftp/eph/planets/deep");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        // Walking up from a deeply nested dir should find root.
+        assert_eq!(super::mirror_root_from(&deep), Some(root.to_path_buf()));
+
+        // Walking from ssd.jpl.nasa.gov itself should also find root (its parent has the child).
+        let ssd_dir = root.join("ssd.jpl.nasa.gov");
+        assert_eq!(super::mirror_root_from(&ssd_dir), Some(root.to_path_buf()));
+
+        // Walking from root itself should return root.
+        assert_eq!(super::mirror_root_from(root), Some(root.to_path_buf()));
+
+        // An unrelated directory has no ssd.jpl.nasa.gov ancestor.
+        let unrelated = tempdir::TempDir::new("oracle-unrelated").unwrap();
+        assert_eq!(super::mirror_root_from(unrelated.path()), None);
+    }
+
+    #[test]
+    fn production_entries_are_the_de441_binary_plus_small_body_spk() {
+        let prod = super::production_entries();
+        assert!(!prod.is_empty(), "production subset must not be empty");
+        // The supported subset is small — a handful of files, not the mirror.
+        assert!(prod.len() <= 8, "unexpectedly large: {}", prod.len());
+        let ends = |s: &str| prod.iter().any(|e| e.path.ends_with(s));
+        assert!(ends("ftp/eph/planets/Linux/de441/header.441"));
+        assert!(ends("ftp/eph/planets/Linux/de441/linux_m13000p17000.441"));
+        assert!(ends("ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp"));
+        // No ASCII-layout or unrelated DE sets leak in.
+        assert!(prod.iter().all(|e| !e.path.contains("/ascii/")));
+        assert!(prod.iter().all(|e| !e.path.contains("/de102/")));
+    }
+
+    #[test]
+    fn oracle_covers_all_mirrored_files() {
+        // The mirror we hashed contained exactly 1374 files under the three trees.
+        assert_eq!(super::file_count(), 1374);
+        // Every hash is 64 lowercase hex chars; every path starts at the mirror root.
+        for e in super::entries() {
+            assert_eq!(e.blake3_hex.len(), 64, "bad hash for {}", e.path);
+            assert!(e.blake3_hex.bytes().all(|b| b.is_ascii_hexdigit()));
+            assert!(
+                e.path.starts_with("ssd.jpl.nasa.gov/ftp/eph/"),
+                "{}",
+                e.path
+            );
+        }
+        // DE441 binary is present and known-size.
+        let bin = super::entries()
+            .into_iter()
+            .find(|e| e.path.ends_with("Linux/de441/linux_m13000p17000.441"))
+            .expect("DE441 binary in oracle");
+        assert_eq!(bin.size, 2_788_676_624);
+    }
+}

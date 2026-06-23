@@ -1,3 +1,4 @@
+brew "b3sum"
 brew "just"
 brew "jq"
 brew "python3"

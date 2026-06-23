@@ -27,6 +27,12 @@ build CRATE='':
 [group('build')]
 release CRATE='':
 	cargo build --release {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }}
+	{{ if CRATE == '' { 'cargo run --release -q -p starcat -- placements > docs/placements.md' } else { 'true' } }}
+
+# Regenerate docs/placements.md from the pericynthion catalog (deterministic).
+[group('build')]
+placements:
+	cargo run --release -q -p starcat -- placements > docs/placements.md
 
 # Type-check without producing binaries (or one CRATE).
 [group('build')]

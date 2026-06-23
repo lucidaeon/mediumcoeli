@@ -34,6 +34,12 @@ pub enum BodyId {
     Pallas,
     Juno,
     Vesta,
+    Hygiea,
+    Pholus,
+    Nessus,
+    Chariklo,
+    Ixion,
+    Varuna,
 }
 
 /// Chart angle identifiers.
@@ -161,6 +167,14 @@ mod tests {
     fn body_id_slugs() {
         assert_eq!(serde_json::to_string(&BodyId::Sun).unwrap(), "\"sun\"");
         assert_eq!(serde_json::to_string(&BodyId::Pluto).unwrap(), "\"pluto\"");
+    }
+
+    #[test]
+    fn hygiea_serializes() {
+        assert_eq!(
+            serde_json::to_string(&BodyId::Hygiea).unwrap(),
+            "\"hygiea\""
+        );
     }
 
     #[test]

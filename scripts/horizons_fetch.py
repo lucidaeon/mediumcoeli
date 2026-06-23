@@ -63,6 +63,17 @@ GEOCENTRIC_BODIES = {
     "Pluto": "999",
 }
 
+# Small-body HORIZONS designators for the classical astrologer asteroids.
+# The trailing ';' selects the small-body record (disambiguates from major-planet
+# integer codes). MPC numbers: Ceres=1, Pallas=2, Juno=3, Vesta=4, Hygiea=10.
+ASTEROID_BODIES: dict[str, str] = {
+    "Ceres": "1;",
+    "Pallas": "2;",
+    "Juno": "3;",
+    "Vesta": "4;",
+    "Hygiea": "10;",
+}
+
 # Heliocentric: Earth replaces Sun. Sun itself is the origin (zero distance),
 # HORIZONS would error on it, so skip. Use 399 (Earth geocenter) to approximate
 # pericynthion's derived Body::Earth.
@@ -96,11 +107,30 @@ class Chart:
     iso_ut: str  # ISO 8601 UT instant (no TZ; HORIZONS treats as UT)
     notes: str
     observer: ObserverLocation = field(default=None)
+    bodies: Optional[dict[str, str]] = field(default=None)
+    # When `bodies` is set, it overrides the mode-default body map (geocentric
+    # or topocentric only — heliocentric VECTORS are not supported for small
+    # bodies). Used for asteroid-only validation epochs.
 
 
-# Each entry here must have a corresponding approved docs/ref_*.md file.
-# Adding a new chart requires adding the ref doc first.
+# Most entries require a corresponding docs/ref_*.md file.
+# Exception: synthetic validation epochs (no PII, no natal chart) may omit
+# the ref doc — they exist solely to pin numeric oracle values.
 CHARTS: list[Chart] = [
+    # ── Synthetic validation epoch: J2000 noon UT ─────────────────────────
+    # Not a natal chart; no PII. Used for geocentric asteroid absolute
+    # validation against HORIZONS. Heliocentric mode is not supported for
+    # small bodies (no VECTORS endpoint for SPK targets).
+    Chart(
+        id="asteroids_j2000",
+        name="Asteroids J2000",
+        iso_ut="2000-01-01 12:00:00",
+        notes=(
+            "J2000 noon UT — geocentric asteroid validation epoch "
+            "(synthetic, not a natal chart; no PII)"
+        ),
+        bodies=ASTEROID_BODIES,
+    ),
     Chart(
         id="vettius_valens",
         name="Vettius Valens",
@@ -350,12 +380,19 @@ def fetch_chart(chart: Chart, mode: str) -> dict:
     if mode == "topocentric" and chart.observer is None:
         raise ValueError(f"chart {chart.id!r} has no observer location for topocentric fetch")
 
+    if chart.bodies is not None and mode == "heliocentric":
+        raise ValueError(
+            f"chart {chart.id!r} sets a custom `bodies` map, but heliocentric VECTORS "
+            "mode is not supported for small bodies (no SPK→VECTORS endpoint). "
+            "Use --mode geocentric or --mode topocentric instead."
+        )
+
     if mode == "geocentric":
-        bodies_map = GEOCENTRIC_BODIES
+        bodies_map = chart.bodies if chart.bodies is not None else GEOCENTRIC_BODIES
         fetch_fn = lambda name, hid: fetch_one_geocentric(hid, chart.iso_ut)
         source_note = "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric"
     elif mode == "topocentric":
-        bodies_map = GEOCENTRIC_BODIES
+        bodies_map = chart.bodies if chart.bodies is not None else GEOCENTRIC_BODIES
         fetch_fn = lambda name, hid: fetch_one_topocentric(hid, chart.iso_ut, chart.observer)
         source_note = (
             "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), topocentric "

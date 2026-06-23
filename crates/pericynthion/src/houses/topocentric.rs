@@ -2,8 +2,7 @@
 #![allow(clippy::similar_names)]
 
 //! Topocentric (Polich-Page 1961) house system — gated behind
-//! `noref-houses` until a refchart oracle is captured. See
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! `noref-houses` until a refchart oracle is captured.
 //!
 //! Closed-form Placidus approximation using a modified-latitude function
 //! tan(θ) = f · tan(φ), where f is the Placidus semi-arc fraction

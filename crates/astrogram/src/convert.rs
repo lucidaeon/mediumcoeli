@@ -122,7 +122,7 @@ mod tests {
     use super::*;
 
     fn sample_charts() -> Vec<Chart> {
-        // Anna Freud — reference data from docs/ref_anna_freud_alcabitius.md.
+        // Anna Freud — reference data from skills/astrologer/fixtures/ref_anna_freud_alcabitius.md.
         // Uses test_support::fully_populated() which is cfg(test)-only inside
         // the test_support module; we call it directly here since we are also
         // cfg(test).

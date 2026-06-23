@@ -33,7 +33,6 @@ rustc-ice-*.txt
 discovery
 research
 specimens
-docs/ref_*.md
 
 # Astrology databases 
 *.sfcht

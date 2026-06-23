@@ -2,8 +2,7 @@
 #![allow(clippy::needless_range_loop)]
 
 //! Sripati (Sri Pati Paddhati) house system — gated behind
-//! `noref-houses` until a refchart oracle is captured. See
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! `noref-houses` until a refchart oracle is captured.
 //!
 //! Porphyry variant: bhāva sandhi (house boundaries) sit at Porphyry's
 //! cusps; bhāva madhya (house centers) sit at Porphyry's cusps. Encoded

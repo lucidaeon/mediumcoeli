@@ -2,8 +2,7 @@
 #![allow(clippy::similar_names, clippy::many_single_char_names)]
 
 //! Krusinski-Pisa-Goeldi house system — gated behind `noref-houses`
-//! until a refchart oracle is captured. See
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! until a refchart oracle is captured.
 //!
 //! Every cusp's great circle passes through the ASC–DSC axis, tilted at
 //! 30°, 60°, 90°, 120°, 150° from horizontal. Cusps are the ecliptic

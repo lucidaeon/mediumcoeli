@@ -11,7 +11,7 @@ use crate::chart::{
 };
 
 /// A chart populating every lossy field, using allow-listed reference data
-/// (Anna Freud, Vienna — `docs/ref_anna_freud_alcabitius.md`).
+/// (Anna Freud, Vienna — `skills/astrologer/fixtures/ref_anna_freud_alcabitius.md`).
 ///
 /// Non-default `HouseSystem`, `Zodiac`, and `CoordinateSystem` values are
 /// deliberate: a format that hard-codes the defaults on read would otherwise

@@ -2,8 +2,7 @@
 #![allow(clippy::similar_names, clippy::many_single_char_names)]
 
 //! Horizontal (Azimuthal) house system — gated behind `noref-houses`
-//! until a refchart oracle is captured. See
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! until a refchart oracle is captured.
 //!
 //! Divides the horizon into 12 equal 30° azimuth sectors starting from
 //! the east point (so H1 = ASC). Each cusp is the ecliptic image of an

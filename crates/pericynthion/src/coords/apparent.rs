@@ -20,8 +20,18 @@ use crate::coords::precession::precess_j2000_to_date;
 use crate::coords::sidereal_time::gast_rad;
 use crate::coords::topocentric::{ObserverLocation, apply_topocentric, observer_equatorial_km};
 use crate::coords::transform::{equatorial_to_ecliptic, latitude_rad, longitude_rad, magnitude};
-use crate::ephemeris::Ephemeris;
+use crate::ephemeris::{Ephemeris, StateVector};
 use crate::error::PericynthionError;
+use crate::spk::SpkEphemeris;
+
+/// Convert a TT Julian Date to ET seconds past J2000 (`et_sec`), the
+/// time argument [`SpkEphemeris::state`] expects.
+///
+/// TT and TDB differ by at most ±1.7 ms (periodic), producing sub-meter
+/// position errors for main-belt asteroids — negligible for astrology.
+fn et_of(jd_tt: f64) -> f64 {
+    (jd_tt - 2_451_545.0) * 86_400.0
+}
 
 /// Final astrologer-facing output: a body's apparent position in
 /// tropical ecliptic-of-date coordinates.
@@ -40,8 +50,13 @@ pub struct EclipticPosition {
 
 const AU_KM: f64 = 149_597_870.7;
 
-/// Compute the apparent ecliptic-of-date position of a body, observed
-/// from Earth's barycentric position at the given TT Julian Date.
+/// Body-agnostic geocentric apparent-place core.
+///
+/// Given Earth's [`StateVector`] at the observation epoch and a closure
+/// returning the body's **barycentric** km-position at any (retarded) TT
+/// Julian Date, runs the canonical pipeline and returns the apparent
+/// ecliptic-of-date position. Every step after the body closure is
+/// identical for planets, the Moon, and SPK asteroids.
 ///
 /// Pipeline:
 ///
@@ -51,49 +66,12 @@ const AU_KM: f64 = 149_597_870.7;
 /// 4. Nutation (mean-of-date → true-of-date).
 /// 5. Rotation to ecliptic of date using true obliquity (ε + Δε).
 /// 6. Convert to longitude/latitude/distance.
-///
-/// # Errors
-///
-/// Propagates I/O errors from the ephemeris if `JD_TT` is out of range.
-pub fn apparent_ecliptic_position(
-    ephem: &Ephemeris,
-    body: Body,
+fn apparent_from_earth_and_body(
+    earth: &StateVector,
     jd_tt: f64,
-) -> Result<EclipticPosition, PericynthionError> {
-    // Earth's state at the observer's epoch.
-    let earth = ephem.state(Body::Earth, jd_tt)?;
-
+    body_position_at: impl Fn(f64) -> [f64; 3],
+) -> EclipticPosition {
     // === 1. Light-time iteration ===
-    let body_position_at = |jd: f64| {
-        // Returns the body's *barycentric* km-position at jd so that
-        // iterate_light_time can subtract earth_bary(jd_tt) and yield
-        // the correct astrometric direction:
-        //   geo_astro = body_bary(emission) − earth_bary(observation)
-        //
-        // For planets this is just body_bary(jd) directly.
-        //
-        // For the Moon, DE441 stores moon_geo(jd) = moon_bary(jd) − earth_bary(jd),
-        // so we must add earth_bary(jd) — Earth at the *emission* epoch, not at the
-        // observation epoch. Using earth_bary(jd_tt) here would cancel in the loop
-        // and leave moon_geo(emission): geo anchored to Earth at emission rather than
-        // Earth at observation, causing annual aberration to be applied twice
-        // (~20" error for the Moon).
-        if body == Body::Moon {
-            let earth_at_jd = ephem
-                .state(Body::Earth, jd)
-                .map_or([0.0; 3], |s| s.position_km);
-            let moon_geo = ephem
-                .state(Body::Moon, jd)
-                .map_or([0.0; 3], |s| s.position_km);
-            [
-                earth_at_jd[0] + moon_geo[0],
-                earth_at_jd[1] + moon_geo[1],
-                earth_at_jd[2] + moon_geo[2],
-            ]
-        } else {
-            ephem.state(body, jd).map_or([0.0; 3], |s| s.position_km)
-        }
-    };
     let (geo_astrometric_km, _tau) =
         iterate_light_time(jd_tt, &earth.position_km, body_position_at);
 
@@ -118,48 +96,25 @@ pub fn apparent_ecliptic_position(
     let lat_rad = latitude_rad(&geo_ecliptic_km);
     let r_km = magnitude(&geo_ecliptic_km);
 
-    Ok(EclipticPosition {
+    EclipticPosition {
         longitude_deg: lon_rad.to_degrees(),
         latitude_deg: lat_rad.to_degrees(),
         distance_au: r_km / AU_KM,
-    })
+    }
 }
 
-/// Compute the apparent ecliptic-of-date position of a body with topocentric
-/// parallax applied, as seen by an observer at a specific location on Earth.
+/// Body-agnostic topocentric apparent-place core.
 ///
-/// Identical to [`apparent_ecliptic_position`] through the nutation step,
-/// then the observer's geocentric position vector is subtracted in the true
-/// equatorial frame of date before rotating to ecliptic coordinates.
-///
-/// # Errors
-///
-/// Propagates I/O errors from the ephemeris if `JD_TT` is out of range.
-pub fn apparent_ecliptic_position_topocentric(
-    ephem: &Ephemeris,
-    body: Body,
+/// Identical to `apparent_from_earth_and_body` through the nutation
+/// step, then the observer's geocentric position vector is subtracted in
+/// the true equatorial frame of date before rotating to ecliptic
+/// coordinates.
+fn apparent_from_earth_and_body_topocentric(
+    earth: &StateVector,
     jd_tt: f64,
     observer: &ObserverLocation,
-) -> Result<EclipticPosition, PericynthionError> {
-    let earth = ephem.state(Body::Earth, jd_tt)?;
-
-    let body_position_at = |jd: f64| {
-        if body == Body::Moon {
-            let earth_at_jd = ephem
-                .state(Body::Earth, jd)
-                .map_or([0.0; 3], |s| s.position_km);
-            let moon_geo = ephem
-                .state(Body::Moon, jd)
-                .map_or([0.0; 3], |s| s.position_km);
-            [
-                earth_at_jd[0] + moon_geo[0],
-                earth_at_jd[1] + moon_geo[1],
-                earth_at_jd[2] + moon_geo[2],
-            ]
-        } else {
-            ephem.state(body, jd).map_or([0.0; 3], |s| s.position_km)
-        }
-    };
+    body_position_at: impl Fn(f64) -> [f64; 3],
+) -> EclipticPosition {
     let (geo_astrometric_km, _tau) =
         iterate_light_time(jd_tt, &earth.position_km, body_position_at);
 
@@ -182,11 +137,223 @@ pub fn apparent_ecliptic_position_topocentric(
     let lat_rad = latitude_rad(&topo_ecliptic_km);
     let r_km = magnitude(&topo_ecliptic_km);
 
-    Ok(EclipticPosition {
+    EclipticPosition {
         longitude_deg: lon_rad.to_degrees(),
         latitude_deg: lat_rad.to_degrees(),
         distance_au: r_km / AU_KM,
-    })
+    }
+}
+
+/// Build the barycentric-position closure for a DE441 planet or the Moon.
+///
+/// Returns the body's *barycentric* km-position at `jd` so that
+/// `iterate_light_time` can subtract `earth_bary(jd_tt)` and yield the
+/// correct astrometric direction:
+///   `geo_astro = body_bary(emission) − earth_bary(observation)`
+///
+/// For planets this is just `body_bary(jd)` directly.
+///
+/// For the Moon, DE441 stores `moon_geo(jd) = moon_bary(jd) − earth_bary(jd)`,
+/// so we must add `earth_bary(jd)` — Earth at the *emission* epoch, not at
+/// the observation epoch. Using `earth_bary(jd_tt)` here would cancel in the
+/// loop and leave `moon_geo(emission)`: geo anchored to Earth at emission
+/// rather than Earth at observation, causing annual aberration to be applied
+/// twice (~20" error for the Moon).
+fn planet_body_position_at<'a>(
+    ephem: &'a Ephemeris<'a>,
+    body: Body,
+) -> impl Fn(f64) -> [f64; 3] + 'a {
+    move |jd: f64| {
+        if body == Body::Moon {
+            let earth_at_jd = ephem
+                .state(Body::Earth, jd)
+                .map_or([0.0; 3], |s| s.position_km);
+            let moon_geo = ephem
+                .state(Body::Moon, jd)
+                .map_or([0.0; 3], |s| s.position_km);
+            [
+                earth_at_jd[0] + moon_geo[0],
+                earth_at_jd[1] + moon_geo[1],
+                earth_at_jd[2] + moon_geo[2],
+            ]
+        } else {
+            ephem.state(body, jd).map_or([0.0; 3], |s| s.position_km)
+        }
+    }
+}
+
+/// Compute the apparent ecliptic-of-date position of a body, observed
+/// from Earth's barycentric position at the given TT Julian Date.
+///
+/// Thin wrapper over `apparent_from_earth_and_body` supplying the
+/// DE441 planet/Moon body-position closure.
+///
+/// # Errors
+///
+/// Propagates I/O errors from the ephemeris if `JD_TT` is out of range.
+pub fn apparent_ecliptic_position(
+    ephem: &Ephemeris,
+    body: Body,
+    jd_tt: f64,
+) -> Result<EclipticPosition, PericynthionError> {
+    // Earth's state at the observer's epoch.
+    let earth = ephem.state(Body::Earth, jd_tt)?;
+    let body_position_at = planet_body_position_at(ephem, body);
+    Ok(apparent_from_earth_and_body(
+        &earth,
+        jd_tt,
+        body_position_at,
+    ))
+}
+
+/// Compute the apparent ecliptic-of-date position of a body with topocentric
+/// parallax applied, as seen by an observer at a specific location on Earth.
+///
+/// Identical to [`apparent_ecliptic_position`] through the nutation step,
+/// then the observer's geocentric position vector is subtracted in the true
+/// equatorial frame of date before rotating to ecliptic coordinates.
+///
+/// # Errors
+///
+/// Propagates I/O errors from the ephemeris if `JD_TT` is out of range.
+pub fn apparent_ecliptic_position_topocentric(
+    ephem: &Ephemeris,
+    body: Body,
+    jd_tt: f64,
+    observer: &ObserverLocation,
+) -> Result<EclipticPosition, PericynthionError> {
+    let earth = ephem.state(Body::Earth, jd_tt)?;
+    let body_position_at = planet_body_position_at(ephem, body);
+    Ok(apparent_from_earth_and_body_topocentric(
+        &earth,
+        jd_tt,
+        observer,
+        body_position_at,
+    ))
+}
+
+/// Build the barycentric-position closure for an SPK asteroid.
+///
+/// The SPK file stores the asteroid heliocentric (center = Sun, NAIF 10)
+/// in ICRF; DE441 gives the Sun's barycentric position. Their sum is the
+/// asteroid's barycentric ICRF position — consistent with how planets are
+/// returned barycentric, so the same light-time loop applies.
+///
+/// Frame note: this is the one place two independently-realized frames are
+/// added — the SPK's ICRF (frame code 1) and DE441's own reference frame.
+/// The `DE4xx` series is aligned to ICRF at the ~milliarcsecond level, far
+/// below astrological resolution, so the sum is treated as a single ICRF
+/// frame. (An absolute HORIZONS asteroid fixture would bound this directly;
+/// see the `spk_apparent` test TODO.)
+///
+/// Errors from either ephemeris fall back to `[0.0; 3]` (matching the
+/// planet closure's `map_or`); the public entry points probe coverage up
+/// front so a bad NAIF id surfaces a real error before this runs.
+fn asteroid_body_position_at<'a>(
+    ephem: &'a Ephemeris<'a>,
+    spk: &'a SpkEphemeris,
+    naif_id: i32,
+) -> impl Fn(f64) -> [f64; 3] + 'a {
+    move |jd: f64| {
+        let sun = ephem
+            .state(Body::Sun, jd)
+            .map_or([0.0; 3], |s| s.position_km);
+        let helio = spk
+            .state(naif_id, et_of(jd))
+            .map_or([0.0; 3], |s| s.position_km);
+        [sun[0] + helio[0], sun[1] + helio[1], sun[2] + helio[2]]
+    }
+}
+
+/// Compute the geocentric apparent ecliptic-of-date position of an SPK
+/// asteroid, reusing the same pipeline as the planets.
+///
+/// The asteroid's barycentric ICRF position is `sun_bary(jd) +
+/// helio(jd)`, where `helio` comes from `spk.state(naif_id, et_of(jd))`
+/// (heliocentric, center = Sun) and `sun_bary` from `ephem.state(Body::Sun)`.
+/// That barycentric closure is fed to the body-agnostic core, so light-time,
+/// aberration, precession, nutation, and ecliptic rotation are identical to
+/// the planet path.
+///
+/// # Errors
+///
+/// Returns [`PericynthionError`] if Earth's state cannot be read, or if
+/// `naif_id` is not covered by `spk` at `jd_tt` (probed up front so a bad
+/// id or out-of-coverage epoch surfaces a real error rather than silently
+/// producing garbage).
+pub fn apparent_ecliptic_position_spk(
+    ephem: &Ephemeris,
+    spk: &SpkEphemeris,
+    naif_id: i32,
+    jd_tt: f64,
+) -> Result<EclipticPosition, PericynthionError> {
+    let earth = ephem.state(Body::Earth, jd_tt)?;
+    // Probe coverage up front: a bad NAIF id / out-of-range epoch must be a
+    // hard error, not a [0;0;0] fallback hidden inside the light-time loop.
+    spk.state(naif_id, et_of(jd_tt))?;
+    let body_position_at = asteroid_body_position_at(ephem, spk, naif_id);
+    Ok(apparent_from_earth_and_body(
+        &earth,
+        jd_tt,
+        body_position_at,
+    ))
+}
+
+/// Compute the topocentric apparent ecliptic-of-date position of an SPK
+/// asteroid (observer parallax applied), reusing the planet pipeline.
+///
+/// Identical to [`apparent_ecliptic_position_spk`] but with the observer's
+/// geocentric vector subtracted in the true equatorial frame of date.
+///
+/// # Errors
+///
+/// Returns [`PericynthionError`] if Earth's state cannot be read, or if
+/// `naif_id` is not covered by `spk` at `jd_tt` (probed up front).
+pub fn apparent_ecliptic_position_spk_topocentric(
+    ephem: &Ephemeris,
+    spk: &SpkEphemeris,
+    naif_id: i32,
+    jd_tt: f64,
+    observer: &ObserverLocation,
+) -> Result<EclipticPosition, PericynthionError> {
+    let earth = ephem.state(Body::Earth, jd_tt)?;
+    spk.state(naif_id, et_of(jd_tt))?;
+    let body_position_at = asteroid_body_position_at(ephem, spk, naif_id);
+    Ok(apparent_from_earth_and_body_topocentric(
+        &earth,
+        jd_tt,
+        observer,
+        body_position_at,
+    ))
+}
+
+/// Apply the precession → nutation → ecliptic-rotation → spherical pipeline
+/// to an ICRF J2000 position vector and return the ecliptic-of-date position.
+///
+/// This is the shared tail used by both `heliocentric_ecliptic_position` (planet
+/// path, after Sun subtraction) and `heliocentric_ecliptic_position_spk` (asteroid
+/// path, directly from the SPK heliocentric vector). Keeping it in one place
+/// ensures both call sites get identical math and that a change in one is
+/// automatically reflected in the other.
+fn icrf_vector_to_ecliptic_of_date(v: &[f64; 3], jd_tt: f64) -> EclipticPosition {
+    // Precession and nutation still apply — we want ecliptic of date, not J2000.
+    let mean_of_date = precess_j2000_to_date(v, jd_tt);
+    let eps_mean = mean_obliquity_rad(jd_tt);
+    let true_of_date = nutate_mean_to_true(&mean_of_date, jd_tt, eps_mean);
+
+    let nut = crate::coords::nutation::nutation(jd_tt);
+    let eps_true = eps_mean + nut.delta_epsilon;
+    let ecliptic_km = equatorial_to_ecliptic(&true_of_date, eps_true);
+
+    let lon_rad = longitude_rad(&ecliptic_km);
+    let lat_rad = latitude_rad(&ecliptic_km);
+    let r_km = magnitude(&ecliptic_km);
+
+    EclipticPosition {
+        longitude_deg: lon_rad.to_degrees(),
+        latitude_deg: lat_rad.to_degrees(),
+        distance_au: r_km / AU_KM,
+    }
 }
 
 /// Compute the heliocentric ecliptic-of-date position of a body.
@@ -229,24 +396,25 @@ pub fn heliocentric_ecliptic_position(
         body_bary_km[2] - sun_km[2],
     ];
 
-    // Precession and nutation still apply — we want ecliptic of date, not J2000.
-    let mean_of_date = precess_j2000_to_date(&helio_km, jd_tt);
-    let eps_mean = mean_obliquity_rad(jd_tt);
-    let true_of_date = nutate_mean_to_true(&mean_of_date, jd_tt, eps_mean);
+    Ok(icrf_vector_to_ecliptic_of_date(&helio_km, jd_tt))
+}
 
-    let nut = crate::coords::nutation::nutation(jd_tt);
-    let eps_true = eps_mean + nut.delta_epsilon;
-    let ecliptic_km = equatorial_to_ecliptic(&true_of_date, eps_true);
-
-    let lon_rad = longitude_rad(&ecliptic_km);
-    let lat_rad = latitude_rad(&ecliptic_km);
-    let r_km = magnitude(&ecliptic_km);
-
-    Ok(EclipticPosition {
-        longitude_deg: lon_rad.to_degrees(),
-        latitude_deg: lat_rad.to_degrees(),
-        distance_au: r_km / AU_KM,
-    })
+/// Heliocentric ecliptic-of-date position of an SPK asteroid.
+///
+/// The SPK stores the body Sun-centred in ICRF, so this is the same
+/// precession→nutation→ecliptic transform the planet heliocentric path uses,
+/// applied directly to the SPK vector (no Sun subtraction, no aberration).
+///
+/// # Errors
+///
+/// Propagates SPK coverage/IO errors from [`SpkEphemeris::state`].
+pub fn heliocentric_ecliptic_position_spk(
+    spk: &SpkEphemeris,
+    naif_id: i32,
+    jd_tt: f64,
+) -> Result<EclipticPosition, PericynthionError> {
+    let helio_icrf = spk.state(naif_id, et_of(jd_tt))?.position_km;
+    Ok(icrf_vector_to_ecliptic_of_date(&helio_icrf, jd_tt))
 }
 
 #[cfg(test)]

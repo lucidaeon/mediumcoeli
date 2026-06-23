@@ -11,7 +11,9 @@
 //! 1. [`crate::jpl::header::Header`] — gives us the per-body layout
 //!    (which words of a record belong to which body) and the named
 //!    physical constants (EMRAT, AU, etc.) we need to derive Earth.
-//! 2. [`crate::jpl::reader::EphemerisFile`] — gives us the
+//! 2. [`crate::jpl::reader::RecordSource`] — the trait implemented by both
+//!    [`crate::jpl::reader::EphemerisFile`] (binary, memory-mapped) and
+//!    [`crate::jpl::ascii::AsciiEphemeris`] (ASCII chunks); supplies
 //!    coefficient bytes for the record covering a target JD.
 //! 3. [`crate::chebyshev`] — evaluates the polynomial series.
 //!
@@ -44,7 +46,7 @@ use crate::body::{Body, JplSlot};
 use crate::chebyshev;
 use crate::error::PericynthionError;
 use crate::jpl::header::Header;
-use crate::jpl::reader::EphemerisFile;
+use crate::jpl::reader::RecordSource;
 
 /// A body's position and velocity at a given Julian Date, expressed in
 /// whichever rectangular frame the DE file stores it in.
@@ -62,26 +64,37 @@ pub struct StateVector {
     pub velocity_km_per_day: [f64; 3],
 }
 
-/// A high-level ephemeris computer that ties together a binary file
-/// and its companion header.
+/// A high-level ephemeris computer that ties together a coefficient
+/// source and its companion header.
+///
+/// Generic over any [`RecordSource`], so the same computer — and the
+/// entire coordinate / houses / lots pipeline above it — runs unchanged
+/// whether the source is the memory-mapped binary reader
+/// ([`EphemerisFile`](crate::jpl::reader::EphemerisFile)) or the text
+/// [`AsciiEphemeris`](crate::jpl::ascii::AsciiEphemeris).
 ///
 /// Construct one at startup and call [`Ephemeris::state`] for each
 /// body/JD pair you want.
+///
+/// The source is held as `&dyn RecordSource` so the many downstream
+/// helpers that take `&Ephemeris` need no type parameter; dynamic
+/// dispatch happens once per record fetch and is dwarfed by the
+/// Chebyshev evaluation that follows.
 pub struct Ephemeris<'a> {
-    file: &'a EphemerisFile,
+    file: &'a dyn RecordSource,
     header: &'a Header,
     emrat: f64,
 }
 
 impl<'a> Ephemeris<'a> {
-    /// Bundle a file with its header. Extracts EMRAT once so each
+    /// Bundle a source with its header. Extracts EMRAT once so each
     /// [`Ephemeris::state`] call doesn't repeat the map lookup.
     ///
     /// # Errors
     ///
-    /// Returns a header error if the file's companion header does not
+    /// Returns a header error if the source's companion header does not
     /// contain the `EMRAT` constant. All real DE-series headers do.
-    pub fn new(file: &'a EphemerisFile, header: &'a Header) -> Result<Self, PericynthionError> {
+    pub fn new(file: &'a dyn RecordSource, header: &'a Header) -> Result<Self, PericynthionError> {
         let emrat = header.constants.get("EMRAT").copied().ok_or_else(|| {
             crate::error::HeaderError::InvalidLayout {
                 detail: "header missing required constant EMRAT".into(),
@@ -105,8 +118,8 @@ impl<'a> Ephemeris<'a> {
     ///
     /// # Errors
     ///
-    /// Propagates I/O errors from the underlying [`EphemerisFile`] if
-    /// the JD is outside the file's coverage.
+    /// Propagates I/O errors from the underlying [`RecordSource`] if
+    /// the JD is outside the source's coverage.
     ///
     /// # Frame
     ///

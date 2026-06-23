@@ -14,8 +14,14 @@ use std::path::PathBuf;
 
 fn locate_jpl_paths() -> Option<(PathBuf, PathBuf)> {
     let dir = std::env::var("STARCAT_JPL_DATA").ok().map(PathBuf::from)?;
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("STARCAT_JPL_DATA autodiscovery failed: {e}"));
+    let loc =
+        discover::locate(&dir).unwrap_or_else(|e| panic!("STARCAT_JPL_DATA locate failed: {e}"));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
     Some((paths.header, paths.binary))
 }
 
@@ -50,6 +56,7 @@ fn compute_lightning_strike_leo_asc_frame() {
         lon_deg: Some(-(118.0 + 21.0 / 60.0 + 9.0 / 3600.0)),
         bodies: None, // all 10 classical bodies
         houses: vec![HouseSystem::Placidus, HouseSystem::WholeSign],
+        asteroids: Vec::new(),
     };
 
     let chart = compute(&ephem, &request).expect("compute chart");
@@ -140,6 +147,7 @@ fn nodes_and_lilith_present_without_latitude() {
         lon_deg: Some(-118.3525),
         bodies: None,
         houses: vec![],
+        asteroids: Vec::new(),
     };
 
     let chart = compute(&ephem, &request).expect("compute chart");

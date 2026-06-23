@@ -1,0 +1,162 @@
+For testing web enpoints and for ephemeral chart generation, the following parameters are followed.
+
+## Date range
+Any valid date and time pairing that falls between 1658 - 2024 Gregorian
+
+## Given name(s) pool
+
+- Amber
+- Azure
+- Begonia
+- Celeste
+- Cerise
+- Chartreuse
+- Cinnamon
+- Coral
+- Crimson
+- Dove
+- Emerald
+- Flora
+- Fuchsia
+- Ginger
+- Hazel
+- Heather
+- Honey
+- Indigo
+- Iris
+- Ivory
+- Jade
+- Kiwi
+- Lavender
+- Lemon
+- Lilac
+- Magenta
+- Marigold
+- Mauve
+- Mint
+- Navy
+- Olive
+- Opal
+- Peach
+- Pearl
+- Plum
+- Primrose
+- Quartz
+- Raven
+- Rose
+- Ruby
+- Sapphire
+- Scarlett
+- Sienna
+- Silver
+- Sky
+- Tawny
+- Teal
+- Ultramarine
+- Veridian
+- Violet
+- Willow
+- Wisteria
+- Zaffre
+
+## Surname pool
+
+- Arbutus
+- Ash
+- Aspen
+- Banyan
+- Baobab
+- Beech
+- Birch
+- Bubinga
+- Cedar
+- Cherry
+- Chestnut
+- Cypress
+- Dogwood
+- Ebony
+- Elm
+- Eucalyptus
+- Fir
+- Ginkgo
+- Hawthorn
+- Hemlock
+- Hickory
+- Ironwood
+- Jacaranda
+- Jarrah
+- Kapok
+- Katsura
+- Linden
+- Magnolia
+- Mahogany
+- Maple
+- Neem
+- Oak
+- Olive
+- Padauk
+- Poplar
+- Purpleheart
+- Quince
+- Redwood
+- Rosewood
+- Rowan
+- Sassafras
+- Sequoia
+- Spruce
+- Tamarack
+- Teak
+- Upas
+- Vitex
+- Walnut
+- Wenge
+- Willow
+- Xanthoceras
+- Yew
+- Zelkova
+
+## City pool
+
+`city,lat,long`
+
+- Bangkok,13.76,100.50
+- Beijing,39.90,116.41
+- Bengaluru,12.97,77.59
+- Bogotá,4.71,-74.07
+- Buenos Aires,-34.60,-58.38
+- Cairo,30.04,31.24
+- Chennai,13.08,80.27
+- Chongqing,29.56,106.55
+- Dhaka,23.81,90.41
+- Delhi,28.61,77.21
+- Guangzhou,23.13,113.26
+- Hangzhou,30.27,120.15
+- Ho Chi Minh City,10.82,106.63
+- Hyderabad,17.39,78.49
+- Istanbul,41.01,28.98
+- Jakarta,-6.21,106.85
+- Karachi,24.86,67.01
+- Kinshasa,-4.32,15.31
+- Kolkata,22.57,88.36
+- Lagos,6.52,3.38
+- Lahore,31.55,74.34
+- Lima,-12.05,-77.04
+- London,51.51,-0.13
+- Los Angeles,34.05,-118.24
+- Luanda,-8.84,13.23
+- Manila,14.60,120.98
+- Mexico City,19.43,-99.13
+- Moscow,55.76,37.62
+- Mumbai,19.08,72.88
+- New York City,40.71,-74.01
+- Osaka,34.69,135.50
+- Paris,48.85,2.35
+- Rio de Janeiro,-22.91,-43.17
+- São Paulo,-23.55,-46.63
+- Seoul,37.57,126.98
+- Shanghai,31.23,121.47
+- Shenzhen,22.54,114.06
+- Tehran,35.69,51.39
+- Tianjin,39.34,117.36
+- Tokyo,35.69,139.69
+- Wuhan,30.59,114.31

@@ -29,8 +29,9 @@
 use crate::body::Body;
 use crate::coords::acds::{ac_rad, ds_rad};
 use crate::coords::apparent::{
-    EclipticPosition, apparent_ecliptic_position, apparent_ecliptic_position_topocentric,
-    heliocentric_ecliptic_position,
+    EclipticPosition, apparent_ecliptic_position, apparent_ecliptic_position_spk,
+    apparent_ecliptic_position_spk_topocentric, apparent_ecliptic_position_topocentric,
+    heliocentric_ecliptic_position, heliocentric_ecliptic_position_spk,
 };
 use crate::coords::lilith::{
     mean_lilith_rad, priapus_rad, true_lilith_is_retrograde, true_lilith_rad,
@@ -51,6 +52,7 @@ use crate::lots::{
     Sect, courage_rad, eros_rad, exaltation_rad, fortune_rad, necessity_rad, nemesis_rad, sect,
     spirit_rad, victory_rad,
 };
+use crate::spk::SpkEphemeris;
 use crate::time::calendar::{Calendar, CivilDate};
 use crate::time::delta_t::jd_ut_to_jd_tt;
 use crate::time::zone::{Zone, civil_to_jd_ut};
@@ -190,6 +192,27 @@ pub struct ComputedBody {
     pub retrograde: bool,
 }
 
+/// A single SPK asteroid's apparent position in the chart's coordinate mode.
+///
+/// Asteroids ride alongside planets in [`ComputedChart`] so every renderer
+/// (text table, page grid, JZOD) treats them uniformly. Like [`ComputedBody`],
+/// each asteroid carries its daily speed (degrees per day, signed) and
+/// retrograde flag, computed by sampling the same SPK function at ±0.5 day.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ComputedAsteroid {
+    /// Display name (e.g. `"Ceres"`).
+    pub name: &'static str,
+    /// NAIF integer id — either the sb441 scheme (`2_000_000 + mpc`) or the
+    /// Horizons scheme (`20_000_000 + mpc`), whichever the caller supplied.
+    pub naif_id: i32,
+    /// Apparent ecliptic-of-date position in the chart's coordinate mode.
+    pub position: EclipticPosition,
+    /// Daily motion in degrees — positive = prograde, negative = retrograde.
+    pub daily_speed_deg: f64,
+    /// `true` when the asteroid was retrograde at the chart moment.
+    pub retrograde: bool,
+}
+
 /// Full input specification for a chart computation.
 ///
 /// Pass a built `ChartRequest` to [`compute`] together with an open
@@ -216,6 +239,12 @@ pub struct ChartRequest {
     /// House systems to compute. Empty slice = none. Caller-specified
     /// order is preserved in the output.
     pub houses: Vec<HouseSystem>,
+    /// SPK asteroid NAIF ids to compute (empty = none). Either the sb441
+    /// id scheme (`2_000_000 + mpc`) or the Horizons id scheme
+    /// (`20_000_000 + mpc`) is accepted. Only honoured by [`compute_with_spk`]
+    /// when a non-empty SPK slice is supplied; the planet-only [`compute`]
+    /// entry point ignores this field.
+    pub asteroids: Vec<i32>,
 }
 
 /// Complete result of a single chart computation.
@@ -233,6 +262,11 @@ pub struct ComputedChart {
     pub utc_offset: String,
     /// Computed positions for each body in the request, in request order.
     pub bodies: Vec<ComputedBody>,
+    /// Computed positions for each requested SPK asteroid, in request order.
+    /// Empty unless [`compute_with_spk`] was called with a non-empty SPK slice
+    /// and a non-empty [`ChartRequest::asteroids`] containing ids covered by a
+    /// supplied SPK.
+    pub asteroids: Vec<ComputedAsteroid>,
     /// Chart axes. `None` when no longitude was supplied.
     pub angles: Option<Angles>,
     /// Lunar node longitudes. `None` in Heliocentric mode or when no
@@ -290,22 +324,48 @@ fn utc_offset_string(zone: Zone) -> String {
     }
 }
 
-/// Compute a complete natal chart.
+/// Compute a complete natal chart (planets only — no SPK asteroids).
 ///
 /// This is the pure-computation counterpart to the `starcat compute` CLI
 /// command. It expects an already-open [`Ephemeris`] and an already-parsed
 /// [`ChartRequest`]; it does not open files, parse strings, or produce I/O.
 ///
+/// [`ChartRequest::asteroids`] is ignored here; the returned
+/// [`ComputedChart::asteroids`] is always empty. Use [`compute_with_spk`]
+/// with a non-empty SPK slice to fill asteroids.
+///
 /// # Errors
 ///
 /// Returns [`PericynthionError`] when the ephemeris cannot provide a body
 /// position (I/O error, body out of range for the given JD, etc.).
+pub fn compute(
+    ephem: &Ephemeris<'_>,
+    request: &ChartRequest,
+) -> Result<ComputedChart, PericynthionError> {
+    compute_with_spk(ephem, &[], request)
+}
+
+/// Compute a complete natal chart, optionally including SPK asteroids.
+///
+/// Identical to [`compute`] for planets, houses, angles, nodes, Lilith, and
+/// lots. When `spks` is non-empty and [`ChartRequest::asteroids`] is non-empty,
+/// each NAIF id's apparent position is computed in the request's coordinate
+/// mode and added to [`ComputedChart::asteroids`]. For each requested id, the
+/// first SPK in the slice that covers it (via [`SpkEphemeris::center_of`]) is
+/// used. Ids not covered by any supplied SPK, or whose name is absent from the
+/// placements catalog, are silently skipped.
+///
+/// # Errors
+///
+/// Returns [`PericynthionError`] when the ephemeris or SPK cannot provide a
+/// position (I/O error, body or epoch out of range, etc.).
 // `jd_ut` / `jd_tt` are established astronomical abbreviations — suppressing
 // similar_names is intentional and domain-appropriate here.
 // The orchestration necessarily touches every pipeline step in sequence.
 #[allow(clippy::similar_names, clippy::too_many_lines)]
-pub fn compute(
+pub fn compute_with_spk(
     ephem: &Ephemeris<'_>,
+    spks: &[&SpkEphemeris],
     request: &ChartRequest,
 ) -> Result<ComputedChart, PericynthionError> {
     // ── 1. Time scales ───────────────────────────────────────────────────────
@@ -454,12 +514,69 @@ pub fn compute(
         .zip(find_lon(Body::Sun))
         .map(|(ac_deg, sun_deg)| sect(sun_deg.to_radians(), ac_deg.to_radians()));
 
+    // ── 12. SPK asteroids (request order; skip ids no open SPK covers, or with
+    //        no catalog name) ───────────────────────────────────────────────────
+    let mut asteroids: Vec<ComputedAsteroid> = Vec::new();
+    for &naif_id in &request.asteroids {
+        let Some(spk) = spks
+            .iter()
+            .copied()
+            .find(|s| s.center_of(naif_id).is_some())
+        else {
+            continue;
+        };
+        let Some(name) = crate::placements::name_for_naif(naif_id) else {
+            continue;
+        };
+        let position = match &mode {
+            CoordMode::Geocentric => apparent_ecliptic_position_spk(ephem, spk, naif_id, jd_tt)?,
+            CoordMode::Topocentric(obs) => {
+                apparent_ecliptic_position_spk_topocentric(ephem, spk, naif_id, jd_tt, obs)?
+            }
+            CoordMode::Heliocentric => heliocentric_ecliptic_position_spk(spk, naif_id, jd_tt)?,
+        };
+        let before_lon = match &mode {
+            CoordMode::Geocentric => {
+                apparent_ecliptic_position_spk(ephem, spk, naif_id, jd_tt - 0.5)?.longitude_deg
+            }
+            CoordMode::Topocentric(obs) => {
+                apparent_ecliptic_position_spk_topocentric(ephem, spk, naif_id, jd_tt - 0.5, obs)?
+                    .longitude_deg
+            }
+            CoordMode::Heliocentric => {
+                heliocentric_ecliptic_position_spk(spk, naif_id, jd_tt - 0.5)?.longitude_deg
+            }
+        };
+        let after_lon = match &mode {
+            CoordMode::Geocentric => {
+                apparent_ecliptic_position_spk(ephem, spk, naif_id, jd_tt + 0.5)?.longitude_deg
+            }
+            CoordMode::Topocentric(obs) => {
+                apparent_ecliptic_position_spk_topocentric(ephem, spk, naif_id, jd_tt + 0.5, obs)?
+                    .longitude_deg
+            }
+            CoordMode::Heliocentric => {
+                heliocentric_ecliptic_position_spk(spk, naif_id, jd_tt + 0.5)?.longitude_deg
+            }
+        };
+        let daily_speed_deg = signed_daily_motion(before_lon, after_lon);
+        let retrograde = !matches!(mode, CoordMode::Heliocentric) && daily_speed_deg < 0.0;
+        asteroids.push(ComputedAsteroid {
+            name,
+            naif_id,
+            position,
+            daily_speed_deg,
+            retrograde,
+        });
+    }
+
     Ok(ComputedChart {
         jd_ut,
         jd_tt,
         mode,
         utc_offset,
         bodies,
+        asteroids,
         angles,
         nodes,
         lilith,

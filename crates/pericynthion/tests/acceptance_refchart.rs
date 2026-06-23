@@ -9,7 +9,8 @@
 #![allow(dead_code)]
 //!
 //! Every constant in this file is derived from the reference chart set —
-//! the human-readable per-chart dumps in `docs/ref_*.md`. Each chart's
+//! the human-readable per-chart dumps in
+//! `skills/astrologer/fixtures/ref_*.md`. Each chart's
 //! *resolved location* is taken as authoritative — its Asc/MC and house
 //! cusps were computed at the coords it printed, so we must match those
 //! coords to compare cleanly. The *resolved time* is recorded as a debug
@@ -151,7 +152,8 @@ struct Chart {
 }
 
 // =============================================================================
-// Chart data — derived directly from the reference chart set (docs/ref_*.md).
+// Chart data — derived directly from the reference chart set
+// (skills/astrologer/fixtures/ref_*.md).
 // =============================================================================
 
 // ── test 5 ── Lightning Strike — 1955-11-12 22:04 PST Universal City CA ──────
@@ -521,7 +523,7 @@ const WILLIAM_LILLY: Chart = Chart {
 // ── test 0 ── Vettius Valens — 0120-02-08 18:35 LMT Antioch ──────────────────
 //
 // Antioch (Antakya), Türkiye: 36°N14', +36°E07' (geographically east).
-// the reference chart set (docs/ref_*.md) transcription shows "036°W07'" — typo: reference's own time
+// the reference chart set (skills/astrologer/fixtures/ref_*.md) transcription shows "036°W07'" — typo: reference's own time
 // offset (−2:24:28) confirms east. We use east per geography.
 // LMT for east longitude: UT = LMT − offset. 18:35 − 2:24:28 = 16:10:32 UT.
 // Calendar: reference works in proleptic Gregorian; for year 120 CE
@@ -615,7 +617,7 @@ const VETTIUS_VALENS: Chart = Chart {
     },
     calendar: Calendar::Julian,
     lat_deg: dms(0.0, 36.0, 14.0, 0.0),
-    lon_deg: dms(0.0, 36.0, 7.0, 0.0), // east (geography wins over the reference chart set (docs/ref_*.md) typo)
+    lon_deg: dms(0.0, 36.0, 7.0, 0.0), // east (geography wins over the reference chart set (skills/astrologer/fixtures/ref_*.md) typo)
     delta_t_s: 9340.0,
     jde: 1_764_926.282_087,
     lst_hours: 3.0 + 41.0 / 60.0 + 16.0 / 3600.0,
@@ -648,7 +650,7 @@ const VETTIUS_VALENS: Chart = Chart {
 
 // ── Anna Freud — Alcabitius promotion chart ───────────────────────────────────
 //
-// Source: docs/ref_anna_freud_alcabitius.md
+// Source: skills/astrologer/fixtures/ref_anna_freud_alcabitius.md
 // Civil: 1895-12-03 15:15 CET (UTC+1) → UT 14:15:00.
 // Reference resolved coords: 48°N13' 16°E20'.
 // Reference: DeltaT = −5 s; JDE = 2413531.093693; LST = 20:08:57; Ob 23°27'10".
@@ -772,7 +774,7 @@ const ANNA_FREUD: Chart = Chart {
 
 // ── Adèle Haenel — Whole Sign chart ───────────────────────────────────────────
 //
-// Source: docs/ref_adele_haenel_whole.md
+// Source: skills/astrologer/fixtures/ref_adele_haenel_whole.md
 // Civil: 1989-02-11 16:20 CET (UTC+1) → UT 15:20:00.
 // Reference resolved coords: 48°N52' 002°E20' (true central Paris, ~2°21'E).
 // The doc's longitude was corrected from a transcribed 2°07' — at which the
@@ -899,7 +901,7 @@ const ADELE_HAENEL: Chart = Chart {
 
 // ── First Contact — Morinus chart ─────────────────────────────────────────────
 //
-// Source: docs/ref_first_contact_morinus.md
+// Source: skills/astrologer/fixtures/ref_first_contact_morinus.md
 // Fictional event (no PII): 2063-04-05 11:06:41 local MT (MDT = UTC-6)
 // → UT 18:06:41 on 2063-04-05.
 // Reference resolved coords: 45°N40'47" 111°W02'16" (Bozeman MT).
@@ -967,8 +969,14 @@ const CHARTS: &[&Chart] = &[
 
 fn locate_jpl_paths() -> Option<(PathBuf, PathBuf)> {
     let dir = std::env::var("STARCAT_JPL_DATA").ok().map(PathBuf::from)?;
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("STARCAT_JPL_DATA autodiscovery failed: {e}"));
+    let loc =
+        discover::locate(&dir).unwrap_or_else(|e| panic!("STARCAT_JPL_DATA locate failed: {e}"));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
     Some((paths.header, paths.binary))
 }
 

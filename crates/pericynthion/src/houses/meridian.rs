@@ -2,8 +2,7 @@
 #![allow(clippy::similar_names)]
 
 //! Meridian (Axial Rotation / Zariel) house system — gated behind
-//! `noref-houses` until a refchart oracle is captured. See
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! `noref-houses` until a refchart oracle is captured.
 //!
 //! Divides the celestial equator into twelve 30° arcs from the RAMC,
 //! then projects each onto the ecliptic. H10 = MC, H1 = ASC (hybrid

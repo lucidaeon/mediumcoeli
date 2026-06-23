@@ -6,7 +6,7 @@
 //! horizon, NSA below) and projects the resulting RA divisions back to
 //! the ecliptic.
 //!
-//! Oracle: `docs/ref_anna_freud_alcabitius.md`.
+//! Oracle: `skills/astrologer/fixtures/ref_anna_freud_alcabitius.md`.
 
 use super::HouseCusps;
 use crate::coords::acds::ac_rad;

@@ -1,4 +1,13 @@
-//! Auto-discover JPL DE-series ephemeris files within a data directory.
+//! Locate JPL DE-series ephemeris files from any node in the mirror hierarchy.
+//!
+//! [`locate`] and [`open_dataset`] accept **any** directory in the JPL mirror
+//! tree — the dataset leaf, a platform sub-dir, or the repository root — and
+//! walk up to 8 levels deep to find the best available dataset. Binary is
+//! preferred over ASCII at equal DE numbers; the highest-numbered series wins.
+//!
+//! The same `PATH` value works for `--jpl-data` / `$STARCAT_JPL_DATA`
+//! regardless of whether the user points at the `de441/` leaf or the
+//! top-level `ssd.jpl.nasa.gov` mirror root.
 //!
 //! # The naming convention
 //!
@@ -7,20 +16,27 @@
 //! - `header.NNN` — the ASCII header (small, human-readable).
 //! - `linux_*.NNN` — little-endian binary (used on x86/ARM systems).
 //! - `xnp_*.NNN` — big-endian binary (legacy SPARC, PowerPC, etc).
+//! - `ascp*.NNN` / `ascm*.NNN` — ASCII coefficient chunks (positive/negative JD).
 //!
-//! `NNN` is the ephemeris number (`440`, `441`, `442` …). A typical
-//! installation directory holds:
+//! `NNN` is the ephemeris number (`440`, `441`, `442` …). A typical mirror
+//! layout contains multiple dataset directories:
 //!
 //! ```text
-//! ~/.../planets/Linux/de441/
-//!     header.441
-//!     linux_m13000p17000.441
+//! ssd.jpl.nasa.gov/ftp/eph/planets/
+//!     Linux/de441/
+//!         header.441
+//!         linux_m13000p17000.441
+//!     ascii/de441/
+//!         header.441
+//!         ascp00000.441   ascp01826.441  …
+//!         ascm32000.441   …
 //! ```
 //!
-//! This module finds the right pair given just the directory path. If
-//! multiple ephemeris versions are present, the highest-numbered one
-//! wins — newer DE-series releases supersede older ones in published
-//! accuracy.
+//! [`locate`] classifies every directory it visits as binary, ASCII, or
+//! neither, and returns the best match. [`open_dataset`] then parses the
+//! header and opens the backing store — either a memory-mapped
+//! [`EphemerisFile`] or a lazy [`AsciiEphemeris`] — returning both through
+//! the common [`RecordSource`] trait.
 //!
 //! # Why this matters
 //!
@@ -56,7 +72,179 @@
 //! and plain `header.NNN`, so DE430/431 need symlinks to work as-is.
 
 use crate::error::PericynthionError;
+use crate::jpl::ascii::AsciiEphemeris;
+use crate::jpl::header::{self, Header};
+use crate::jpl::reader::{EphemerisFile, RecordSource};
 use std::path::{Path, PathBuf};
+
+/// The result of a recursive ephemeris search: either a ready-to-use binary
+/// dataset or an ASCII dataset that the caller can load with a parser.
+#[derive(Debug, Clone)]
+pub enum DatasetLocation {
+    /// A binary (little-endian or big-endian) DE-series installation.
+    Binary(JplDataPaths),
+    /// An ASCII DE-series installation.
+    Ascii {
+        /// Path to the `header.NNN` file.
+        header: PathBuf,
+        /// Directory that contains the `asc[pm]*.NNN` coefficient files.
+        dir: PathBuf,
+        /// Ephemeris number (e.g. `441`).
+        denum: u32,
+    },
+}
+
+/// Attempt to recognise `dir` as an ASCII DE-series dataset.
+///
+/// Returns `Some((header_path, denum))` if `dir` contains both a `header.NNN`
+/// and at least one `ascp*.NNN` or `ascm*.NNN` file sharing the same `NNN`.
+fn discover_ascii(dir: &Path) -> Option<(PathBuf, u32)> {
+    let entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .collect();
+
+    // Find header.NNN candidates, sorted highest denum first.
+    let mut candidates: Vec<(u32, PathBuf)> = entries
+        .iter()
+        .filter_map(|p| {
+            let stem = p.file_stem().and_then(|s| s.to_str())?;
+            let ext = p.extension().and_then(|s| s.to_str())?;
+            if stem != "header" {
+                return None;
+            }
+            let denum: u32 = ext.parse().ok()?;
+            Some((denum, p.clone()))
+        })
+        .collect();
+    candidates.sort_by_key(|(denum, _)| std::cmp::Reverse(*denum));
+
+    // For each header, check for at least one ascp*.NNN or ascm*.NNN.
+    for (denum, header_path) in candidates {
+        let suffix = format!(".{denum}");
+        let has_asc = entries.iter().any(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.ends_with(&suffix) && (name.starts_with("ascp") || name.starts_with("ascm"))
+        });
+        if has_asc {
+            return Some((header_path, denum));
+        }
+    }
+    None
+}
+
+/// A candidate found during the recursive walk, before ranking.
+#[derive(Debug)]
+enum Candidate {
+    Binary(JplDataPaths),
+    Ascii {
+        header: PathBuf,
+        dir: PathBuf,
+        denum: u32,
+    },
+}
+
+impl Candidate {
+    fn denum(&self) -> u32 {
+        match self {
+            Candidate::Binary(p) => p.denum,
+            Candidate::Ascii { denum, .. } => *denum,
+        }
+    }
+
+    /// Higher is better: binary beats ascii at the same denum.
+    fn rank(&self) -> (u32, u8) {
+        (self.denum(), u8::from(matches!(self, Candidate::Binary(_))))
+    }
+}
+
+/// Recursively walk `dir` up to `depth` levels deep and collect every
+/// directory that looks like a DE-series dataset (binary or ASCII).
+fn collect_candidates(dir: &Path, depth: u8, candidates: &mut Vec<Candidate>) {
+    // Try to classify the current directory first.
+    if let Ok(paths) = discover(dir) {
+        candidates.push(Candidate::Binary(paths));
+        // Don't descend further into a dataset dir — its children aren't datasets.
+        return;
+    }
+    if let Some((header, denum)) = discover_ascii(dir) {
+        candidates.push(Candidate::Ascii {
+            header,
+            dir: dir.to_path_buf(),
+            denum,
+        });
+        return;
+    }
+
+    if depth == 0 {
+        return;
+    }
+
+    // Recurse into subdirectories.
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read.filter_map(Result::ok) {
+        let child = entry.path();
+        if child.is_dir() {
+            collect_candidates(&child, depth - 1, candidates);
+        }
+    }
+}
+
+/// Locate the best DE-series ephemeris dataset reachable from `start`.
+///
+/// Walks the directory hierarchy up to 8 levels deep, classifying each
+/// directory as a binary or ASCII DE dataset. The dataset with the highest
+/// ephemeris number wins; at equal DE number, binary is preferred over ASCII.
+///
+/// Accepts any node in the JPL mirror tree — the dataset directory itself,
+/// `.../planets/Linux/`, `.../planets/`, `.../eph/`, `.../ftp/`, the
+/// `ssd.jpl.nasa.gov` root, or a parent containing it.
+///
+/// # Errors
+///
+/// Returns a `PericynthionError::Io` if no DE dataset (binary or ASCII) is
+/// found anywhere under `start`.
+pub fn locate(start: &Path) -> Result<DatasetLocation, PericynthionError> {
+    // Canonicalise trailing slashes / `.` components without requiring the
+    // path to exist on a real filesystem (TempDir paths are already canonical).
+    let start = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        return Err(PericynthionError::Io {
+            path: start.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{} is not a directory", start.display()),
+            ),
+        });
+    };
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    collect_candidates(&start, 8, &mut candidates);
+
+    candidates
+        .into_iter()
+        .max_by_key(Candidate::rank)
+        .map(|c| match c {
+            Candidate::Binary(p) => DatasetLocation::Binary(p),
+            Candidate::Ascii { header, dir, denum } => {
+                DatasetLocation::Ascii { header, dir, denum }
+            }
+        })
+        .ok_or_else(|| PericynthionError::Io {
+            path: start.clone(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "no DE dataset (binary or ASCII) found under {}",
+                    start.display()
+                ),
+            ),
+        })
+}
 
 /// A header + binary file pair from a JPL DE-series installation.
 #[derive(Debug, Clone)]
@@ -187,6 +375,58 @@ fn find_binary_for_denum(entries: &[PathBuf], denum: u32) -> Option<PathBuf> {
     matches.into_iter().next().map(|(_, p, _)| p)
 }
 
+/// Locate the best DE-series dataset reachable from `start` and open it,
+/// returning a parsed [`Header`] and a boxed [`RecordSource`] ready for
+/// Chebyshev evaluation.
+///
+/// This is the single-call convenience wrapper for the common case: call
+/// [`locate`] to find the dataset, parse its header, and open the backing
+/// store (memory-mapped binary or lazy ASCII reader). The caller does not
+/// need to branch on binary vs ASCII — both are returned through the same
+/// `Box<dyn RecordSource>` interface.
+///
+/// Accepts any node in the JPL mirror tree: the dataset directory itself,
+/// `.../planets/Linux/`, `.../planets/`, `.../ftp/`, the
+/// `ssd.jpl.nasa.gov` root, or a parent containing it.
+///
+/// # Errors
+///
+/// Returns a [`PericynthionError`] if:
+/// - no DE dataset (binary or ASCII) is found under `start`,
+/// - the `header.NNN` file cannot be read or fails to parse, or
+/// - the backing store (binary mmap or ASCII chunk index) cannot be opened.
+pub fn open_dataset(start: &Path) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
+    match locate(start)? {
+        DatasetLocation::Binary(paths) => {
+            let source =
+                std::fs::read_to_string(&paths.header).map_err(|e| PericynthionError::Io {
+                    path: paths.header.clone(),
+                    source: e,
+                })?;
+            // Propagate the structured HeaderError via `?`/From<HeaderError>
+            // rather than flattening it into an opaque Io(InvalidData).
+            let header = header::parse(&source)?;
+            let file = EphemerisFile::open(&paths.binary, &header)?;
+            Ok((header, Box::new(file)))
+        }
+        DatasetLocation::Ascii {
+            header: hdr_path,
+            dir,
+            ..
+        } => {
+            let source = std::fs::read_to_string(&hdr_path).map_err(|e| PericynthionError::Io {
+                path: hdr_path.clone(),
+                source: e,
+            })?;
+            // Propagate the structured HeaderError via `?`/From<HeaderError>
+            // rather than flattening it into an opaque Io(InvalidData).
+            let header = header::parse(&source)?;
+            let ascii = AsciiEphemeris::open(&dir, &header)?;
+            Ok((header, Box::new(ascii)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +509,82 @@ mod tests {
         let err = discover(Path::new("/nonexistent-starcat-test-path-xxxx")).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("not a directory"));
+    }
+
+    #[test]
+    fn locate_finds_binary_from_mirror_root() {
+        let tmp = make_dir();
+        let de = tmp
+            .path()
+            .join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441");
+        std::fs::create_dir_all(&de).unwrap();
+        write_file(&de, "header.441", 22_802);
+        write_file(&de, "linux_m13000p17000.441", 8144 * 3);
+        let loc = super::locate(tmp.path()).unwrap();
+        assert!(matches!(loc, super::DatasetLocation::Binary(_)));
+    }
+
+    #[test]
+    fn locate_falls_back_to_ascii_when_no_binary() {
+        let tmp = make_dir();
+        let de = tmp
+            .path()
+            .join("ssd.jpl.nasa.gov/ftp/eph/planets/ascii/de441");
+        std::fs::create_dir_all(&de).unwrap();
+        write_file(&de, "header.441", 22_802);
+        write_file(&de, "ascp00000.441", 64);
+        let loc = super::locate(tmp.path()).unwrap();
+        assert!(matches!(
+            loc,
+            super::DatasetLocation::Ascii { denum: 441, .. }
+        ));
+    }
+
+    #[test]
+    fn locate_prefers_binary_over_ascii_same_denum() {
+        let tmp = make_dir();
+        let root = tmp.path().join("eph/planets");
+        let bin = root.join("Linux/de441");
+        let asc = root.join("ascii/de441");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&asc).unwrap();
+        write_file(&bin, "header.441", 22_802);
+        write_file(&bin, "linux_x.441", 8144 * 3);
+        write_file(&asc, "header.441", 22_802);
+        write_file(&asc, "ascp00000.441", 64);
+        assert!(matches!(
+            super::locate(tmp.path()).unwrap(),
+            super::DatasetLocation::Binary(_)
+        ));
+    }
+
+    /// `open_dataset` resolves and opens the real DE441 dataset.
+    ///
+    /// A fully synthetic binary test is not practical: `EphemerisFile::open`
+    /// validates the file by probing the first coefficient record's time-tag
+    /// bytes for a plausible Julian Date and a 32-day granule span — a zero-
+    /// filled stub will always fail that check. We therefore test against the
+    /// real file under `STARCAT_JPL_DATA` (any hierarchy node) and skip
+    /// cleanly when unset, consistent with all other integration tests in this
+    /// crate. The assertion that `granule_days ≈ 32` and `start_jd` is finite
+    /// exercises the trait dispatch from `Box<dyn RecordSource>`.
+    #[test]
+    fn open_dataset_returns_usable_record_source() {
+        let Some(val) = std::env::var_os("STARCAT_JPL_DATA") else {
+            eprintln!("STARCAT_JPL_DATA not set — skipping open_dataset integration test");
+            return;
+        };
+        let start = Path::new(&val);
+        let (_header, source) = super::open_dataset(start).expect("open_dataset should succeed");
+        assert!(
+            source.start_jd().is_finite(),
+            "start_jd must be a finite Julian Date; got {}",
+            source.start_jd()
+        );
+        assert!(
+            (source.granule_days() - 32.0).abs() < 1e-9,
+            "DE-series granule size must be ≈ 32 days; got {}",
+            source.granule_days()
+        );
     }
 }

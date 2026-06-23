@@ -1,6 +1,6 @@
 [package]
 name = "pericynthion"
-version = "0.4.0"
+version = "0.5.0"
 description = "Astrological ephemeris computation library — pure-Rust NASA JPL DE441 reader"
 keywords = ["astrology", "chart", "de441", "ephemeris", "natal"]
 categories = ["algorithms", "date-and-time", "mathematics", "science"]
@@ -30,12 +30,21 @@ noref-houses = []
 # JZOD chart export: maps ComputedChart → jzod::Chart. Optional so that
 # the numeric core can be compiled without the serialization dependency.
 jzod = ["dep:jzod"]
+# On-demand SPK fetching from the JPL Horizons API (the `horizons` module).
+# Pulls in an HTTP client (reqwest, rustls-tls) + JSON + base64. Default-off so
+# the numeric core stays network-free for library consumers; the starcat CLI
+# enables it. Matches the off-by-default pattern of jzod / serde / noref-houses.
+horizons = ["dep:reqwest", "dep:serde_json", "dep:base64"]
 
 [dependencies]
 thiserror.workspace = true
 memmap2.workspace = true
+blake3.workspace = true
 serde = { workspace = true, optional = true }
 jzod = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true

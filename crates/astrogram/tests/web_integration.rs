@@ -101,7 +101,7 @@ fn synthetic_chart() -> Chart {
         "Wisteria",
     ];
 
-    // World cities with >10M population. Mirrors docs/ref_synthetics.md (city,lat,long).
+    // World cities with >10M population. Mirrors skills/astrologer/fixtures/ref_synthetics.md (city,lat,long).
     // lat/lon used directly by Luna and Astrotheoros; astro.com resolves the name via atlas.
     const CITIES: &[(&str, f64, f64)] = &[
         ("Bangkok", 13.76, 100.50),

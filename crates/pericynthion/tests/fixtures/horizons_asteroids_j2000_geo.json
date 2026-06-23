@@ -1,0 +1,30 @@
+{
+  "chart_id": "asteroids_j2000",
+  "name": "Asteroids J2000",
+  "iso_ut": "2000-01-01 12:00:00",
+  "notes": "J2000 noon UT \u2014 geocentric asteroid validation epoch (synthetic, not a natal chart; no PII)",
+  "source": "NASA JPL HORIZONS, quantity 31 (ObsEcLon/ObsEcLat, of-date), geocentric",
+  "bodies": {
+    "Ceres": {
+      "longitude_deg": 184.4530625,
+      "latitude_deg": 11.8375968
+    },
+    "Pallas": {
+      "longitude_deg": 134.043348,
+      "latitude_deg": -48.3508336
+    },
+    "Juno": {
+      "longitude_deg": 277.9960713,
+      "latitude_deg": 9.4510491
+    },
+    "Vesta": {
+      "longitude_deg": 245.9719858,
+      "latitude_deg": 4.2520361
+    },
+    "Hygiea": {
+      "longitude_deg": 227.8826287,
+      "latitude_deg": -3.1123792
+    }
+  },
+  "skipped": {}
+}

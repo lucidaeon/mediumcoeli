@@ -2,7 +2,7 @@
 #![allow(clippy::needless_range_loop)]
 
 //! Equal-from-MC house system — gated behind `noref-houses` until a
-//! refchart oracle is captured. See `docs/discovery/HOUSE_PROMOTION.md`.
+//! refchart oracle is captured.
 //!
 //! H10 cusp = MC; every other cusp is exactly 30° from MC counter-
 //! clockwise around the ecliptic. **H1 ≠ ASC** — H1 = MC + 90°.

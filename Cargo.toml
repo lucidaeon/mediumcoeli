@@ -13,14 +13,17 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.4.0" }
-astrogram = { path = "crates/astrogram", version = "0.2.1" }
-jzod = { path = "crates/jzod", version = "0.2.0" }
+pericynthion = { path = "crates/pericynthion", version = "0.5.0" }
+astrogram = { path = "crates/astrogram", version = "0.2.2" }
+jzod = { path = "crates/jzod", version = "0.3.0" }
 wristband = { path = "crates/wristband", version = "0.0.1" }
 
 # Errors
 thiserror = "2"
 anyhow = "1"
+
+# Hashing
+blake3 = "1"
 
 # I/O
 memmap2 = "0.9"
@@ -37,12 +40,14 @@ uuid = { version = "1", features = ["v4"] }
 
 # Encoding
 encoding_rs = "0.8"
+base64 = "0.22"
 
 # XML / HTML parsing
 roxmltree = "0.21"
 scraper = "0.22"
 
-# HTTP (binary only)
+# HTTP. Used by astrogram (web chart formats) and, feature-gated, by
+# pericynthion's `horizons` SPK fetcher. rustls-tls keeps the stack pure-Rust.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "cookies", "rustls-tls"] }
 
 # Dev / test

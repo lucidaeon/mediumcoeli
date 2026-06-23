@@ -2,7 +2,7 @@
 //!
 //! # v1 scope
 //!
-//! The four reference charts in `pericynthion.md` exercise three kinds of
+//! The four reference charts exercise three kinds of
 //! zone handling:
 //!
 //! 1. **Local Mean Time (LMT)** — used in antiquity and through the

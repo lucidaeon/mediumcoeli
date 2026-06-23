@@ -112,7 +112,7 @@ fn latitude_north() {
 
 #[test]
 fn latitude_south() {
-    // Jakarta -6.21°, 106.85° (docs/ref_synthetics.md) → DMS 6°12'36"S, 106°51'E
+    // Jakarta -6.21°, 106.85° (skills/astrologer/fixtures/ref_synthetics.md) → DMS 6°12'36"S, 106°51'E
     let text = "#A93:*,X,Y,01.01.2000,00:00,Jakarta,ID\n#B93:0.0,6S12:36,106E51,7E,0\n";
     let charts = parse_file(text).unwrap();
     let lat = charts[0].latitude.degrees();

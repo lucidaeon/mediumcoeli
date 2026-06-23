@@ -16,7 +16,7 @@
 //!
 //! Deferred formats (Quick\*Chart, Solar Fire text export, `JZOD`,
 //! `Nechepso`, `TimeCycles`, SQL/`SQLite`) and additional extractors are
-//! tracked in `docs/backlog.md` at the repository root.
+//! not yet implemented.
 //!
 //! ## Canonical chart type
 //!

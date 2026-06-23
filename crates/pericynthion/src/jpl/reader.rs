@@ -240,6 +240,121 @@ impl EphemerisFile {
     }
 }
 
+/// A source of coefficient records, abstracted over storage backend.
+///
+/// Both the memory-mapped binary reader ([`EphemerisFile`]) and the
+/// text-based [`AsciiEphemeris`](crate::jpl::ascii::AsciiEphemeris)
+/// implement this trait, which lets [`crate::ephemeris::Ephemeris`] —
+/// and therefore the entire Chebyshev / coordinate / houses / lots
+/// pipeline above it — run identically regardless of where the
+/// coefficients physically come from.
+///
+/// Records are returned as value-typed [`OwnedRecord`]s rather than the
+/// borrowed [`CoefficientRecord`]: the ASCII backend has no mmap to
+/// borrow from, and copying one record's `NCOEFF` doubles is negligible
+/// next to the Chebyshev evaluation that consumes them.
+pub trait RecordSource {
+    /// Granule size in days (32 for DE-series).
+    fn granule_days(&self) -> f64;
+
+    /// First JD covered by the source.
+    fn start_jd(&self) -> f64;
+
+    /// Last JD covered by the source.
+    fn end_jd(&self) -> f64;
+
+    /// Return the coefficient record covering `jd_tt` as an owned value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error (typically [`PericynthionError::Io`]) if `jd_tt`
+    /// lies outside the source's coverage, or if the backing chunk
+    /// cannot be read or parsed.
+    fn record_for_jd(&self, jd_tt: f64) -> Result<OwnedRecord, PericynthionError>;
+}
+
+/// Owned view of one coefficient record's `NCOEFF` doubles.
+///
+/// The value-typed analogue of [`CoefficientRecord`]: it exposes the
+/// same accessor names (`get`, `slice`, `start_jd`, `end_jd`, `len`,
+/// `is_empty`) but owns its doubles outright, so it works for backends
+/// (such as ASCII) that have no mmap to borrow from. The binary reader
+/// produces one by copying its record's doubles, already byte-swapped to
+/// native order.
+pub struct OwnedRecord {
+    /// The record's doubles in evaluation order; `[0]`/`[1]` are the
+    /// granule start/end JD.
+    coeffs: Vec<f64>,
+}
+
+impl OwnedRecord {
+    /// Construct an `OwnedRecord` from already-decoded doubles.
+    #[must_use]
+    pub fn new(coeffs: Vec<f64>) -> Self {
+        Self { coeffs }
+    }
+
+    /// Number of doubles in this record (== `NCOEFF`).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.coeffs.len()
+    }
+
+    /// `true` if the record carries no doubles.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.coeffs.is_empty()
+    }
+
+    /// Read the double at index `i` (0-indexed within the record).
+    /// Panics if `i >= len()`.
+    #[must_use]
+    pub fn get(&self, i: usize) -> f64 {
+        self.coeffs[i]
+    }
+
+    /// Start JD of this granule (the first double of the record).
+    #[must_use]
+    pub fn start_jd(&self) -> f64 {
+        self.coeffs[0]
+    }
+
+    /// End JD of this granule (the second double of the record).
+    #[must_use]
+    pub fn end_jd(&self) -> f64 {
+        self.coeffs[1]
+    }
+
+    /// Copy a contiguous range of doubles into an owned `Vec<f64>`.
+    /// Used to materialize one body's coefficient band for one
+    /// sub-granule.
+    #[must_use]
+    pub fn slice(&self, start: usize, count: usize) -> Vec<f64> {
+        self.coeffs[start..start + count].to_vec()
+    }
+}
+
+impl RecordSource for EphemerisFile {
+    fn granule_days(&self) -> f64 {
+        EphemerisFile::granule_days(self)
+    }
+
+    fn start_jd(&self) -> f64 {
+        EphemerisFile::start_jd(self)
+    }
+
+    fn end_jd(&self) -> f64 {
+        EphemerisFile::end_jd(self)
+    }
+
+    fn record_for_jd(&self, jd_tt: f64) -> Result<OwnedRecord, PericynthionError> {
+        let borrowed = EphemerisFile::record_for_jd(self, jd_tt)?;
+        // Copy the NCOEFF doubles into native order once; cost is
+        // negligible next to Chebyshev evaluation.
+        Ok(OwnedRecord::new(borrowed.slice(0, borrowed.len())))
+    }
+}
+
 /// Borrowed view of one coefficient record's `NCOEFF` doubles.
 ///
 /// The bytes live in the mmap; this struct just adds endianness-aware

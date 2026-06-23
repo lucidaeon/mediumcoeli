@@ -84,6 +84,43 @@ impl From<Body> for jzod::BodyId {
     }
 }
 
+/// Map an SPK asteroid NAIF id to a [`jzod::BodyId`], when the JZOD model has a
+/// variant for it. Handles both the sb441 (`2_000_000 + mpc`) and Horizons
+/// (`20_000_000 + mpc`) id schemes. Every minor body in the placements catalog
+/// has a corresponding JZOD variant, so `None` is returned only for ids that are
+/// not catalog minor bodies (or a future body added without a `jzod::BodyId`).
+#[must_use]
+fn asteroid_naif_to_jzod_body_id(naif_id: i32) -> Option<jzod::BodyId> {
+    let mpc = if (20_000_001..=20_999_999).contains(&naif_id) {
+        naif_id - 20_000_000
+    } else if (2_000_001..=2_999_999).contains(&naif_id) {
+        naif_id - 2_000_000
+    } else {
+        return None;
+    };
+    Some(match mpc {
+        1 => jzod::BodyId::Ceres,
+        2 => jzod::BodyId::Pallas,
+        3 => jzod::BodyId::Juno,
+        4 => jzod::BodyId::Vesta,
+        10 => jzod::BodyId::Hygiea,
+        2_060 => jzod::BodyId::Chiron,
+        50_000 => jzod::BodyId::Quaoar,
+        90_377 => jzod::BodyId::Sedna,
+        90_482 => jzod::BodyId::Orcus,
+        136_108 => jzod::BodyId::Haumea,
+        136_199 => jzod::BodyId::Eris,
+        136_472 => jzod::BodyId::Makemake,
+        225_088 => jzod::BodyId::Gonggong,
+        5_145 => jzod::BodyId::Pholus,
+        7_066 => jzod::BodyId::Nessus,
+        10_199 => jzod::BodyId::Chariklo,
+        28_978 => jzod::BodyId::Ixion,
+        20_000 => jzod::BodyId::Varuna,
+        _ => return None,
+    })
+}
+
 /// Return the 1-based house number for `lon_deg` given the provided cusps.
 ///
 /// Iterates through houses 1–12, testing whether the longitude falls within
@@ -158,8 +195,12 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
         map
     };
 
-    // ── Bodies array ─────────────────────────────────────────────────────────
-    let bodies: Vec<jzod::placement::Body> = computed
+    // ── Bodies array (planets, then SPK asteroids) ──────────────────────────
+    // Asteroids ride in the same body list as planets. Speed and retrograde
+    // are read from ComputedAsteroid (computed at ±0.5 day). Asteroids the
+    // JZOD body enum cannot name are omitted from JZOD output but still
+    // appear in the text/page renderers.
+    let mut bodies: Vec<jzod::placement::Body> = computed
         .bodies
         .iter()
         .map(|cb| jzod::placement::Body {
@@ -172,6 +213,20 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
             house: body_houses(cb.position.longitude_deg),
         })
         .collect();
+    for ca in &computed.asteroids {
+        let Some(id) = asteroid_naif_to_jzod_body_id(ca.naif_id) else {
+            continue;
+        };
+        bodies.push(jzod::placement::Body {
+            id,
+            position: jzod::coord::Position::from_longitude(ca.position.longitude_deg),
+            ecliptic_latitude: jzod::coord::Degrees8(ca.position.latitude_deg),
+            daily_speed: jzod::coord::Degrees8(ca.daily_speed_deg),
+            retrograde: ca.retrograde,
+            distance_au: Some(ca.position.distance_au),
+            house: body_houses(ca.position.longitude_deg),
+        });
+    }
 
     // ── Angles array (Ac, Ds, Mc, Ic — in that order when present) ──────────
     let mut angles_vec: Vec<jzod::Angle> = Vec::new();
@@ -403,6 +458,46 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
 #[cfg(all(test, feature = "jzod"))]
 mod jzod_tests {
     #[test]
+    fn asteroid_naif_maps_both_schemes_and_jzod_known_bodies() {
+        use super::asteroid_naif_to_jzod_body_id as m;
+        // big-5, sb441 scheme
+        assert_eq!(m(2_000_001), Some(jzod::BodyId::Ceres));
+        assert_eq!(m(2_000_010), Some(jzod::BodyId::Hygiea));
+        // sb441 scheme, fetched bodies jzod knows
+        assert_eq!(m(2_002_060), Some(jzod::BodyId::Chiron));
+        assert_eq!(m(2_050_000), Some(jzod::BodyId::Quaoar));
+        // Horizons scheme, big-5
+        assert_eq!(m(20_000_001), Some(jzod::BodyId::Ceres));
+        // Horizons scheme, fetched bodies jzod knows
+        assert_eq!(m(20_002_060), Some(jzod::BodyId::Chiron));
+        assert_eq!(m(20_136_199), Some(jzod::BodyId::Eris));
+        assert_eq!(m(20_225_088), Some(jzod::BodyId::Gonggong));
+        // centaurs + KBOs (now mapped, both schemes)
+        assert_eq!(m(20_005_145), Some(jzod::BodyId::Pholus));
+        assert_eq!(m(20_010_199), Some(jzod::BodyId::Chariklo));
+        assert_eq!(m(2_028_978), Some(jzod::BodyId::Ixion));
+        assert_eq!(m(20_020_000), Some(jzod::BodyId::Varuna));
+        // not a minor body
+        assert_eq!(m(399), None);
+    }
+
+    /// Every minor body in the placements catalog must map to a JZOD `BodyId`,
+    /// so no computed body is silently dropped from JZOD (the default output).
+    #[test]
+    fn every_catalog_minor_body_maps_to_jzod() {
+        for p in crate::placements::CATALOG {
+            if let Some(id) = p.sb441_naif_id() {
+                assert!(
+                    super::asteroid_naif_to_jzod_body_id(id).is_some(),
+                    "catalog body {} (mpc {:?}) has no jzod::BodyId mapping",
+                    p.name,
+                    p.mpc_number
+                );
+            }
+        }
+    }
+
+    #[test]
     fn body_maps_to_jzod_id() {
         assert_eq!(
             jzod::BodyId::from(crate::body::Body::Sun),
@@ -422,5 +517,143 @@ mod jzod_tests {
         let cusps: HouseCusps = HouseSystem::WholeSign.compute(0.5, 0.4, ac, 0.6).unwrap();
         let h1_deg = cusps.cusp(1).to_degrees().rem_euclid(360.0);
         assert_eq!(super::house_for(h1_deg + 0.01, &cusps), 1);
+    }
+
+    /// Verify all 5 main-belt asteroids (Ceres, Pallas, Juno, Vesta, Hygiea)
+    /// appear in `jzod::Chart::placements.bodies` with nonzero `daily_speed`.
+    ///
+    /// NAIFs requested: `2_000_001` (Ceres), `2_000_002` (Pallas), `2_000_003` (Juno),
+    /// `2_000_004` (Vesta), `2_000_010` (Hygiea).  All five are carried by
+    /// `sb441-n373.bsp`; Hygiea is absent from `sb441-n16.bsp`.
+    ///
+    /// Skips cleanly when `$STARCAT_JPL_DATA` or the small-body BSP is absent.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn hygiea_in_jzod_bodies_with_nonzero_speed() {
+        use crate::chart::{ChartRequest, ModeRequest, compute_with_spk};
+        use crate::jpl::{discover, header::parse, reader::EphemerisFile};
+        use crate::spk::SpkEphemeris;
+        use crate::time::calendar::{Calendar, CivilDate};
+        use crate::time::zone::Zone;
+        use std::path::{Path, PathBuf};
+
+        // Skip when JPL data is absent.
+        let Ok(data_var) = std::env::var("STARCAT_JPL_DATA") else {
+            eprintln!(
+                "STARCAT_JPL_DATA not set — skipping hygiea_in_jzod_bodies_with_nonzero_speed"
+            );
+            return;
+        };
+        let data_dir = PathBuf::from(&data_var);
+
+        // Locate DE441.
+        let Ok(loc) = discover::locate(&data_dir) else {
+            eprintln!("DE441 locate failed — skipping");
+            return;
+        };
+        let discover::DatasetLocation::Binary(paths) = loc else {
+            eprintln!("DE441 binary not found — skipping");
+            return;
+        };
+        let Ok(source) = std::fs::read_to_string(&paths.header) else {
+            eprintln!("DE441 header unreadable — skipping");
+            return;
+        };
+        let Ok(header) = parse(&source) else {
+            eprintln!("DE441 header parse failed — skipping");
+            return;
+        };
+        let Ok(file) = EphemerisFile::open(&paths.binary, &header) else {
+            eprintln!("DE441 binary open failed — skipping");
+            return;
+        };
+        let ephem = crate::ephemeris::Ephemeris::new(&file, &header).expect("build Ephemeris");
+
+        // Locate sb441-n373.bsp (Hygiea is not in n16).
+        let mut bsp_path: Option<PathBuf> = None;
+        let mut candidate: &Path = data_dir.as_path();
+        for _ in 0..10 {
+            let p = candidate
+                .join("ftp")
+                .join("eph")
+                .join("small_bodies")
+                .join("asteroids_de441")
+                .join("sb441-n373.bsp");
+            if p.is_file() {
+                bsp_path = Some(p);
+                break;
+            }
+            if let Some(parent) = candidate.parent() {
+                candidate = parent;
+            } else {
+                break;
+            }
+        }
+        let Some(bsp_path) = bsp_path else {
+            eprintln!("sb441-n373.bsp not present — skipping");
+            return;
+        };
+        let Ok(spk) = SpkEphemeris::open(&bsp_path) else {
+            eprintln!("sb441-n373.bsp open failed — skipping");
+            return;
+        };
+
+        let req = ChartRequest {
+            civil: CivilDate {
+                year: 2023,
+                month: 2,
+                day: 25,
+                hour: 12,
+                minute: 0,
+                second: 0.0,
+            },
+            calendar: Calendar::Gregorian,
+            zone: Zone::FixedSeconds(0),
+            mode: ModeRequest::Geocentric,
+            lat_deg: None,
+            lon_deg: None,
+            bodies: None,
+            houses: Vec::new(),
+            asteroids: vec![2_000_001, 2_000_002, 2_000_003, 2_000_004, 2_000_010],
+        };
+        let computed = compute_with_spk(&ephem, &[&spk], &req).expect("compute_with_spk");
+
+        let birth = super::ChartBirth {
+            year: 2023,
+            month: 2,
+            day: 25,
+            hour: 12,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string());
+
+        // All 5 asteroids must appear in the JZOD placements with nonzero daily_speed.
+        let expected: &[(jzod::BodyId, &str)] = &[
+            (jzod::BodyId::Ceres, "Ceres"),
+            (jzod::BodyId::Pallas, "Pallas"),
+            (jzod::BodyId::Juno, "Juno"),
+            (jzod::BodyId::Vesta, "Vesta"),
+            (jzod::BodyId::Hygiea, "Hygiea"),
+        ];
+        for (body_id, name) in expected {
+            let body = chart
+                .placements
+                .bodies
+                .iter()
+                .find(|b| b.id == *body_id)
+                .unwrap_or_else(|| panic!("{name} must be present in jzod bodies"));
+            assert!(
+                body.daily_speed.0.abs() > 1e-6,
+                "{name} daily_speed must be nonzero in JZOD output, got {}",
+                body.daily_speed.0
+            );
+            eprintln!(
+                "{name} JZOD: id={:?} daily_speed={:.8} retrograde={}",
+                body.id, body.daily_speed.0, body.retrograde
+            );
+        }
     }
 }

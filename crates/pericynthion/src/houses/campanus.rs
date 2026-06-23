@@ -2,7 +2,7 @@
 #![allow(clippy::similar_names, clippy::many_single_char_names)]
 
 //! Campanus house system — gated behind `noref-houses` until a refchart
-//! oracle is captured. See `docs/discovery/HOUSE_PROMOTION.md`.
+//! oracle is captured.
 //!
 //! Divides the prime vertical (the great circle through east, zenith,
 //! west, nadir) into twelve equal 30° arcs from the east point, then

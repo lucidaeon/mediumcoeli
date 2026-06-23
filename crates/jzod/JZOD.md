@@ -61,6 +61,7 @@ An open format for storage, transmission, and processing of astrology chart data
     - [OQ-19 Variant placement schema (mean vs true)](#oq-19--variant-placement-schema-mean-vs-trueosculating)
     - [OQ-20 Calendar system on datetime](#oq-20--calendar-system-field-on-datetime)
     - [OQ-21 LMT longitude annotation](#oq-21--lmt-longitude-annotation-on-datetime)
+    - [OQ-22 CBOR binary encoding](#oq-22--cbor-binary-encoding-rfc-8949)
 16. [Example](#example)
 17. [jq Query Examples](#jq-query-examples)
 18. [Versioning](#versioning)
@@ -655,7 +656,11 @@ The `views` array holds display-only wrappers for biwheels, triwheels, and quadw
 
 **Dwarf Planets:** `ceres`, `quaoar`, `sedna`, `orcus`, `haumea`, `eris`, `makemake`, `gonggong`
 
-**Major Asteroids:** `chiron`, `pallas`, `juno`, `vesta`
+**Major Asteroids:** `chiron`, `pallas`, `juno`, `vesta`, `hygiea`
+
+**Centaurs:** `pholus`, `nessus`, `chariklo`
+
+**Kuiper-belt Objects:** `ixion`, `varuna`
 
 ### Angle IDs
 `ascendant`, `descendant`, `midheaven`, `imum_coeli`
@@ -695,8 +700,10 @@ A radix is considered **minimally calculated** (reference format) when it contai
 The following are explicitly out of scope for the minimally calculated radix. They may appear in JZOD files but are not required:
 
 - Dwarf planets: `ceres`, `quaoar`, `sedna`, `orcus`, `haumea`, `eris`, `makemake`, `gonggong`
-- Major asteroids: `chiron`, `pallas`, `juno`, `vesta`
-- Trans-Neptunian objects, centaurs, Kuiper Belt objects
+- Major asteroids: `chiron`, `pallas`, `juno`, `vesta`, `hygiea`
+- Centaurs: `pholus`, `nessus`, `chariklo`
+- Kuiper-belt objects: `ixion`, `varuna`
+- Other trans-Neptunian objects, centaurs, and Kuiper-belt objects beyond those enumerated above
 - Fixed stars
 
 ---
@@ -1103,6 +1110,40 @@ Currently JZOD can encode the derived value (e.g. `"+02:24"` for Antioch at 36.1
 **Open design questions:**
 1. Should `lmt_longitude` be informational (parallel to `iana_tz`) or should it be a calculation input that supersedes `utc_offset`? The informational model is simpler but requires the producer to pre-derive the offset correctly; the calculation-input model lets consumers re-derive and cross-check.
 2. Should `lmt_longitude` and `iana_tz` be mutually exclusive (one or the other signals the offset provenance), or can both be null (fixed civil offset with no provenance annotation)?
+
+---
+
+### OQ-22 — CBOR binary encoding (RFC 8949)
+
+**Status: not yet in spec. Under investigation.**
+
+JZOD is currently defined as UTF-8 JSON. A natural extension question is whether a binary encoding should be standardised alongside it — specifically **CBOR (Concise Binary Object Representation)**, standardised as RFC 8949 (obsoletes RFC 7049).
+
+CBOR is a binary data format with a design goal of extreme simplicity of implementation and small encoding size, built on a JSON-compatible data model (maps, arrays, strings, numbers, booleans, null, bytes). Its key properties:
+
+- **Same data model as JSON.** A JZOD CBOR file is a direct binary encoding of the same object tree — no schema changes, no new concepts. A CBOR-aware reader can decode it to the same in-memory structure a JSON reader produces.
+- **Compact.** CBOR omits JSON's character overhead (quotes, braces, colons). A JZOD file with many numeric fields (longitudes, speeds, house cusps) compresses well. Typical savings vs. minified JSON: 20–40%; more with binary-tagged extensions.
+- **Streaming.** CBOR supports indefinite-length arrays and maps, making it friendlier for large chart collections written incrementally.
+- **Self-describing with tags.** RFC 8949 §3.4 defines optional semantic tags (e.g. tag 1 = epoch-based datetime, tag 2/3 = big integers). These could annotate JD values, distances, or longitudes without changing the schema.
+- **Broadly supported.** `ciborium` (Rust, pure), `cbor2` (Python), `jackson-dataformat-cbor` (JVM), browser-native via `cbor-x`/`cbor2` (JS). No special parser needed beyond the library call.
+
+**Concrete JZOD considerations:**
+
+| concern | notes |
+|---------|-------|
+| File suffix | `.jzod` for JSON, `.jzodc` or `.jzod.cbor` for CBOR — both carry the same schema |
+| `version` field | CBOR preserves string key order; parsers should not assume field order either way |
+| `uid` as bytes | RFC 8949 tag 37 = UUID bytes (16 bytes vs 36 UTF-8 chars per UID, ~8% of a chart's identifiers) |
+| `ecliptic_longitude` precision | IEEE 754 f64 in CBOR is lossless — identical precision to JSON numbers |
+| Streaming collections | CBOR indefinite-length arrays let a multi-chart collection be appended without rewriting the size prefix |
+| Tooling gap | `jq` does not read CBOR natively; research workflows that depend on `jq` would require a decode step |
+
+**The core tension:** JZOD's primary design goal is queryability with ordinary tools (`jq`, `jsonb`, Python `json`). CBOR trades away that zero-setup tooling advantage for compactness and streaming. The two encodings are not mutually exclusive — a spec could define CBOR as an optional transport encoding (like MessagePack alongside JSON in many APIs) while keeping JSON as the canonical query-time format.
+
+**Questions:**
+1. Is there a concrete use case where JZOD file size is a bottleneck? (Typical minimally calculated radix is well under 50 KB as minified JSON.)
+2. Should CBOR be defined as a first-class optional encoding, or only as a transport hint (decompress to JSON before querying)?
+3. If CBOR is adopted, should JZOD mandate the `application/cbor` MIME type and a magic-number or tag prefix to distinguish `.jzod` CBOR files from JSON files without reading them?
 
 ---
 

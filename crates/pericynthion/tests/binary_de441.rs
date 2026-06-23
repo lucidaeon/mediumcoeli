@@ -18,8 +18,14 @@ fn opens_real_de441_and_reports_actual_coverage() {
         eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
         return;
     };
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("autodiscovery failed for {}: {e}", dir.display()));
+    let loc = discover::locate(&dir)
+        .unwrap_or_else(|e| panic!("locate failed for {}: {e}", dir.display()));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
 
     let source = std::fs::read_to_string(&paths.header).expect("read header failed");
     let header = parse(&source).expect("parse header failed");
@@ -84,8 +90,14 @@ fn reads_j2000_coefficient_record() {
         eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
         return;
     };
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("autodiscovery failed for {}: {e}", dir.display()));
+    let loc = discover::locate(&dir)
+        .unwrap_or_else(|e| panic!("locate failed for {}: {e}", dir.display()));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
 
     let source = std::fs::read_to_string(&paths.header).unwrap();
     let header = parse(&source).unwrap();

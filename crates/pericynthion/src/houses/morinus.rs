@@ -1,6 +1,4 @@
-//! Morinus (Morin de Villefranche) house system — gated behind
-//! `noref-houses` until a refchart oracle is captured. See
-//! `docs/discovery/HOUSE_PROMOTION.md`.
+//! Morinus (Morin de Villefranche) house system.
 //!
 //! Divides the celestial equator into twelve 30° arcs starting from the
 //! RAMC, then projects each division onto the ecliptic. No latitude
@@ -11,6 +9,8 @@
 //! point (declination 0) at RAMC + k·30°, via λ = atan2(sin α · cos ε,
 //! cos α). H10 (the RAMC image) is close to — but not equal to — the
 //! Midheaven.
+//!
+//! Oracle: `skills/astrologer/fixtures/ref_first_contact_morinus.md`.
 
 use super::HouseCusps;
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn matches_first_contact_oracle() {
-        // docs/ref_first_contact_morinus.md — driven by the reference's own
+        // skills/astrologer/fixtures/ref_first_contact_morinus.md — driven by the reference's own
         // RAMC (LST 23:38:54) and obliquity (23°25'51"). Latitude is irrelevant
         // to Morinus but supplied for signature symmetry. No ephemeris/ΔT path,
         // so this is a tight (1′) check of the projection math itself.

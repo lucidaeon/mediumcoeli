@@ -2,7 +2,7 @@
 #![allow(clippy::similar_names)]
 
 //! Koch (Birthplace) house system — gated behind `noref-houses` until a
-//! refchart oracle is captured. See `docs/discovery/HOUSE_PROMOTION.md`.
+//! refchart oracle is captured.
 
 use super::HouseCusps;
 use crate::coords::acds::ac_rad;

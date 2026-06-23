@@ -16,6 +16,8 @@ Run `cargo path NAME` from inside a given crate directory to find the source dir
 Blackmoon and Starcat are thin CLI wrappers to the libraries they leverage. Do not put anything in
 the CLI tools that would have to be repeated by a GUI tool using the same libraries. 
 
+Committed code must only point at committed files.
+
 # Definitions
 
 Accurate: Documentation is a promise to the world. It needs to reflect the reality of the code base.
@@ -29,7 +31,7 @@ Done: is defined as written, tested, and documented.
 
 # Skills
 
-Always use the /bmad-agent-astrologer skill or integrated [Astrologer skill](./skills/astrologer/SKILL.md). 
+Always use the /astrologer skill or integrated [Astrologer skill](./skills/astrologer/SKILL.md). 
 
 Offer to use superpowers:writing-plans for changes beyond the scope of a single file.
 
@@ -85,6 +87,12 @@ just fetch adbxml   # download ADB sample XML (for astrogram parser tests)
 just fetch horizons # refresh all HORIZONS reference fixtures
 ```
 
+`scripts/horizons_fetch.py` calls the public NASA JPL HORIZONS API directly and
+may be invoked as needed for reference positions (planets and minor bodies, by
+HORIZONS designator — asteroids use a trailing `;`, e.g. Ceres `1;`, Vesta `4;`).
+It caches results as `crates/pericynthion/tests/fixtures/horizons_*.json`. Use it
+to generate/refresh acceptance fixtures rather than hand-entering ephemeris values.
+
 Run a single test by name:
 ```bash
 cargo test --release -p astrogram rsc_parses_single_entry -- --nocapture
@@ -95,8 +103,8 @@ cargo test --release -p astrogram rsc_parses_single_entry -- --nocapture
 | Variable | Required by |
 |---|---|
 | `STARCAT_JPL_DATA` | `pericynthion` + `starcat` tests — path to DE441 binary dir; tests skip cleanly if unset |
-| `ASTRO_SPECIMENS` | blackmoon/astrogram specimen tests — path to `sfcht/`, `zdb/`, `adb/` subdirs; tests skip cleanly if unset |
-| `ASTRO_RESEARCH` | reference chart docs (`ref_*.md`); acceptance tests skip cleanly if unset |
+| `astro_specimens` | blackmoon/astrogram specimen tests — path to `sfcht/`, `zdb/`, `adb/` subdirs; tests skip cleanly if unset |
+| `astro_research` | reference chart docs (`ref_*.md`); acceptance tests skip cleanly if unset |
 
 Credentials for web targets are read from env vars matching the slug (`ASTROTHEOROS_USER`, `ASTROTHEOROS_PASS`, `ASTROTHEOROS_TOKEN`, `ASTROCOM_TOKEN`, `ASTROCOM_USER`, `ASTROCOM_PASS`, `LUNA_TOKEN`).
 

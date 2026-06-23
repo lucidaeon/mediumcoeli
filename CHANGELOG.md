@@ -5,11 +5,101 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/b3670c460b2cdc7f9efb283fde3af4650892a90f...main), [astrogram/0.2.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.2), [jzod/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.3.0), [pericynthion/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.5.0), [starcat/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.4.0), 2026.06.23
+
+### Added — `pericynthion`
+
+- **SPICE SPK asteroid ephemeris** (`spk`): `Daf` DAF/SPK container reader,
+  `SpkEphemeris::{open,state,center_of}` evaluating **Type-2 Chebyshev** and
+  **Type-21 MDA (Modified Difference Array)** segments — Type-21 is the format
+  JPL Horizons generates on demand. Type-21 evaluator implements the FC/WC/W MDA
+  recurrence with MAXTRM guard (≤ 25) and km/s → km/day velocity conversion.
+  Both types dispatched transparently via `SpkEphemeris::state`. Cross-validated:
+  Ceres Type-21 vs Type-2 agree to sub-kilometre.
+- **Asteroid apparent positions** (`coords::apparent`):
+  `apparent_ecliptic_position_spk` and `apparent_ecliptic_position_spk_topocentric`
+  compute tropical ecliptic-of-date apparent positions for SPK bodies, reusing the
+  full planet pipeline (Sun-barycentre from DE441, heliocentric vector from SPK,
+  light-time, aberration, IAU 2006 precession, IAU 2000B nutation). Absolute
+  HORIZONS validation at J2000: 5 main-belt asteroids, max error 0.084″ (Juno lat).
+- **Multi-SPK routing**: `compute_with_spk(ephem, spks: &[&SpkEphemeris], request)`
+  routes each body to the first SPK that covers it; `spk::open_dir(path)` opens every
+  `.bsp` in a directory. `ComputedAsteroid` gains `daily_speed_deg` and `retrograde`
+  (sampled at ±0.5 day via two SPK evaluations).
+- **JPL Horizons SPK fetcher** (`horizons` feature, optional): `fetch_spk` /
+  `fetch_all` pull on-demand SPKs from the public Horizons API, writing
+  `<naif_id>.bsp` files using the `20_000_000 + MPC` NAIF scheme. Handles
+  Horizons' line-wrapped base64 and single-quotes datetime parameters (bare spaces
+  cause Horizons to silently truncate to date-only). Throttled (1 s between requests
+  — polite to the shared research resource).
+- **`placements` catalog** — single source of truth for every supported body:
+  planets, dwarf planets, centaurs, KBOs, TNOs, main-belt asteroids. Each
+  `Placement` carries MPC number, `sb441_naif_id()`, `horizons_naif_id()`,
+  `horizons_command()`, slug, and category. Public API: `find_by_slug`,
+  `name_for_naif` (both id schemes), `supported_list`, deterministic `to_markdown()`.
+- **JPL `eph/` dataset oracle** (`jpl::oracle`): hardcoded BLAKE3 + size manifest of
+  all 1 374 files across `planets/`, `satellites/`, and `small_bodies/` directories.
+  `verify_entry` size-fast-fails then hashes; `production_entries` exposes the required
+  subset; `mirror_root_from(start)` walks ancestors to find the `ssd.jpl.nasa.gov/` root.
+- **DE441 ASCII ephemeris reader** (`jpl::ascii`): `AsciiEphemeris` parses
+  `ascp*.NNN` / `ascm*.NNN` chunks and serves records through the `RecordSource`
+  trait — same interface as the binary reader. JD-indexed for fast chunk selection;
+  bit-identical to the binary reader at 1e-6 km.
+- **Any-node JPL discovery** (`jpl::discover`): `locate` and `open_dataset` walk up
+  to 8 levels deep — `start` may be the `de441/` dir, `ascii/`, `planets/`, `eph/`,
+  `ftp/`, or the mirror root. Binary preferred over ASCII at the same DE number.
+
+### Added — `jzod`
+
+- **`BodyId` extended** with `Hygiea`, `Pholus`, `Nessus`, `Chariklo`, `Ixion`, and
+  `Varuna`. All serialise as snake_case (e.g. `"chariklo"`). Every body in the
+  `placements` catalog now maps to a JZOD `BodyId`; enforced by a dedicated test.
+
+### Added — `starcat`
+
+- **`starcat compute --asteroids SLUG,...`** — comma-separated asteroid slugs
+  (`ceres`, `pallas`, `juno`, `vesta`, `hygiea`, `chiron`, `pholus`, `nessus`,
+  `chariklo`, etc.) appended after the planet block in all output modes (text, page,
+  JZOD). Retrograde marker (℞) shown in `--page` output. `--spk PATH` provides an
+  explicit BSP; when omitted, `sb441-n16.bsp` is auto-discovered under the JPL
+  mirror root and `$STARCAT_HORIZONS_DATA` is opened for Horizons-fetched bodies.
+- **`--omniscient`** — compute every body covered by available data files.
+- **`starcat horizons <dp|ast|cent|kbo|tno>`** — fetches all bodies in the named
+  category (dwarf planets, asteroids, centaurs, KBOs, TNOs) from JPL Horizons,
+  writing `<naif_id>.bsp` to `--out` / `$STARCAT_HORIZONS_DATA`. Idempotent (skips
+  bodies already on disk), sequential with 1 s throttle, exits non-zero on any failure.
+- **`starcat catalogue`** — top-level command listing every supported body (slug,
+  category, NAIF ids, MPC) from the placements catalog.
+- **`starcat data verify`** — verifies the required production subset against the
+  built-in oracle. **`starcat data verify all`** — verifies integrity of all present
+  files (absent files skipped; present-but-corrupt files fail). **`starcat data prod`**
+  — lists the oracle-covered production file set. (Subcommand `verify-data` renamed
+  to `data` with structured sub-modes.)
+- **Placements doc generator** — `just placements` regenerates `docs/placements.md`
+  deterministically; a golden test guards against drift.
+- **`--jpl-data` accepts any mirror node** (binary or ASCII, any hierarchy level).
+
+### Fixed — `pericynthion`
+
+- SPK/DAF reader rejects corrupt summary records (no panic on bad input).
+- SPK Type-2 rejects truncated segments (no panic); `from_slug` is alloc-free.
+- SPK Type-21: NRECS overflow computed as `i64`; segments with `MAXTRM > 25` rejected.
+- Horizons `START_TIME` / `STOP_TIME` single-quoted on the wire — bare spaces caused
+  Horizons' batch parser to split the datetime and silently drop the time component.
+- Retrograde flag suppressed for asteroids in heliocentric mode.
+- Corrected BLAKE3 hashes for 3 satellite/NIO files read during a live mirror sync.
+
+### Fixed — `starcat`
+
+- Lunar phase rendered in all output boxes.
+- `--omniscient prod` no longer requires chart arguments.
+- `--spk` help text accurately describes the Type-2/Type-21 BSP format.
+- `--help` and `long_about` house listing updated to all seven always-on systems
+  (Alcabitius, Morinus); asteroid output mode note corrected to "all output modes".
 
 ---
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/0809052f5004901b7e5d9d97b11cb09fc2aab10c...main), [astrogram/0.2.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.1), [blackmoon/0.2.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.1), [jzod/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.2.0), [pericynthion/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.4.0), [starcat/0.3.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.3.1), [wristband/0.0.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.1), 2026.06.20
+## [b3670c4](https://github.com/lucidaeon/mediumcoeli/compare/0809052f5004901b7e5d9d97b11cb09fc2aab10c...b3670c460b2cdc7f9efb283fde3af4650892a90f), [astrogram/0.2.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.1), [blackmoon/0.2.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.1), [jzod/0.2.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.2.0), [pericynthion/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.4.0), [starcat/0.3.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.3.1), [wristband/0.0.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.1), 2026.06.20
 
 ### Added — `jzod`
 

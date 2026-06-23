@@ -25,8 +25,7 @@ pub use whole_sign::whole_sign_rad;
 // Every module declared under this gate is compiled only when the
 // `noref-houses` Cargo feature is enabled. Default builds see nothing
 // here. As each system gets refchart-oracle coverage, its `#[cfg]`
-// attribute is removed in a focused promotion commit — see
-// docs/discovery/HOUSE_PROMOTION.md.
+// attribute is removed in a focused promotion commit.
 
 #[cfg(feature = "noref-houses")]
 pub mod koch;

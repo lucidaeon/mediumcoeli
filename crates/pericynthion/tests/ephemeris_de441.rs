@@ -21,8 +21,14 @@ fn locate_dir() -> Option<PathBuf> {
 /// Setup helper: open the real JPL file once per test.
 fn setup() -> Option<(EphemerisFile, pericynthion::jpl::header::Header)> {
     let dir = locate_dir()?;
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("autodiscovery failed for {}: {e}", dir.display()));
+    let loc = discover::locate(&dir)
+        .unwrap_or_else(|e| panic!("locate failed for {}: {e}", dir.display()));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
     let source = std::fs::read_to_string(&paths.header).expect("read header");
     let header = parse(&source).expect("parse header");
     let file = EphemerisFile::open(&paths.binary, &header).expect("open ephemeris file");

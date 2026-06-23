@@ -9,12 +9,18 @@
 use pericynthion::jpl::{discover, header::parse};
 use std::path::PathBuf;
 
-/// Resolve the JPL ASCII header path via autodiscovery.
+/// Resolve the JPL ASCII header path via `locate`.
 fn locate_header() -> Option<PathBuf> {
     let val = std::env::var_os("STARCAT_JPL_DATA")?;
     let dir = PathBuf::from(val);
-    let paths = discover::discover(&dir)
-        .unwrap_or_else(|e| panic!("STARCAT_JPL_DATA autodiscovery failed: {e}"));
+    let loc =
+        discover::locate(&dir).unwrap_or_else(|e| panic!("STARCAT_JPL_DATA locate failed: {e}"));
+    let paths = match loc {
+        discover::DatasetLocation::Binary(p) => p,
+        discover::DatasetLocation::Ascii { .. } => {
+            panic!("expected binary DE dataset under {}", dir.display())
+        }
+    };
     Some(paths.header)
 }
 

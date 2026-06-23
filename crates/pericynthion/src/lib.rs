@@ -37,6 +37,8 @@
 //! 7. [`lots`] — Hellenistic sect + the eight Hermetic lots (Fortune,
 //!    Spirit, Exaltation, Necessity, Eros, Courage, Victory, Nemesis).
 //! 8. [`geo`] — ISO 6709 DD/DMS/DDM geographic-coordinate parsing.
+//! 9. [`spk`] — SPICE SPK reader for asteroid ephemerides (`sb441-n16.bsp` /
+//!    `sb441-n373.bsp`); `Asteroid` enum (Ceres, Pallas, Juno, Vesta, Hygiea).
 //!
 //! ## Naming convention for chart points
 //!
@@ -65,8 +67,7 @@
 //!
 //! Defaults to `true` for both [`coords::nodes`] and
 //! [`coords::lilith`]. Natural/interpolated mode is reserved for
-//! Black Moon Lilith and is currently not yet shipped (see
-//! `docs/backlog.md` → Natural / Interpolated Lilith).
+//! Black Moon Lilith and is currently not yet shipped.
 //!
 //! ## Shipped facades
 //!
@@ -79,14 +80,12 @@
 //! ## v1 non-goals (still deferred)
 //!
 //! - Sidereal zodiacs / ayanāṃśas (Lahiri, Fagan-Bradley, …)
-//! - Asteroids, dwarf planets beyond Pluto (Chiron, Ceres, Eris, …)
+//! - Dwarf planets and minor bodies beyond the five shipped asteroids (Chiron, Eris, …)
 //! - Wider Hellenistic lot catalog beyond the Hermetic eight
 //! - Natural / Interpolated Black Moon Lilith
 //! - House systems beyond Whole Sign / Equal / Placidus / Regiomontanus
 //!   / Porphyry (Koch, Campanus, Topocentric, Alcabitius, …)
 //! - Full IANA tzdb (named historical zones)
-//!
-//! See `docs/backlog.md` for the prioritized backlog.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
@@ -101,11 +100,16 @@ pub mod coords;
 pub mod ephemeris;
 pub mod error;
 pub mod geo;
+#[cfg(feature = "horizons")]
+pub mod horizons;
 pub mod houses;
 pub mod jpl;
 #[cfg(feature = "jzod")]
 pub mod jzod;
 pub mod lots;
+pub mod manifest;
+pub mod placements;
+pub mod spk;
 pub mod time;
 
 pub use chart::{
