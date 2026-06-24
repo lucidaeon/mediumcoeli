@@ -19,7 +19,7 @@ Astrology software written in Rust.
 
 - **[Starcat](crates/starcat/README.md)** — ephemeris computation and presentation. Reads NASA JPL DE441 binary files and produces ecliptic-of-date apparent positions for Astrological placements. Supports multiple geographic coordinate systems, astronomical coordinate systems, and astrological house systems.
 
-> Starcat is also pre-release. It is fast and accurate, and we will be adding support for satellites, small bodies, asteroids and fixed stars soon!
+> Starcat is also pre-release. It is fast and accurate, with support for small bodies, asteroids, and fixed stars.
 
 ## Quick Start
  - [Homebrew](https://brew.sh) recommended

@@ -12,8 +12,8 @@ One CLI verb (run with no subcommand). Inputs are file paths or a web account; t
 ```text
 blackmoon input.zdb --output out.SFcht
 blackmoon a.SFcht b.zdb export.xml --output merged.SFcht
-blackmoon --from luna --luna-session $COOKIE --output charts.SFcht
-blackmoon --from astro --astro-user me@x.com --astro-pass ... --output charts.SFcht
+blackmoon --from luna --luna-token $LUNA_TOKEN --output charts.SFcht
+blackmoon --from astrocom --astrocom-user me@x.com --astrocom-pass ... --output charts.SFcht
 blackmoon --from astrotheoros --astrotheoros-user me@x.com --astrotheoros-pass ... --output charts.SFcht
 blackmoon charts.SFcht --normalize
 ```
@@ -21,7 +21,7 @@ blackmoon charts.SFcht --normalize
 Targets currently wired up:
 
 - **File:** Solar Fire `.SFcht` binary (cp1252), Zeus `.zdb` semicolon-text, Astrodatabank `.xml`.
-- **Web (authenticated):** lunaastrology.com (`--from/--to luna`), astro.com (`--from/--to astro`) — full CRUD including `--delete <ids>` for astro.com.
+- **Web (authenticated):** lunaastrology.com (`--from/--to luna`), astro.com (`--from/--to astrocom`), astrotheoros.com (`--from/--to astrotheoros`) — full CRUD. `--clear` deletes every chart on a web target (after a y/N gate); `--consolidate` dedupes a web target in place.
 
 `--normalize` strips non-cp1252 characters and collapses whitespace; with no `--output`, it edits each input file in place. `--output now.SFcht` substitutes a UTC timestamp.
 
@@ -32,40 +32,31 @@ Astrologers can have their data spread out across many tools. Consolidating reco
 
 ## How it works
 
-`blackmoon` is a thin CLI over [`astrogram`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/astrogram/README.md). The pipeline for every conversion run is the same five steps:
+`blackmoon` is a thin CLI over [`astrogram`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/astrogram/README.md). The pipeline for every conversion run is:
 
 1. **Read the sink first** (if it already exists or is a web account) so the resulting set never gains duplicates. For LUNA® this is a cheap listing-only fetch keyed by `(name, full datetime)`; for astro.com it's a full chart fetch with `nhor` IDs; for files it's a normal parse.
 2. **Read each input** in batch order, parsing through the per-format reader in `astrogram`. Inputs already present in the sink listing are filtered out before merge so duplicates never even reach the deduper.
-3. **Merge and dedup** with `consolidate::merge_reporting`: same name + same date + time within ±2h + lat/lon within 0.1°. First-seen wins; the dropped names are reportable with `--verbose`.
+3. **Merge and dedup** with `consolidate::merge_reporting`: same date + time within ±2h + lat/lon within 0.1°. First-seen wins; the dropped names are reportable with `--verbose`.
 4. **Optionally normalize** the merged set (cp1252 cleanup for any sink, mandatory before writing `.SFcht`).
-5. **Write** the merged set to the chosen sink. Web sinks (`--to luna`, `--to astro`) carry an interactive y/N confirmation before any mutation, plus per-chart progress reporting.
+5. **Report drops** — disclose any fields the sink cannot store; `--strict` aborts instead of proceeding.
+6. **Apply fills** — resolve house system / zodiac / locus for charts whose source never carried them (e.g. ADB→SFcht), from `--fill-house` / `--fill-zodiac` / `--fill-locus` or an interactive prompt.
+7. **Write** the merged set to the chosen sink. Web sinks carry an interactive y/N confirmation before any mutation, plus per-chart progress; unless `--no-verify` is passed, blackmoon then reads the charts back and reports a per-field transcript.
 
-Credentials come from flags or env vars (`LUNAASTROLOGY_COOKIE`, `ASTROCOM_COOKIE`, `ASTROCOM_USER`, `ASTROCOM_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--resume-from <prefix>` resumes an interrupted LUNA® fetch.
+Credentials come from flags or env vars (`LUNA_TOKEN`, `ASTROCOM_TOKEN`, `ASTROCOM_USER`, `ASTROCOM_PASS`, `ASTROTHEOROS_TOKEN`, `ASTROTHEOROS_USER`, `ASTROTHEOROS_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--luna-resume-from <prefix>` resumes an interrupted LUNA® fetch.
 
 Credential sources are **not** mutually exclusive. When several are available for a target (a browser cookie via `--grant-cookie-access` (powered by [`wristband`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/wristband/README.md)), a token, and/or login creds), `blackmoon` tries them in order — **cookie → token → login** — and falls through to the next when one is rejected as stale (e.g. an expired cookie falls back to your saved password). It discloses which source authenticated, naming a fall-through when one occurred.
 
-For **astro.com specifically**, the session cookie authenticates *reads only*; deleting a chart re-submits your account password. So `--delete`/`--consolidate` against astro.com requires `--astrocom-user`/`--astrocom-pass` (or `ASTROCOM_USER`/`ASTROCOM_PASS`) even when a working cookie is present — the cookie reads, the password deletes.
+For **astro.com specifically**, the session cookie authenticates *reads only*; deleting a chart re-submits your account password. So `--clear`/`--consolidate` against astro.com requires `--astrocom-user`/`--astrocom-pass` (or `ASTROCOM_USER`/`ASTROCOM_PASS`) even when a working cookie is present — the cookie reads, the password deletes.
 
 ## In-place LUNA® consolidation
 
 `blackmoon` can dedupe a LUNA® account in place by surfacing **candidate
 groups** for human decision — no record is ever auto-dropped.
 
-### One-off delete by UUID
-
-```
-blackmoon --luna-delete <uuid1>,<uuid2> --luna-session "$LUNAASTROLOGY_COOKIE"
-```
-
-Each UUID is deleted via `POST /phenomena/delete/<uuid>` (CakePHP DELETE
-method tunnel).  Per-record progress is printed; failures are tallied and
-the run exits non-zero if any delete failed.  `--delay` is honoured
-between deletes.
-
 ### Interactive consolidation
 
 ```
-blackmoon --target luna --consolidate --luna-session "$LUNAASTROLOGY_COOKIE"
+blackmoon --target luna --consolidate --luna-token "$LUNA_TOKEN"
 ```
 
 The flow:

@@ -1,7 +1,7 @@
 [package]
 name = "pericynthion"
-version = "0.5.0"
-description = "Astrological ephemeris computation library — pure-Rust NASA JPL DE441 reader"
+version = "0.6.0"
+description = "Astrological ephemeris computation library: pure-Rust NASA JPL Ephemerides reader"
 keywords = ["astrology", "chart", "de441", "ephemeris", "natal"]
 categories = ["algorithms", "date-and-time", "mathematics", "science"]
 edition.workspace = true
@@ -13,7 +13,8 @@ homepage.workspace = true
 # Allowlist of files to publish. New files never leak by accident; tests/
 # (incl. the large horizons golden fixtures) and dev artifacts are excluded.
 # Cargo always also packs Cargo.toml and the README.
-include = ["src/**", "README.md"]
+include = ["src/**", "README.md", "build.rs"]
+build = "build.rs"
 
 [lib]
 name = "pericynthion"
@@ -45,6 +46,9 @@ jzod = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
+
+[build-dependencies]
+flate2 = "1"
 
 [dev-dependencies]
 approx.workspace = true

@@ -84,6 +84,12 @@ Daily speed is how far a body moves along the ecliptic in one day, in degrees. W
 
 A complete position record for a physical body therefore includes: ecliptic longitude (decimal degrees or DMS), sign, degree/minute/second within sign, ecliptic latitude, declination, daily speed, and retrograde flag. Mathematical points omit latitude.
 
+## Placements and Bodies
+
+A **placement** is any positionable thing in a chart — celestial objects and mathematical points alike. The term covers the full set of computed positions a chart contains, without distinguishing between physical and mathematical origin.
+
+A **body** is a physical object whose position requires ephemeris data: a luminary, planet, dwarf planet, asteroid, centaur, KBO, TNO, or fixed star. Bodies have latitude, declination, daily speed, and a retrograde flag. Mathematical points do not — they are not bodies.
+
 ## Celestial Objects
 
 Astrology software must handle a wide and growing catalog of objects. They fall into meaningful categories that inform both calculation and interpretation.

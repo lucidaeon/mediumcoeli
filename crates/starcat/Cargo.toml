@@ -1,7 +1,7 @@
 [package]
 name = "starcat"
-version = "0.4.0"
-description = "Command-line astrological ephemeris and natal-chart calculator built on pericynthion"
+version = "0.5.0"
+description = "A tribute to UNIX `cat`: Command-line astrological ephemeris and natal-chart calculator built on pericynthion"
 keywords = ["astrology", "divination", "ephemeris"]
 categories = ["command-line-utilities", "science"]
 edition.workspace = true
@@ -38,3 +38,6 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 tabled = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempdir = "0.3"

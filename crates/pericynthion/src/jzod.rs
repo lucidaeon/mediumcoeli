@@ -115,8 +115,10 @@ fn asteroid_naif_to_jzod_body_id(naif_id: i32) -> Option<jzod::BodyId> {
         5_145 => jzod::BodyId::Pholus,
         7_066 => jzod::BodyId::Nessus,
         10_199 => jzod::BodyId::Chariklo,
+        8_405 => jzod::BodyId::Asbolus,
         28_978 => jzod::BodyId::Ixion,
         20_000 => jzod::BodyId::Varuna,
+        15_760 => jzod::BodyId::Albion,
         _ => return None,
     })
 }
@@ -616,7 +618,7 @@ mod jzod_tests {
             houses: Vec::new(),
             asteroids: vec![2_000_001, 2_000_002, 2_000_003, 2_000_004, 2_000_010],
         };
-        let computed = compute_with_spk(&ephem, &[&spk], &req).expect("compute_with_spk");
+        let computed = compute_with_spk(&ephem, &[&spk], &req, &[]).expect("compute_with_spk");
 
         let birth = super::ChartBirth {
             year: 2023,

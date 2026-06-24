@@ -12,8 +12,23 @@ mod oracle_data;
 use crate::error::PericynthionError;
 use std::path::{Path, PathBuf};
 
-/// One file's identity: byte size + lowercase-hex BLAKE3, keyed by name
-/// within an [`OracleDir`].
+/// The sentinel `provides` value meaning "all fixed stars" (used by `catalog.gz`).
+pub const STAR_CLASS_ALL: &str = "@fixed-stars";
+
+/// Which upstream family a manifest directory belongs to. Determines URL
+/// derivation and whether rows are integrity-pinned or presence-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// A file in the JPL SSD eph mirror; URL = `https://{prefix}/{name}`; hash-pinned.
+    JplMirror,
+    /// A CDS `VizieR` catalog file; URL = `https://{prefix}/{name}`; hash-pinned.
+    CdsCatalog,
+    /// Per-body SPK from the JPL Horizons API; presence-only (synthesized, never stored here).
+    HorizonsSpk,
+}
+
+/// One file's identity: integrity (`size` + `blake3_hex`) plus provenance
+/// (`provides`/`coverage`), keyed by name within an [`OracleDir`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OracleFile {
     /// File name (no directory component).
@@ -22,15 +37,21 @@ pub struct OracleFile {
     pub size: u64,
     /// Unkeyed BLAKE3 of the file's bytes, lowercase hex (64 chars).
     pub blake3_hex: &'static str,
+    /// Catalogued body display names this file backs, or [`STAR_CLASS_ALL`].
+    /// Empty for mirror files not tied to a catalogued body.
+    pub provides: &'static [&'static str],
+    /// Optional human coverage gloss, e.g. `"Yale BSC5P (Hoffleit & Warren 1991)"`.
+    pub coverage: Option<&'static str>,
 }
 
-/// A directory of files sharing a common path prefix. Grouping keeps the
-/// generated table readable — the long mirror path is written once.
+/// A directory of files sharing a common path prefix and [`SourceKind`].
 #[derive(Debug, Clone, Copy)]
 pub struct OracleDir {
-    /// Path prefix relative to the mirror root, e.g.
+    /// Path prefix relative to the mirror root / host-first URL path, e.g.
     /// `ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441`.
     pub prefix: &'static str,
+    /// Which upstream family this directory belongs to.
+    pub kind: SourceKind,
     /// Files directly in this directory.
     pub files: &'static [OracleFile],
 }
@@ -134,19 +155,23 @@ pub fn verify_against_root(root: &Path) -> Vec<VerifyReport> {
     entries().iter().map(|e| verify_entry(root, e)).collect()
 }
 
-/// All mirrored directories with their files.
+/// All manifest directories (every [`SourceKind`]). Provenance reads this.
 #[must_use]
-pub fn dirs() -> &'static [OracleDir] {
+pub fn manifest_dirs() -> &'static [OracleDir] {
     oracle_data::DIRS
 }
 
-/// Total number of files in the oracle.
+/// Number of JPL-mirror files in the oracle (the integrity surface).
 #[must_use]
 pub fn file_count() -> usize {
-    oracle_data::DIRS.iter().map(|d| d.files.len()).sum()
+    oracle_data::DIRS
+        .iter()
+        .filter(|d| matches!(d.kind, SourceKind::JplMirror))
+        .map(|d| d.files.len())
+        .sum()
 }
 
-/// Flatten the `oracle_data::DIRS` oracle table into full-path rows.
+/// Flatten the JPL-mirror rows into full-path integrity entries.
 ///
 /// Each [`OracleEntry`] has a `path` formed by joining the [`OracleDir::prefix`]
 /// with the [`OracleFile::name`] via `/`.
@@ -154,6 +179,7 @@ pub fn file_count() -> usize {
 pub fn entries() -> Vec<OracleEntry> {
     oracle_data::DIRS
         .iter()
+        .filter(|d| matches!(d.kind, SourceKind::JplMirror))
         .flat_map(|d| {
             d.files.iter().map(move |f| OracleEntry {
                 path: format!("{}/{}", d.prefix, f.name),
@@ -370,5 +396,42 @@ mod tests {
             .find(|e| e.path.ends_with("Linux/de441/linux_m13000p17000.441"))
             .expect("DE441 binary in oracle");
         assert_eq!(bin.size, 2_788_676_624);
+    }
+
+    #[test]
+    fn manifest_includes_catalog_gz_with_star_coverage() {
+        let cds: Vec<&super::OracleFile> = super::manifest_dirs()
+            .iter()
+            .filter(|d| matches!(d.kind, super::SourceKind::CdsCatalog))
+            .flat_map(|d| d.files.iter())
+            .collect();
+        let cat = cds
+            .iter()
+            .find(|f| f.name == "catalog.gz")
+            .expect("catalog.gz present in manifest");
+        assert_eq!(cat.provides, &[super::STAR_CLASS_ALL]);
+        assert_eq!(cat.blake3_hex.len(), 64);
+        // Integrity surface is unchanged: catalog.gz is NOT in entries().
+        assert!(
+            super::entries()
+                .iter()
+                .all(|e| !e.path.ends_with("catalog.gz"))
+        );
+    }
+
+    #[test]
+    fn sb441_bundles_declare_their_bodies() {
+        let by_name = |n: &str| {
+            super::manifest_dirs()
+                .iter()
+                .flat_map(|d| d.files.iter())
+                .find(|f| f.name == n)
+                .unwrap_or_else(|| panic!("{n} in manifest"))
+        };
+        assert!(by_name("sb441-n16.bsp").provides.contains(&"Ceres"));
+        assert!(by_name("sb441-n373.bsp").provides.contains(&"Eris"));
+        assert!(by_name("sb441-n373.bsp").provides.contains(&"Sedna"));
+        // Albion is Horizons-only — must NOT be claimed by n373.
+        assert!(!by_name("sb441-n373.bsp").provides.contains(&"Albion"));
     }
 }

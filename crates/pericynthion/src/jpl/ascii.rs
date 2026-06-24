@@ -76,10 +76,33 @@ pub(crate) struct AsciiChunk {
     pub first_granule_days: f64,
 }
 
+/// Scan `text` (the tail of a chunk file) for the last complete record and
+/// return its `coeffs[1]` (end JD). Returns `None` if no record header is found.
+fn last_record_end_jd(text: &str, ncoeff: usize) -> Option<f64> {
+    let lines: Vec<&str> = text.lines().collect();
+    let ncoeff_str = ncoeff.to_string();
+    let mut end_jd: Option<f64> = None;
+    for i in 0..lines.len() {
+        let mut toks = lines[i].split_whitespace();
+        let is_header = match (toks.next(), toks.next(), toks.next()) {
+            (Some(a), Some(b), None) => a.parse::<u32>().is_ok() && b == ncoeff_str.as_str(),
+            _ => false,
+        };
+        if is_header {
+            let mut it = lines[i..].iter().copied();
+            if let Some(r) = parse_record(&mut it, ncoeff) {
+                end_jd = Some(r.coeffs[1]);
+            }
+        }
+    }
+    end_jd
+}
+
 /// Discover and JD-index `asc[pm]*.NNN` chunks in `dir`.
 ///
-/// Each qualifying file is read in full to locate its first and last records;
-/// the returned list is sorted by `start_jd` ascending.
+/// Only the first and last records of each file are read: the head gives
+/// `start_jd`, the tail gives `end_jd`. The returned list is sorted by
+/// `start_jd` ascending.
 ///
 /// # Chunk-grid invariant
 ///
@@ -104,6 +127,8 @@ pub(crate) fn index_chunks(
     dir: &Path,
     ncoeff: usize,
 ) -> Result<Vec<AsciiChunk>, PericynthionError> {
+    use std::io::{Read, Seek, SeekFrom};
+
     let rd = std::fs::read_dir(dir).map_err(|source| PericynthionError::Io {
         path: dir.to_path_buf(),
         source,
@@ -117,23 +142,70 @@ pub(crate) fn index_chunks(
         if !(name.starts_with("ascp") || name.starts_with("ascm")) {
             continue;
         }
-        let text = std::fs::read_to_string(&p).map_err(|source| PericynthionError::Io {
+
+        // Budget: Fortran writes 3 coefficients per 80-char line.
+        // lines_per_rec = 1 header + ceil(ncoeff/3) data lines.
+        // Double that and floor at 4 KiB for the head read.
+        let lines_per_rec = 1 + ncoeff.div_ceil(3);
+        let rec_budget = (lines_per_rec * 2 * 80).max(4096);
+
+        let mut file = std::fs::File::open(&p).map_err(|source| PericynthionError::Io {
             path: p.clone(),
             source,
         })?;
-        let mut it = text.lines();
-        let Some(first) = parse_record(&mut it, ncoeff) else {
+        let file_len = file
+            .metadata()
+            .map_err(|source| PericynthionError::Io {
+                path: p.clone(),
+                source,
+            })?
+            .len();
+
+        // --- first record: read from the head of the file ------------------
+        // Cast via u64 avoids overflow on usize-is-32-bit targets; file_len
+        // is already ≤ usize::MAX bytes for any file we can mmap.
+        #[allow(clippy::cast_possible_truncation)]
+        let head_len = (rec_budget as u64).min(file_len) as usize;
+        let mut head_buf = vec![0u8; head_len];
+        file.read_exact(&mut head_buf)
+            .map_err(|source| PericynthionError::Io {
+                path: p.clone(),
+                source,
+            })?;
+        let head_text = String::from_utf8_lossy(&head_buf);
+        let Some(first) = parse_record(&mut head_text.lines(), ncoeff) else {
             continue;
         };
-        let mut last = first.coeffs.clone();
-        while let Some(r) = parse_record(&mut it, ncoeff) {
-            last = r.coeffs;
-        }
+        let start_jd = first.coeffs[0];
+        let first_granule_days = first.coeffs[1] - first.coeffs[0];
+
+        // --- last record: read from the tail of the file -------------------
+        // 3× rec_budget so the window is wide enough to contain at least one
+        // full record even if the seek lands mid-record.  We cannot assume the
+        // tail starts on a record boundary, so we scan every line looking for
+        // record headers (exactly two whitespace tokens: recnum + ncoeff) and
+        // try to parse from each match; the last successful parse wins.
+        let tail_len = ((rec_budget * 3) as u64).min(file_len);
+        let tail_start = file_len.saturating_sub(tail_len);
+        file.seek(SeekFrom::Start(tail_start))
+            .map_err(|source| PericynthionError::Io {
+                path: p.clone(),
+                source,
+            })?;
+        let mut tail_buf = Vec::new();
+        file.read_to_end(&mut tail_buf)
+            .map_err(|source| PericynthionError::Io {
+                path: p.clone(),
+                source,
+            })?;
+        let tail_text = String::from_utf8_lossy(&tail_buf);
+        let end_jd = last_record_end_jd(&tail_text, ncoeff).unwrap_or(first.coeffs[1]);
+
         chunks.push(AsciiChunk {
             path: p,
-            start_jd: first.coeffs[0],
-            end_jd: last[1],
-            first_granule_days: first.coeffs[1] - first.coeffs[0],
+            start_jd,
+            end_jd,
+            first_granule_days,
         });
     }
     chunks.sort_by(|a, b| {

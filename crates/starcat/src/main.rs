@@ -153,8 +153,40 @@ struct Cli {
 enum Command {
     /// Compute tropical ecliptic-of-date apparent geocentric positions.
     Compute(ComputeArgs),
-    /// List the points and bodies starcat can compute (names only; no inputs).
-    Catalogue,
+    /// List stellar catalogue contents: named fixed stars and open clusters.
+    ///
+    /// Use `--bodies` for supported computation bodies, `--points` for
+    /// mathematical points (angles, nodes, Lilith, lots), `--stars` for named
+    /// fixed stars, `--clusters` for open clusters, or `--all` for everything.
+    /// `--verbose` expands the stars listing from the 33 common-name entries to
+    /// all 3,157 named BSC5P entries. At least one of the primary flags is required.
+    /// For body availability (data present?) see `starcat placements`.
+    Catalogue {
+        /// List supported computation bodies (planets, dwarf planets, asteroids,
+        /// centaurs, KBOs, TNOs). Same content as the pre-flag `starcat catalogue`.
+        #[arg(long)]
+        bodies: bool,
+        /// List mathematical points: angles (Asc/Desc/MC/IC/Vx/Ax), lunar nodes,
+        /// Black Moon Lilith, and the eight Hermetic lots.
+        #[arg(long)]
+        points: bool,
+        /// List named fixed stars. Default: 33 common-name stars (NOTABLE).
+        /// With --verbose: all 3,157 named BSC5P entries.
+        #[arg(long)]
+        stars: bool,
+        /// List open clusters used as astrological fixed points
+        /// (Aculeus, Acumen, Capulus).
+        #[arg(long)]
+        clusters: bool,
+        /// Equivalent to --bodies --points --stars --clusters.
+        #[arg(long)]
+        all: bool,
+        /// Expand the stars listing to all 3,157 named BSC5P entries (Yale
+        /// Bright Star Catalogue 5th edition). Default shows only the 33
+        /// common-name stars. No effect on --bodies, --points, or --clusters.
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Fetch SPK ephemerides for a body class from the JPL Horizons API.
     Horizons(HorizonsArgs),
     /// Inspect the local JPL mirror: verify files or list the packaging subset.
@@ -163,8 +195,18 @@ enum Command {
     #[command(hide = true)]
     GenerateCompletion { shell: Option<clap_complete::Shell> },
     /// Print the generated placements catalog as Markdown (feeds docs/placements.md).
+    /// With --verify, also fetches and smoke-tests unsupported catalog bodies,
+    /// printing `name<TAB>note` for each confirmed body (for piping to promote script).
     #[command(hide = true)]
-    Placements,
+    Placements {
+        /// Discover, fetch (unless --dry-run), and verify unsupported catalog bodies.
+        /// Prints confirmed bodies to stdout as `name\tnote`. No markdown output.
+        #[arg(long)]
+        verify: bool,
+        /// With --verify: skip live Horizons fetching; only check files already on disk.
+        #[arg(long, requires = "verify")]
+        dry_run: bool,
+    },
 }
 
 /// Arguments for the `data` subcommand.
@@ -186,6 +228,9 @@ enum DataCmd {
     /// one per line. Paths are printed exactly as supplied (relative or
     /// absolute) — never canonicalized — so CI/CD can gather them directly.
     Prod(ProdArgs),
+    /// Report every catalogued body + the fixed stars: their data file(s),
+    /// source URL, and whether each is cached locally. Read-only; no network.
+    Provenance(ProvenanceArgs),
 }
 
 /// Arguments for `data verify`.
@@ -256,6 +301,22 @@ struct ProdArgs {
     /// listed paths keep whichever form (relative or absolute) was supplied.
     #[arg(long)]
     root: Option<PathBuf>,
+}
+
+/// Arguments for `data provenance`.
+#[derive(Args, Debug)]
+struct ProvenanceArgs {
+    /// JPL mirror root (dir containing `ssd.jpl.nasa.gov/`). Falls back to
+    /// `$STARCAT_JPL_DATA`. If absent, JPL files report "not cached".
+    #[arg(long)]
+    root: Option<PathBuf>,
+    /// Horizons SPK dir. Falls back to `$STARCAT_HORIZONS_DATA`. If absent,
+    /// Horizons files report "not cached".
+    #[arg(long)]
+    horizons: Option<PathBuf>,
+    /// Emit JSON instead of a table.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Scope for `data verify`.
@@ -417,6 +478,13 @@ struct ComputeArgs {
     /// see `starcat catalogue`.
     #[arg(long = "omniscient")]
     omniscient: bool,
+
+    /// Comma-separated fixed star names to include in the chart. Accepts common
+    /// names (Sirius, Algol), Robson/Brady names (Rasalhague, Sadalmelek),
+    /// multi-word concatenated (ZubenElgenubi), HR numbers (936, HR936), or
+    /// BSC5P designations (26Bet Per). See `starcat catalogue --stars`.
+    #[arg(long = "stars", value_delimiter = ',')]
+    stars: Vec<String>,
 }
 
 /// Output format for sexagesimal coordinates.
@@ -617,10 +685,14 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Compute(args) => cmd_compute(args),
-        Command::Catalogue => {
-            print!("{}", pericynthion::placements::supported_list());
-            Ok(())
-        }
+        Command::Catalogue {
+            bodies,
+            points,
+            stars,
+            clusters,
+            all,
+            verbose,
+        } => cmd_catalogue(bodies, points, stars, clusters, all, verbose),
         Command::Horizons(args) => cmd_horizons(&args),
         Command::Data(args) => cmd_data(&args),
         Command::GenerateCompletion { shell } => {
@@ -638,9 +710,17 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Placements => {
-            print!("{}", pericynthion::placements::markdown());
-            Ok(())
+        Command::Placements { verify, dry_run } => {
+            if verify {
+                cmd_placements_verify(dry_run)
+            } else {
+                print!(
+                    "{}{}",
+                    pericynthion::placements::markdown(),
+                    pericynthion::stars::markdown_stats(),
+                );
+                Ok(())
+            }
         }
     }
 }
@@ -662,6 +742,147 @@ fn resolve_observer(lat_s: Option<&str>, lon_s: Option<&str>) -> Result<Option<O
         lon_deg: lon,
         elev_m: 0.0,
     }))
+}
+
+fn cmd_catalogue(
+    bodies: bool,
+    points: bool,
+    stars: bool,
+    clusters: bool,
+    all: bool,
+    verbose: bool,
+) -> Result<()> {
+    if !bodies && !points && !stars && !clusters && !all {
+        anyhow::bail!(
+            "specify at least one of --bodies, --points, --stars, --clusters, or --all\n\
+             See `starcat catalogue --help`. For body availability see `starcat placements`."
+        );
+    }
+
+    let show_bodies = all || bodies;
+    let show_points = all || points;
+    let show_stars = all || stars;
+    let show_clusters = all || clusters;
+
+    if show_bodies {
+        if all {
+            println!("## Bodies");
+            println!();
+        }
+        print!("{}", pericynthion::placements::supported_list());
+    }
+
+    if show_points {
+        if all {
+            println!();
+            println!("## Points");
+            println!();
+        }
+        print_points_catalogue();
+    }
+
+    if show_stars {
+        let named_all: Vec<_> = pericynthion::named_bsc5_entries().collect();
+        if named_all.is_empty() {
+            eprintln!("BSC5 catalog not loaded — run `just fetch bsc5` then rebuild.");
+        } else {
+            if all {
+                println!();
+                println!("## Fixed Stars");
+                println!();
+            }
+            println!("HR\tDesignation\tCommon Name\tVmag");
+            if verbose {
+                for e in &named_all {
+                    let common = pericynthion::stars::NOTABLE
+                        .iter()
+                        .find(|(_, hr)| *hr == e.hr)
+                        .map(|(n, _)| *n)
+                        .unwrap_or("");
+                    let vmag = e
+                        .vmag
+                        .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
+                    println!("{}\t{}\t{}\t{}", e.hr, e.name, common, vmag);
+                }
+            } else {
+                for (common, hr) in pericynthion::stars::NOTABLE {
+                    let (desig, vmag) = match pericynthion::stars::BscEntry::by_hr(*hr) {
+                        Some(e) => {
+                            let vmag = e
+                                .vmag
+                                .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
+                            (e.name, vmag)
+                        }
+                        None => ("", "—".to_string()),
+                    };
+                    println!("{}\t{}\t{}\t{}", hr, desig, common, vmag);
+                }
+            }
+        }
+    }
+
+    if show_clusters {
+        if all {
+            println!();
+            println!("## Clusters");
+            println!();
+        }
+        println!("Name\tObject\tRA (deg)\tDec (deg)");
+        for c in &pericynthion::CLUSTERS {
+            println!(
+                "{}\t{}\t{:.3}\t{:.3}",
+                c.name, c.object, c.ra_deg, c.dec_deg
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn print_points_catalogue() {
+    println!("Group\tName\tNotes");
+    let rows: &[(&str, &str, &str)] = &[
+        (
+            "Angles",
+            "Ascendant (Asc)",
+            "requires observer latitude and longitude",
+        ),
+        ("Angles", "Descendant (Desc)", "Asc + 180°"),
+        ("Angles", "Midheaven (MC)", "requires observer longitude"),
+        ("Angles", "Imum Coeli (IC)", "MC + 180°"),
+        (
+            "Angles",
+            "Vertex (Vx)",
+            "requires observer latitude and longitude",
+        ),
+        ("Angles", "Anti-Vertex (Ax)", "Vx + 180°"),
+        ("Nodes", "Mean North Node", "geocentric, smoothed"),
+        ("Nodes", "Mean South Node", "Mean North Node + 180°"),
+        ("Nodes", "True North Node", "osculating"),
+        ("Nodes", "True South Node", "True North Node + 180°"),
+        (
+            "Lilith",
+            "Mean Lilith",
+            "Black Moon Lilith, mean lunar apogee",
+        ),
+        ("Lilith", "Mean Priapus", "Mean Lilith + 180°"),
+        ("Lilith", "True Lilith", "osculating lunar apogee"),
+        (
+            "Lots",
+            "Fortune",
+            "always computed; formula inverts by sect",
+        ),
+        ("Lots", "Spirit", "always computed; formula inverts by sect"),
+        ("Lots", "Exaltation", "always computed"),
+        ("Lots", "Eros", "requires Venus"),
+        ("Lots", "Necessity", "requires Mercury"),
+        ("Lots", "Courage", "requires Mars"),
+        ("Lots", "Victory", "requires Jupiter"),
+        ("Lots", "Nemesis", "requires Saturn"),
+    ];
+    for (group, name, notes) in rows {
+        println!("{group}\t{name}\t{notes}");
+    }
 }
 
 // Called once per process from `main`; taking ComputeArgs by value lets the
@@ -798,8 +1019,27 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         houses: house_systems,
         asteroids: asteroid_naif_ids,
     };
-    let computed = pericynthion::chart::compute_with_spk(&ephem, &spk_refs, &request)
-        .with_context(|| "chart computation failed")?;
+    // Resolve --stars names; warn and skip unknowns; silently skip empty/whitespace entries.
+    let resolved_stars: Vec<pericynthion::ResolvedStar> = args
+        .stars
+        .iter()
+        .filter_map(|name| {
+            if name.trim().is_empty() {
+                return None;
+            }
+            match pericynthion::resolve_star(name) {
+                Some(rs) => Some(rs),
+                None => {
+                    eprintln!("warning: unknown star {name:?} — skipped");
+                    None
+                }
+            }
+        })
+        .collect();
+
+    let computed =
+        pericynthion::chart::compute_with_spk(&ephem, &spk_refs, &request, &resolved_stars)
+            .with_context(|| "chart computation failed")?;
 
     // === Output ===
     if is_jzod {
@@ -941,6 +1181,7 @@ fn cmd_data(args: &DataArgs) -> Result<()> {
     match &args.cmd {
         DataCmd::Verify(v) => cmd_data_verify(v),
         DataCmd::Prod(p) => cmd_data_prod(p),
+        DataCmd::Provenance(p) => cmd_data_provenance(p),
     }
 }
 
@@ -952,6 +1193,26 @@ fn cmd_data(args: &DataArgs) -> Result<()> {
 /// actually present across the full oracle under the JPL path: absent files are
 /// skipped (not a failure), but any present file that fails its size/hash check
 /// is. Either path exits non-zero when a verified file fails.
+/// Format a path for b3sum-style verify output.
+///
+/// Normalises double slashes (from a trailing-slash env var) and strips the
+/// cwd prefix so the path is relative when the file lives below the caller.
+fn display_verify_path(full: &std::path::Path) -> String {
+    let cwd = std::env::current_dir().ok();
+    let rel = cwd
+        .as_deref()
+        .and_then(|d| full.strip_prefix(d).ok())
+        .map(|p| p.to_string_lossy().into_owned());
+    let s = rel.unwrap_or_else(|| full.to_string_lossy().into_owned());
+    // Collapse any double-slashes introduced by a trailing-slash env var.
+    let mut out = s.replace("//", "/");
+    // Repeat in case of triple-slash edge case.
+    while out.contains("//") {
+        out = out.replace("//", "/");
+    }
+    out
+}
+
 fn cmd_data_verify(args: &VerifyArgs) -> Result<()> {
     let root = resolve_mirror_root(args.root.as_deref())?;
     match args.scope {
@@ -990,13 +1251,20 @@ fn verify_required_subset(root: &std::path::Path) -> Result<()> {
         .iter()
         .filter(|r| matches!(r.status, oracle::VerifyStatus::Ok))
         .count();
-    println!("{ok}/{} supported data files verified OK", reports.len());
-    for r in reports
-        .iter()
-        .filter(|r| !matches!(r.status, oracle::VerifyStatus::Ok))
-    {
-        eprintln!("FAIL {} — {:?}", r.path, r.status);
+    for (entry, report) in entries.iter().zip(&reports) {
+        let full = root.join(&entry.path);
+        if matches!(report.status, oracle::VerifyStatus::Ok) {
+            println!("{}  {}", entry.blake3_hex, display_verify_path(&full));
+        } else {
+            eprintln!(
+                "FAIL {}  {} — {:?}",
+                entry.blake3_hex,
+                display_verify_path(&full),
+                report.status
+            );
+        }
     }
+    println!("{ok}/{} supported data files verified OK", reports.len());
     if required_subset_failed(&reports) {
         std::process::exit(1);
     }
@@ -1012,37 +1280,201 @@ fn verify_present_integrity(root: &std::path::Path) -> Result<()> {
         .iter()
         .map(|e| oracle::verify_entry(root, e))
         .collect();
-    let present: Vec<&oracle::VerifyReport> = reports
+    let present: Vec<(&oracle::OracleEntry, &oracle::VerifyReport)> = entries
         .iter()
-        .filter(|r| !matches!(r.status, oracle::VerifyStatus::Missing))
+        .zip(&reports)
+        .filter(|(_, r)| !matches!(r.status, oracle::VerifyStatus::Missing))
         .collect();
     let ok = present
         .iter()
-        .filter(|r| matches!(r.status, oracle::VerifyStatus::Ok))
+        .filter(|(_, r)| matches!(r.status, oracle::VerifyStatus::Ok))
         .count();
     let absent = reports.len() - present.len();
+    for (entry, report) in &present {
+        let full = root.join(&entry.path);
+        if matches!(report.status, oracle::VerifyStatus::Ok) {
+            println!("{}  {}", entry.blake3_hex, display_verify_path(&full));
+        } else {
+            eprintln!(
+                "FAIL {}  {} — {:?}",
+                entry.blake3_hex,
+                display_verify_path(&full),
+                report.status
+            );
+        }
+    }
     println!(
         "{ok}/{} present files verified OK ({absent} absent, skipped)",
         present.len()
     );
-    for r in present
-        .iter()
-        .filter(|r| !matches!(r.status, oracle::VerifyStatus::Ok))
-    {
-        eprintln!("FAIL {} — {:?}", r.path, r.status);
-    }
     if present_integrity_failed(&reports) {
         std::process::exit(1);
     }
     Ok(())
 }
 
-/// List the supported-placements data files, one per line, paths as supplied.
-fn cmd_data_prod(args: &ProdArgs) -> Result<()> {
-    let root = resolve_mirror_root(args.root.as_deref())?;
-    for entry in oracle::production_entries() {
-        println!("{}", root.join(&entry.path).display());
+/// Build the production file list at runtime: the JPL subset (DE441 + n16) plus
+/// `sb441-n373.bsp`, plus each unbundled minor body's Horizons `<naif>.bsp`.
+/// JPL paths join the mirror root; Horizons paths join the Horizons dir.
+fn prod_paths(jpl_root: &std::path::Path, horizons_dir: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    // DE441 binary + sb441-n16 (existing supported subset).
+    for e in oracle::production_entries() {
+        out.push(display_verify_path(&jpl_root.join(&e.path)));
     }
+    // sb441-n373.bsp — pulled from the full JPL manifest by name.
+    for e in oracle::entries() {
+        if e.path.ends_with("sb441-n373.bsp") {
+            out.push(display_verify_path(&jpl_root.join(&e.path)));
+        }
+    }
+    // Unbundled minor bodies → Horizons <naif>.bsp under the Horizons dir.
+    for (_name, naif) in pericynthion::production_horizons_targets() {
+        out.push(display_verify_path(
+            &horizons_dir.join(format!("{naif}.bsp")),
+        ));
+    }
+    out
+}
+
+/// List the data files needed to package starcat's supported placements,
+/// one per line, paths as supplied.
+fn cmd_data_prod(args: &ProdArgs) -> Result<()> {
+    let jpl_root = resolve_mirror_root(args.root.as_deref())?;
+    // Horizons dir is optional for prod listing; fall back to a bare label so
+    // the centaur/KBO/TNO files still appear even if the env var is unset.
+    let horizons_dir =
+        resolve_horizons_dir(None).unwrap_or_else(|_| PathBuf::from("$STARCAT_HORIZONS_DATA"));
+    for line in prod_paths(&jpl_root, &horizons_dir) {
+        println!("{line}");
+    }
+    Ok(())
+}
+
+/// True when a provider's file exists locally. JPL files resolve under the
+/// mirror root; Horizons files under the Horizons dir; CDS (`catalog.gz`)
+/// resolves at the workspace root (cwd) — its compiled-in status is reported
+/// separately. A `None` root means "not configured" → not cached.
+fn provider_cached(
+    p: &pericynthion::Provider,
+    jpl_root: Option<&std::path::Path>,
+    horizons_dir: Option<&std::path::Path>,
+) -> bool {
+    use pericynthion::RootKind;
+    match p.root_kind {
+        RootKind::JplMirror => jpl_root
+            .map(|r| r.join(&p.rel_path).is_file())
+            .unwrap_or(false),
+        RootKind::HorizonsDir => horizons_dir
+            .map(|d| d.join(&p.rel_path).is_file())
+            .unwrap_or(false),
+        RootKind::CdsBuild => std::path::Path::new(&p.rel_path).is_file(),
+    }
+}
+
+/// `data provenance` — read-only report. Never exits non-zero.
+fn cmd_data_provenance(args: &ProvenanceArgs) -> Result<()> {
+    use pericynthion::placements::{CATALOG, Category};
+    // Roots are optional here: resolve from flags/env, but missing is fine.
+    let jpl_root = resolve_mirror_root(args.root.as_deref()).ok();
+    let horizons_dir = resolve_horizons_dir(args.horizons.as_deref()).ok();
+    let jr = jpl_root.as_deref();
+    let hr = horizons_dir.as_deref();
+
+    if args.json {
+        return print_provenance_json(jr, hr);
+    }
+
+    for p in CATALOG
+        .iter()
+        .filter(|p| p.category != Category::MathematicalPoint)
+    {
+        let provs = pericynthion::providers_for_body(p.name);
+        if provs.is_empty() {
+            continue;
+        }
+        println!("{}  [{}]", p.name, p.category.label());
+        for pr in &provs {
+            let cached = if provider_cached(pr, jr, hr) {
+                "cached"
+            } else {
+                "absent"
+            };
+            println!(
+                "    {:?}  {}  {}  ({cached})",
+                pr.kind, pr.rel_path, pr.source_url
+            );
+        }
+    }
+
+    // Fixed stars: print BOTH facts.
+    println!("Fixed stars (BSC5P)  [Fixed stars]");
+    let compiled = !pericynthion::stars::BSC5_CATALOG.is_empty();
+    println!(
+        "    compiled into binary: {} ({} entries)",
+        if compiled { "yes" } else { "no" },
+        pericynthion::stars::BSC5_CATALOG.len()
+    );
+    for pr in pericynthion::fixed_star_providers() {
+        let cached = if provider_cached(&pr, jr, hr) {
+            "cached"
+        } else {
+            "absent"
+        };
+        println!("    source: {}  ({cached})", pr.source_url);
+    }
+    Ok(())
+}
+
+/// JSON form of the provenance report.
+fn print_provenance_json(
+    jpl_root: Option<&std::path::Path>,
+    horizons_dir: Option<&std::path::Path>,
+) -> Result<()> {
+    use pericynthion::placements::{CATALOG, Category};
+    let mut bodies = Vec::new();
+    for p in CATALOG
+        .iter()
+        .filter(|p| p.category != Category::MathematicalPoint)
+    {
+        let provs: Vec<serde_json::Value> = pericynthion::providers_for_body(p.name)
+            .iter()
+            .map(|pr| {
+                serde_json::json!({
+                    "kind": format!("{:?}", pr.kind),
+                    "rel_path": pr.rel_path,
+                    "source_url": pr.source_url,
+                    "coverage": pr.coverage,
+                    "cached": provider_cached(pr, jpl_root, horizons_dir),
+                })
+            })
+            .collect();
+        if provs.is_empty() {
+            continue;
+        }
+        bodies.push(serde_json::json!({
+            "name": p.name, "category": p.category.label(), "providers": provs,
+        }));
+    }
+    let stars: Vec<serde_json::Value> = pericynthion::fixed_star_providers()
+        .iter()
+        .map(|pr| {
+            serde_json::json!({
+                "source_url": pr.source_url,
+                "coverage": pr.coverage,
+                "cached": provider_cached(pr, jpl_root, horizons_dir),
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "bodies": bodies,
+        "fixed_stars": {
+            "compiled_into_binary": !pericynthion::stars::BSC5_CATALOG.is_empty(),
+            "compiled_entries": pericynthion::stars::BSC5_CATALOG.len(),
+            "sources": stars,
+        },
+    });
+    println!("{}", serde_json::to_string_pretty(&doc)?);
     Ok(())
 }
 
@@ -1113,6 +1545,97 @@ fn cmd_horizons(args: &HorizonsArgs) -> Result<()> {
     })?;
     if failures > 0 {
         bail!("{failures} body/bodies failed to fetch");
+    }
+    Ok(())
+}
+
+/// Verify (and optionally fetch) every unsupported catalog body, printing
+/// `name\tnote` to stdout for each one confirmed computable.
+fn cmd_placements_verify(dry_run: bool) -> Result<()> {
+    use pericynthion::horizons::{self, DEFAULT_START, DEFAULT_STOP, THROTTLE};
+    use pericynthion::placements::CATALOG;
+    use pericynthion::spk::{SpkEphemeris, locate_n373_bsp};
+
+    // --- Locate n373 from $STARCAT_JPL_DATA ---
+    let n373: Option<SpkEphemeris> = std::env::var("STARCAT_JPL_DATA")
+        .ok()
+        .and_then(|v| locate_n373_bsp(std::path::Path::new(&v)))
+        .and_then(|p| SpkEphemeris::open(&p).ok());
+
+    if n373.is_some() {
+        eprintln!("sb441-n373.bsp found — checking KBO perturbers");
+    } else {
+        eprintln!("sb441-n373.bsp not found (STARCAT_JPL_DATA unset or mirror absent)");
+    }
+
+    // --- Horizons output dir (optional) ---
+    let horizons_dir: Option<PathBuf> = std::env::var("STARCAT_HORIZONS_DATA")
+        .ok()
+        .map(PathBuf::from);
+
+    for body in CATALOG
+        .iter()
+        .filter(|p| !p.supported && p.mpc_number.is_some())
+    {
+        let sb441_id = body.sb441_naif_id().unwrap();
+        let horizons_id = body.horizons_naif_id().unwrap();
+
+        // (a) try n373 first
+        if let Some(ref spk) = n373 {
+            if spk.state(sb441_id, 0.0).is_ok() {
+                println!("{}\tsmall-body SPK (sb441-n373.bsp)", body.name);
+                continue;
+            }
+        }
+
+        // (b) try existing Horizons SPK on disk
+        if let Some(ref dir) = horizons_dir {
+            let bsp_path = dir.join(format!("{horizons_id}.bsp"));
+            if bsp_path.is_file() {
+                match SpkEphemeris::open(&bsp_path) {
+                    Ok(spk) => {
+                        if spk.state(horizons_id, 0.0).is_ok() {
+                            println!("{}\tHorizons SPK; fetch with `starcat horizons`", body.name);
+                            continue;
+                        }
+                        eprintln!("  skip {}: .bsp on disk but state() failed", body.name);
+                    }
+                    Err(e) => {
+                        eprintln!("  skip {}: .bsp on disk but open failed: {e}", body.name);
+                    }
+                }
+                continue;
+            }
+        }
+
+        // (c) live fetch (skipped in dry_run or when no output dir)
+        if !dry_run {
+            if let Some(ref dir) = horizons_dir {
+                let command = body.horizons_command().unwrap();
+                eprint!("  fetching {} from Horizons ... ", body.name);
+                std::thread::sleep(THROTTLE);
+                match horizons::fetch_spk(&command, DEFAULT_START, DEFAULT_STOP) {
+                    Ok(bytes) => {
+                        let bsp_path = dir.join(format!("{horizons_id}.bsp"));
+                        if let Err(e) = std::fs::write(&bsp_path, &bytes) {
+                            eprintln!("write failed: {e}");
+                            continue;
+                        }
+                        match SpkEphemeris::open(&bsp_path) {
+                            Ok(spk) if spk.state(horizons_id, 0.0).is_ok() => {
+                                eprintln!("ok ({} bytes)", bytes.len());
+                                println!(
+                                    "{}\tHorizons SPK; fetch with `starcat horizons`",
+                                    body.name
+                                );
+                            }
+                            _ => eprintln!("fetched but state() failed"),
+                        }
+                    }
+                    Err(e) => eprintln!("fetch failed: {e}"),
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -1209,6 +1732,20 @@ fn print_text(
             if let Some(lon_deg) = lon {
                 println!("{:<8} {}", label, format_zodiac_lon(lon_deg, fmt));
             }
+        }
+    }
+
+    // Fixed stars — only emitted when --stars was supplied.
+    if !computed.stars.is_empty() {
+        println!();
+        println!("{:<16} {:>lon_w$}", "Star", "Longitude", lon_w = lon_w);
+        println!("{}", "-".repeat(16 + 1 + lon_w));
+        for star in &computed.stars {
+            println!(
+                "{:<16} {}",
+                star.name,
+                format_zodiac_lon(star.position.longitude_deg, fmt)
+            );
         }
     }
 
@@ -2109,6 +2646,100 @@ mod tests {
         }
         // The old value forms (`ls`, `prod`, `bodies`) are no longer accepted.
         assert!(Cli::try_parse_from(["starcat", "compute", "--omniscient", "ls"]).is_err());
+    }
+
+    #[test]
+    fn catalogue_stars_flag_parses() {
+        let args =
+            Cli::try_parse_from(["starcat", "catalogue", "--stars"]).expect("--stars should parse");
+        assert!(matches!(args.command, Command::Catalogue { stars, .. } if stars));
+    }
+
+    #[test]
+    fn catalogue_all_flag_parses() {
+        let args =
+            Cli::try_parse_from(["starcat", "catalogue", "--all"]).expect("--all should parse");
+        assert!(matches!(args.command, Command::Catalogue { all, .. } if all));
+    }
+
+    #[test]
+    fn catalogue_no_flags_is_valid_parse() {
+        // No flags → parses OK (runtime error is handled in cmd_catalogue, not clap)
+        Cli::try_parse_from(["starcat", "catalogue"])
+            .expect("catalogue with no flags should parse");
+    }
+
+    #[test]
+    fn catalogue_bodies_flag_parses() {
+        let args = Cli::try_parse_from(["starcat", "catalogue", "--bodies"])
+            .expect("--bodies should parse");
+        assert!(matches!(args.command, Command::Catalogue { bodies, .. } if bodies));
+    }
+
+    #[test]
+    fn catalogue_points_flag_parses() {
+        let args = Cli::try_parse_from(["starcat", "catalogue", "--points"])
+            .expect("--points should parse");
+        assert!(matches!(args.command, Command::Catalogue { points, .. } if points));
+    }
+
+    #[test]
+    fn catalogue_verbose_flag_parses() {
+        let args = Cli::try_parse_from(["starcat", "catalogue", "--stars", "--verbose"])
+            .expect("--stars --verbose should parse");
+        assert!(
+            matches!(args.command, Command::Catalogue { stars, verbose, .. } if stars && verbose)
+        );
+    }
+
+    #[test]
+    fn compute_stars_flag_parses() {
+        let args = Cli::try_parse_from([
+            "starcat",
+            "compute",
+            "--date",
+            "2000-01-01",
+            "--time",
+            "12:00",
+            "--tz",
+            "+00:00",
+            "--stars",
+            "Sirius,Algol",
+        ])
+        .expect("--stars should parse");
+        if let Command::Compute(a) = args.command {
+            assert_eq!(a.stars, vec!["Sirius", "Algol"]);
+        } else {
+            panic!("expected Compute");
+        }
+    }
+
+    #[test]
+    fn provider_cached_resolves_against_roots() {
+        use pericynthion::providers_for_body;
+        use pericynthion::{Provider, RootKind};
+        let tmp = tempdir::TempDir::new("prov-cache").unwrap();
+        let hz = tmp.path().join("hz");
+        std::fs::create_dir_all(&hz).unwrap();
+        // Chiron Horizons file present:
+        std::fs::write(hz.join("20002060.bsp"), b"x").unwrap();
+        let prov: Provider = providers_for_body("Chiron").pop().unwrap();
+        assert_eq!(prov.root_kind, RootKind::HorizonsDir);
+        assert!(super::provider_cached(&prov, None, Some(hz.as_path())));
+        // Absent dir -> not cached:
+        assert!(!super::provider_cached(&prov, None, Some(tmp.path())));
+    }
+
+    #[test]
+    fn prod_paths_include_n373_and_horizons_bodies() {
+        let jpl = std::path::Path::new("/m");
+        let hz = std::path::Path::new("/hz");
+        let paths = super::prod_paths(jpl, hz);
+        assert!(paths.iter().any(|p| p.ends_with("Linux/de441/header.441")));
+        assert!(paths.iter().any(|p| p.ends_with("sb441-n16.bsp")));
+        assert!(paths.iter().any(|p| p.ends_with("sb441-n373.bsp")));
+        // Chiron's Horizons SPK under the horizons dir:
+        assert!(paths.iter().any(|p| p.ends_with("20002060.bsp")));
     }
 
     #[test]

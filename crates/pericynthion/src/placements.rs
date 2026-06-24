@@ -63,7 +63,10 @@ pub struct Placement {
     pub name: &'static str,
     /// Broad classification.
     pub category: Category,
-    /// Whether starcat can currently compute this placement.
+    /// Whether starcat can compute this placement. For bodies whose `note`
+    /// references a data source (`sb441-n373.bsp`, `Horizons SPK`), `true`
+    /// presumes that file has been fetched or the network fetch has been
+    /// performed; see the `note` field for specifics.
     pub supported: bool,
     /// Minor Planet Center number, for minor bodies that have one (asteroids,
     /// centaurs, KBOs, TNOs, and the minor-planet dwarf planets). `None` for
@@ -174,23 +177,23 @@ pub const CATALOG: &[Placement] = &[
     pm(
         "Eris",
         Category::DwarfPlanet,
-        false,
+        true,
         136_199,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     pm(
         "Haumea",
         Category::DwarfPlanet,
-        false,
+        true,
         136_108,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     pm(
         "Makemake",
         Category::DwarfPlanet,
-        false,
+        true,
         136_472,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     // — Asteroids —
     pm(
@@ -225,74 +228,88 @@ pub const CATALOG: &[Placement] = &[
     pm(
         "Chiron",
         Category::Centaur,
-        false,
+        true,
         2060,
-        "no ephemeris shipped",
+        "Horizons SPK; fetch with `starcat horizons`",
     ),
     pm(
         "Pholus",
         Category::Centaur,
-        false,
+        true,
         5145,
-        "no ephemeris shipped",
+        "Horizons SPK; fetch with `starcat horizons`",
     ),
     pm(
         "Nessus",
         Category::Centaur,
-        false,
+        true,
         7066,
-        "no ephemeris shipped",
+        "Horizons SPK; fetch with `starcat horizons`",
     ),
     pm(
         "Chariklo",
         Category::Centaur,
-        false,
+        true,
         10_199,
-        "no ephemeris shipped",
+        "Horizons SPK; fetch with `starcat horizons`",
+    ),
+    pm(
+        "Asbolus",
+        Category::Centaur,
+        true,
+        8_405,
+        "Horizons SPK; fetch with `starcat horizons`",
     ),
     // — Kuiper-belt objects —
     pm(
         "Quaoar",
         Category::Kbo,
-        false,
+        true,
         50_000,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     pm(
         "Orcus",
         Category::Kbo,
-        false,
+        true,
         90_482,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     pm(
         "Ixion",
         Category::Kbo,
-        false,
+        true,
         28_978,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     pm(
         "Varuna",
         Category::Kbo,
-        false,
+        true,
         20_000,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
+    ),
+    pm(
+        "Albion",
+        Category::Kbo,
+        true,
+        15_760,
+        "Horizons SPK; fetch with `starcat horizons`",
     ),
     // — Trans-Neptunian objects —
     pm(
         "Sedna",
         Category::Tno,
-        false,
+        true,
         90_377,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     pm(
         "Gonggong",
         Category::Tno,
-        false,
+        true,
         225_088,
-        "no ephemeris shipped",
+        "small-body SPK (sb441-n373.bsp)",
     ),
     // — Mathematical points (angles) —
     p(
@@ -463,7 +480,11 @@ pub fn markdown() -> String {
         "Points and bodies starcat can compute, and the wider catalog it does not\n\
          yet cover. Categories follow the latest IAU designations. Generated from\n\
          `pericynthion::placements::CATALOG` — do not edit by hand; run\n\
-         `just placements` to regenerate.\n\n",
+         `just placements` to regenerate.\n\n\
+         **Supported column:** `yes` means starcat can compute the placement given\n\
+         the right data. Bodies whose Notes column references a data source\n\
+         (`sb441-n373.bsp`, `Horizons SPK`) require that file to be present or\n\
+         the network fetch to have been performed before the computation succeeds.\n\n",
     );
     for category in Category::ORDER {
         if !CATALOG.iter().any(|p| p.category == *category) {
@@ -517,10 +538,15 @@ mod tests {
         assert!(find("Ceres").unwrap().supported);
         assert!(find("Ascendant").unwrap().supported);
         assert!(find("Lot of Fortune").unwrap().supported);
-        // Not yet supported.
-        assert!(!find("Chiron").unwrap().supported);
+        // n373 KBO/TNO perturbers now supported.
+        assert!(find("Eris").unwrap().supported);
+        assert!(find("Gonggong").unwrap().supported);
+        // Centaurs now supported via Horizons SPK.
+        assert!(find("Chiron").unwrap().supported);
         assert_eq!(find("Chiron").unwrap().category, Category::Centaur);
-        assert!(!find("Eris").unwrap().supported);
+        assert!(find("Pholus").unwrap().supported);
+        assert!(find("Nessus").unwrap().supported);
+        assert!(find("Chariklo").unwrap().supported);
     }
 
     #[test]
@@ -610,7 +636,7 @@ mod tests {
         assert!(md.contains("## Centaurs\n"));
         // A supported row and an unsupported row.
         assert!(md.contains("| Sun | yes |"));
-        assert!(md.contains("| Chiron | no |"));
+        assert!(md.contains("| Chiron | yes |"));
         // Luminaries section precedes Centaurs section.
         assert!(md.find("## Luminaries").unwrap() < md.find("## Centaurs").unwrap());
     }
@@ -622,9 +648,14 @@ mod tests {
         assert!(list.contains("Ascendant\n"));
         assert!(list.contains("Pluto\n"));
         assert!(list.ends_with('\n'));
-        // Unsupported names absent.
-        assert!(!list.contains("Chiron"));
-        assert!(!list.contains("Eris"));
+        // n373 bodies now in the list.
+        assert!(list.contains("Eris\n"));
+        assert!(list.contains("Gonggong\n"));
+        // Centaurs with Horizons SPK now in the list.
+        assert!(list.contains("Chiron\n"));
+        assert!(list.contains("Pholus\n"));
+        assert!(list.contains("Nessus\n"));
+        assert!(list.contains("Chariklo\n"));
         // Line count equals supported count.
         assert_eq!(list.lines().count(), supported().count());
     }

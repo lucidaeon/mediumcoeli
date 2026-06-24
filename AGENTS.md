@@ -29,6 +29,8 @@ Documented: Something is considered documented when the what, why and and how ha
 
 Done: is defined as written, tested, and documented. 
 
+In Pericynthion's catalogue: Pericynthion knows about a celestial body or object. This holds regardless of whether the codebase has constants or metadata wired up for it, and regardless of whether the required ephemeris data is present to compute its position in a chart. We know where it is, or know **how** to know where it is.
+
 # Skills
 
 Always use the /astrologer skill or integrated [Astrologer skill](./skills/astrologer/SKILL.md). 
@@ -103,8 +105,8 @@ cargo test --release -p astrogram rsc_parses_single_entry -- --nocapture
 | Variable | Required by |
 |---|---|
 | `STARCAT_JPL_DATA` | `pericynthion` + `starcat` tests — path to DE441 binary dir; tests skip cleanly if unset |
-| `astro_specimens` | blackmoon/astrogram specimen tests — path to `sfcht/`, `zdb/`, `adb/` subdirs; tests skip cleanly if unset |
-| `astro_research` | reference chart docs (`ref_*.md`); acceptance tests skip cleanly if unset |
+| `ASTRO_SPECIMENS` | blackmoon/astrogram specimen tests — path to `sfcht/`, `zdb/`, `adb/` subdirs; tests skip cleanly if unset |
+| `ASTRO_RESEARCH` | reference chart docs (`ref_*.md`); acceptance tests skip cleanly if unset |
 
 Credentials for web targets are read from env vars matching the slug (`ASTROTHEOROS_USER`, `ASTROTHEOROS_PASS`, `ASTROTHEOROS_TOKEN`, `ASTROCOM_TOKEN`, `ASTROCOM_USER`, `ASTROCOM_PASS`, `LUNA_TOKEN`).
 

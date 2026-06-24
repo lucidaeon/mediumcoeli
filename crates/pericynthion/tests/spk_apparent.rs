@@ -220,7 +220,7 @@ fn compute_with_spk_populates_asteroids() {
     };
     let ephem = Ephemeris::new(&file, &header).expect("build Ephemeris");
     let req = base_request(vec![2_000_001, 2_000_004]);
-    let chart = compute_with_spk(&ephem, &[&spk], &req).expect("compute_with_spk");
+    let chart = compute_with_spk(&ephem, &[&spk], &req, &[]).expect("compute_with_spk");
 
     assert_eq!(chart.asteroids.len(), 2, "expected Ceres + Vesta");
     let ceres = chart
@@ -244,7 +244,7 @@ fn compute_without_spk_leaves_asteroids_empty() {
     };
     let ephem = Ephemeris::new(&file, &header).expect("build Ephemeris");
     let req = base_request(vec![2_000_001, 2_000_004]);
-    let chart = pericynthion::chart::compute(&ephem, &req).expect("compute");
+    let chart = pericynthion::chart::compute(&ephem, &req, &[]).expect("compute");
     assert!(chart.asteroids.is_empty(), "plain compute must skip SPK");
 }
 
@@ -259,7 +259,7 @@ fn asteroid_daily_speed_is_nonzero() {
     };
     let ephem = Ephemeris::new(&file, &header).expect("build Ephemeris");
     let req = base_request(vec![2_000_001]);
-    let chart = compute_with_spk(&ephem, &[&spk], &req).expect("compute_with_spk");
+    let chart = compute_with_spk(&ephem, &[&spk], &req, &[]).expect("compute_with_spk");
     let ceres = chart
         .asteroids
         .iter()
@@ -311,7 +311,7 @@ fn ceres_retrograde_2023_02_25() {
     };
     let ephem = Ephemeris::new(&file, &header).expect("build Ephemeris");
     let req = request_2023_02_25();
-    let chart = compute_with_spk(&ephem, &[&spk], &req).expect("compute_with_spk");
+    let chart = compute_with_spk(&ephem, &[&spk], &req, &[]).expect("compute_with_spk");
     let ceres = chart
         .asteroids
         .iter()
@@ -346,7 +346,7 @@ fn compute_with_multiple_spks_names_from_catalog() {
     // The multi-element path is tested implicitly: the resolver iterates the
     // slice to find whichever SPK covers the requested id.
     let req = base_request(vec![2_000_001]);
-    let chart = compute_with_spk(&ephem, &[&spk], &req).unwrap();
+    let chart = compute_with_spk(&ephem, &[&spk], &req, &[]).unwrap();
     let ceres = chart
         .asteroids
         .iter()

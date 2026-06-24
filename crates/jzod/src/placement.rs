@@ -38,8 +38,10 @@ pub enum BodyId {
     Pholus,
     Nessus,
     Chariklo,
+    Asbolus,
     Ixion,
     Varuna,
+    Albion,
 }
 
 /// Chart angle identifiers.

@@ -15,7 +15,7 @@ A layered numerical pipeline. Each module is independently testable and can be c
 3. **`body`** — `Body` enum hiding DE441's internal-ordering quirks (Earth-Moon barycenter triangulation, Moon-relative-to-Earth coefficients).
 4. **`time`** — Julian/Gregorian ↔ JD, the SMH 2016 cubic-spline ΔT model −720..1657 + observational table 1657..2025 + parabolic extrapolation outside, plus LMT/fixed-offset zone conversion.
 5. **`coords`** — light-time iteration, annual aberration, IAU 2006 precession, IAU 2000B nutation (77 luni-solar terms), mean + true obliquity, sidereal time, the three axis modules (`acds`, `mcic`, `vxax`), lunar nodes (mean + true), Black Moon Lilith + Priapus (mean + true), WGS84 topocentric parallax, and the geo/topo/helio facades in `coords::apparent`.
-6. **`houses`** — Whole Sign, Equal-from-Asc, Placidus, Regiomontanus, Porphyry.
+6. **`houses`** — Whole Sign, Equal-from-Asc, Placidus, Regiomontanus, Porphyry, Alcabitius, Morinus.
 7. **`lots`** — Hellenistic sect + the eight Hermetic lots.
 8. **`geo`** — ISO 6709 DD/DMS/DDM coordinate parsing.
 
@@ -32,3 +32,14 @@ The single call most callers want: `coords::apparent::apparent_ecliptic_position
 **Oracles drive correctness.** Integration tests in `tests/acceptance_horizons.rs` compare results against NASA JPL HORIZONS fixtures at 0.5″ for planets and 5″ for the Moon (tightened from 20″ after the IAU 2000B upgrade). Curated reference charts cross-check the angles, lots, and house cusps for anchor charts spanning from antiquity through the modern era.
 
 **Naming convention.** Every named chart point uses two-letter `UPPERlower` display labels and lowercase struct fields; Ascendant uses `ac` to dodge the Rust keyword `as`. Axis modules concatenate both endpoint codes (`acds`, `mcic`, `vxax`). For computation modes: `mean ≡ average`, `true ≡ apparent ≡ osculating`, `natural ≡ interpolated`.
+
+### Data manifest & provenance
+
+`src/jpl/oracle_data.rs` (generated from `scripts/oracle_manifest.tsv` by
+`scripts/gen_oracle.py`) is the monolithic manifest of known data files. Each
+directory carries a `SourceKind` (`JplMirror`, `CdsCatalog`) and each file an
+optional `provides` list (the catalogued bodies it backs, or `@fixed-stars`).
+The `provenance` module joins this with `placements::CATALOG` — and synthesizes
+per-body Horizons SPK providers — to answer "what data backs this body, where
+from, is it cached?" The integrity (`data verify`) path reads only `JplMirror`
+rows, so its behavior is unchanged.

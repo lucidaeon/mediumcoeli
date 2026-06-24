@@ -59,7 +59,7 @@ fn compute_lightning_strike_leo_asc_frame() {
         asteroids: Vec::new(),
     };
 
-    let chart = compute(&ephem, &request).expect("compute chart");
+    let chart = compute(&ephem, &request, &[]).expect("compute chart");
 
     // 10 classical bodies in geocentric mode.
     assert_eq!(
@@ -150,7 +150,7 @@ fn nodes_and_lilith_present_without_latitude() {
         asteroids: Vec::new(),
     };
 
-    let chart = compute(&ephem, &request).expect("compute chart");
+    let chart = compute(&ephem, &request, &[]).expect("compute chart");
 
     // No latitude → angles exist (MC/IC from longitude) but no Ascendant.
     assert!(

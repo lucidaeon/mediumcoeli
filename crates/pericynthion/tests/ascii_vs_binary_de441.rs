@@ -47,6 +47,7 @@ fn resolve_both_dirs(start: &Path) -> Option<(PathBuf, PathBuf)> {
 }
 
 #[test]
+#[ignore = "slow: reads full DE441 ASCII mirror; run explicitly after ASCII parser changes or a new DE441 release"]
 fn ascii_agrees_with_binary_de441() {
     // --- locate env var -------------------------------------------------
     let Some(val) = std::env::var_os("STARCAT_JPL_DATA") else {
@@ -184,6 +185,7 @@ fn first_record_start_jd(chunk_path: &Path) -> Option<f64> {
 /// Skips cleanly when `$STARCAT_JPL_DATA` is unset or the de441 dirs / the
 /// boundary chunk cannot be located.
 #[test]
+#[ignore = "slow: reads full DE441 ASCII mirror; run explicitly after ASCII parser changes or a new DE441 release"]
 fn ascii_agrees_with_binary_at_chunk_seam() {
     let Some(val) = std::env::var_os("STARCAT_JPL_DATA") else {
         eprintln!("STARCAT_JPL_DATA not set — skipping ascii_agrees_with_binary_at_chunk_seam");

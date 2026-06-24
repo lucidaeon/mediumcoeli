@@ -1,7 +1,7 @@
 [package]
 name = "wristband"
-version = "0.0.1"
-description = "Consent-gated, domain-scoped reader for the user's own browser session cookies"
+version = "0.0.2"
+description = "Ins and out privileges: Consent-gated, domain-scoped reader for the user's own browser session cookies"
 categories = ["authentication", "cryptography", "os"]
 edition.workspace = true
 rust-version.workspace = true

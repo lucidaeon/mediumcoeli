@@ -109,12 +109,23 @@ pub mod jzod;
 pub mod lots;
 pub mod manifest;
 pub mod placements;
+pub mod provenance;
 pub mod spk;
+pub mod stars;
 pub mod time;
 
+pub use provenance::{
+    HORIZONS_API_URL, Provider, RootKind, fixed_star_providers, production_horizons_targets,
+    providers_for_body,
+};
+
+pub use stars::{
+    CLUSTERS, ResolvedStar, StarCluster, named_bsc5_entries, normalize_star_name, resolve_star,
+};
+
 pub use chart::{
-    Angles, ChartRequest, ComputedBody, ComputedChart, CoordMode, LilithPoints, Lots, ModeRequest,
-    NodePoints, compute,
+    Angles, ChartRequest, ComputedBody, ComputedChart, ComputedStar, CoordMode, LilithPoints, Lots,
+    ModeRequest, NodePoints, compute,
 };
 pub use coords::topocentric::ObserverLocation;
 #[cfg(feature = "jzod")]

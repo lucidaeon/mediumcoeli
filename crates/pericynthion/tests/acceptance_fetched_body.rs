@@ -60,7 +60,7 @@ fn chiron_appears_in_chart() {
         asteroids: vec![20_002_060],
     };
 
-    let chart = compute_with_spk(&ephem, &[&spk], &req).expect("compute_with_spk");
+    let chart = compute_with_spk(&ephem, &[&spk], &req, &[]).expect("compute_with_spk");
     let chiron = chart
         .asteroids
         .iter()

@@ -3,6 +3,10 @@ RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/pericynthion/Cargo.toml crates/pericynthion/Cargo.toml
+# pericynthion declares `build = "build.rs"`, so the build script must be
+# present for the dependency-cache layer to compile it (catalog.gz is absent
+# here; build.rs compiles a clean, empty BSC5_CATALOG when it is missing).
+COPY crates/pericynthion/build.rs crates/pericynthion/build.rs
 COPY crates/astrogram/Cargo.toml  crates/astrogram/Cargo.toml
 COPY crates/blackmoon/Cargo.toml  crates/blackmoon/Cargo.toml
 COPY crates/starcat/Cargo.toml    crates/starcat/Cargo.toml

@@ -5,7 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/b3670c460b2cdc7f9efb283fde3af4650892a90f...main), [astrogram/0.2.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.2), [jzod/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.3.0), [pericynthion/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.5.0), [starcat/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.4.0), 2026.06.23
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/01dd8042b5b5bb0e8df0f55adf030cb556071872...main), [astrogram/0.2.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.3), [blackmoon/0.2.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.2), [jzod/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.4.0), [pericynthion/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.6.0), [starcat/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.5.0), [wristband/0.0.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.2), 2026.06.24
+
+### Added — `pericynthion`
+
+- **Fixed-star catalog + ICRS→ecliptic engine**: `FixedStar`, a curated `CATALOG`
+  of 12 traditional fixed stars plus the Galactic Center (Sgr A*), and
+  `ecliptic_position_from_icrs` / `compute_star` / `galactic_center` using the
+  IAU 2006 precession + IAU 2000B nutation pipeline. A drift test pins century
+  rates for the Galactic Center and the four Royal Stars.
+- **Named-star resolution**: `ResolvedStar`, `StarCluster`, and `resolve_star`
+  with a full alias table, backed by the **BSC5 (Bright Star Catalog)** —
+  decompressed from a committed `catalog.gz` by a new `build.rs` (`flate2`
+  build-dependency).
+- **`ComputedChart::stars`**: new `ComputedStar` rows on the computed chart.
+  `compute_with_spk` now takes a **caller-supplied `resolved_stars` slice**
+  (replacing the auto-populated CATALOG block), giving callers full control over
+  which fixed stars appear.
+- **Data provenance** (`provenance.rs`): `providers_for_body` joins body, fixed
+  star, and Horizons-synthesis sources into a single accounting.
+- **Oracle manifest expansion** (`jpl::oracle`): a committed, sized BLAKE3
+  manifest tagging each dataset directory with a `SourceKind` and per-file
+  provides/coverage; `locate_n373_bsp` alongside `locate_default_bsp`.
+- New catalog bodies **Asbolus** (centaur) and **Albion** (1992 QB₁, first
+  confirmed classical KBO).
+
+### Changed — `pericynthion`
+
+- **`index_chunks` reads only the head and tail of each ASCII chunk**,
+  eliminating full-file reads (~25 MB × 30 files) during `AsciiEphemeris`
+  construction; only the first and last records are parsed for `start_jd`/`end_jd`.
+- Centaurs (Chiron, Pholus, Nessus, Chariklo) and 9 outer bodies (Eris, Haumea,
+  Makemake, Quaoar, Orcus, Ixion, Varuna, Sedna, Gonggong) promoted to
+  **supported** via `sb441-n373.bsp` / Horizons SPK.
+
+### Fixed — `pericynthion`
+
+- NOTABLE **Agena** mis-mapped to HR 5440 (Eta Cen); corrected to HR 5267
+  (Bet Cen / Hadar). Removed duplicate `STAR_ALIASES` entries (`alpherg`,
+  `rasalhague`).
+
+### Added — `starcat`
+
+- **`catalogue` restructured** from a bare command into a flagged one:
+  `--stars`, `--clusters`, `--all`, `--bodies`, `--points`, `--verbose`.
+- **`compute --stars NAMES`** resolves comma-separated fixed-star names via
+  `resolve_star` (unknown names warn and skip); a **Stars** section is rendered
+  in `--text` output between the points and lots blocks.
+- **`placements --verify [--dry-run]`** discovers unsupported catalog bodies and
+  confirms which are computable, feeding `promote_placements.py`.
+- **Data provenance output**: body/star sources, URLs, and cached status;
+  runtime data production enumerates n373 + Horizons bodies; `data verify` emits
+  b3sum-style `<blake3>  <path>` lines.
+
+### Fixed — `starcat`
+
+- Distinguish open-vs-state failure in placements verify; collapse double-slash
+  and relativize verify paths under the cwd; suppress the dangling `## Fixed
+  Stars` header when no BSC5 catalog is loaded; skip empty/whitespace star names.
+
+### Added — `jzod`
+
+- **`BodyId` extended** with `Asbolus` and `Albion` (snake_case serialisation);
+  every `placements` catalog body maps to a `BodyId`.
+
+### Changed — repo
+
+- **`justfile`**: `placements` recipe now runs the full auto-promote pipeline
+  (verify → promote → rebuild → regenerate docs); adds `placements-dry-run` and
+  `oracle-regen` (generate-then-`cargo fmt -p pericynthion` for byte-identical
+  `oracle_data.rs`). New scripts: `promote_placements.py`,
+  `extract_oracle_manifest.py`, and an expanded `gen_oracle.py`.
+- **`astrogram`** / **`blackmoon`** READMEs: `astro` → `astrocom` format-slug
+  rename and refreshed web-target / pipeline docs.
+- **`blackmoon`** / **`wristband`** crate descriptions reworded.
+
+## [01dd804](https://github.com/lucidaeon/mediumcoeli/compare/b3670c460b2cdc7f9efb283fde3af4650892a90f...01dd8042b5b5bb0e8df0f55adf030cb556071872), [astrogram/0.2.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.2), [jzod/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.3.0), [pericynthion/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.5.0), [starcat/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.4.0), 2026.06.23
 
 ### Added — `pericynthion`
 
@@ -96,6 +171,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--spk` help text accurately describes the Type-2/Type-21 BSP format.
 - `--help` and `long_about` house listing updated to all seven always-on systems
   (Alcabitius, Morinus); asteroid output mode note corrected to "all output modes".
+
+### Added — `starcat`
+
+- `starcat data provenance`: read-only report of every catalogued body and the
+  fixed-star catalogue — backing data file(s), source URL, and cached status;
+  `--json` supported. Prints both fixed-star facts (compiled-in + CDS V/50 source).
+
+### Changed — `starcat`, `pericynthion`
+
+- `starcat data prod` now enumerates its file set at runtime, including
+  `sb441-n373.bsp` and unbundled minor bodies' Horizons SPKs (KBOs/TNOs/centaurs).
+- The BLAKE3 oracle is now a data manifest: directories carry a `SourceKind` and
+  files carry `provides`/`coverage`; `catalog.gz` (fixed stars) is tracked.
+  Generated from `scripts/oracle_manifest.tsv` (mirror-independent regeneration).
 
 ---
 

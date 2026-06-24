@@ -185,6 +185,10 @@ pub fn open_dir(dir: &Path) -> Vec<SpkEphemeris> {
 /// Relative path from the mirror root to the default small-body SPK file.
 const BSP_MIRROR_TAIL: &str = "ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp";
 
+/// Mirror-relative path to the n373 KBO perturber BSP file.
+const BSP_N373_MIRROR_TAIL: &str =
+    "ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n373.bsp";
+
 /// Locate the default asteroid SPK file (`sb441-n16.bsp`) under the JPL mirror.
 ///
 /// Resolves the mirror root by walking `start` and its ancestors upward until a
@@ -208,6 +212,17 @@ const BSP_MIRROR_TAIL: &str = "ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_d
 pub fn locate_default_bsp(start: &Path) -> Option<PathBuf> {
     let root = crate::jpl::oracle::mirror_root_from(start)?;
     let bsp = root.join(BSP_MIRROR_TAIL);
+    if bsp.is_file() { Some(bsp) } else { None }
+}
+
+/// Locate `sb441-n373.bsp` under the JPL mirror rooted at or above `start`.
+///
+/// `start` may be any path inside or above the mirror root. Returns the
+/// absolute path to the file if found, `None` otherwise.
+#[must_use]
+pub fn locate_n373_bsp(start: &Path) -> Option<PathBuf> {
+    let root = crate::jpl::oracle::mirror_root_from(start)?;
+    let bsp = root.join(BSP_N373_MIRROR_TAIL);
     if bsp.is_file() { Some(bsp) } else { None }
 }
 
@@ -366,5 +381,28 @@ mod tests {
         let tmp = tempdir::TempDir::new("spk-locate-none-test").unwrap();
         // No ssd.jpl.nasa.gov child — mirror root cannot be found.
         assert_eq!(locate_default_bsp(tmp.path()), None);
+    }
+
+    #[test]
+    fn locate_n373_bsp_finds_bsp_under_mirror_root() {
+        let tmp = tempdir::TempDir::new("n373loc").unwrap();
+        let bsp_dir = tmp
+            .path()
+            .join("ssd.jpl.nasa.gov")
+            .join("ftp")
+            .join("eph")
+            .join("small_bodies")
+            .join("asteroids_de441");
+        std::fs::create_dir_all(&bsp_dir).unwrap();
+        // A minimal valid DAF header so open() would succeed (we only need the file to exist).
+        std::fs::write(bsp_dir.join("sb441-n373.bsp"), b"DAF/SPK placeholder").unwrap();
+        // locate from a deep child of the root
+        let deep = tmp.path().join("some").join("subdir");
+        std::fs::create_dir_all(&deep).unwrap();
+        let found = super::locate_n373_bsp(&deep);
+        assert_eq!(found, Some(bsp_dir.join("sb441-n373.bsp")));
+        // absent → None
+        let other = tempdir::TempDir::new("n373loc_absent").unwrap();
+        assert!(super::locate_n373_bsp(other.path()).is_none());
     }
 }

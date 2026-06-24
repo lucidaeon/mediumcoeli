@@ -133,7 +133,7 @@ Every chart object carries a `type` field. `type` determines what the chart repr
   "ephemeris": { ... },
   "placements": { ... },
   "houses": { ... },
-  "lunar_phase": null,
+  "lunar_phase": { "synodic_arc_deg": 142.7, "phase": "gibbous", "lunation_day": 12 },
   "nested": []
 }
 ```
@@ -446,11 +446,27 @@ House cusps, keyed by house system slug then by house number. House number keys 
 
 ## Lunar Phase
 
+The Moon's position in the synodic cycle relative to the Sun, computed when both luminaries are present.
+
+```json
+"lunar_phase": {
+  "synodic_arc_deg": 142.7,
+  "phase": "gibbous",
+  "lunation_day": 12
+}
+```
+
+| field | type | required | description |
+|---|---|---|---|
+| `synodic_arc_deg` | number | yes | Moon−Sun ecliptic elongation in degrees, range `[0, 360)`. `0°` = exact conjunction (new moon), `180°` = opposition (full moon). |
+| `phase` | string | yes | The traditional 8-fold phase name (45° octants). One of: `new_moon`, `crescent`, `first_quarter`, `gibbous`, `full_moon`, `disseminating`, `last_quarter`, `balsamic`. |
+| `lunation_day` | integer | yes | 1-indexed position within the 28-fold lunar month, range `1–28`. |
+
+The whole field is `null` when a lunar phase is undefined for the chart — heliocentric charts, or any chart where the Sun or Moon is absent from `placements`:
+
 ```json
 "lunar_phase": null
 ```
-
-Field is present but unspecified in `0.0.0`. Reserved for forward compatibility. Do not rely on its value.
 
 ---
 
@@ -658,9 +674,9 @@ The `views` array holds display-only wrappers for biwheels, triwheels, and quadw
 
 **Major Asteroids:** `chiron`, `pallas`, `juno`, `vesta`, `hygiea`
 
-**Centaurs:** `pholus`, `nessus`, `chariklo`
+**Centaurs:** `pholus`, `nessus`, `chariklo`, `asbolus`
 
-**Kuiper-belt Objects:** `ixion`, `varuna`
+**Kuiper-belt Objects:** `ixion`, `varuna`, `albion`
 
 ### Angle IDs
 `ascendant`, `descendant`, `midheaven`, `imum_coeli`
@@ -693,7 +709,7 @@ A radix is considered **minimally calculated** (reference format) when it contai
 - Black Moon Lilith / Priapus — both mean (`black_moon_lilith_mean`, `priapus_mean`) and true (`black_moon_lilith_true`, `priapus_true`)
 - The 8 Hermetic lots: `lot_of_fortune`, `lot_of_spirit`, `lot_of_eros`, `lot_of_exaltation`, `lot_of_necessity`, `lot_of_courage`, `lot_of_victory`, `lot_of_nemesis`
 - House cusps for all enumerated house systems (see §[Enumerated Values](#enumerated-values) — House System Slugs)
-- Lunar phase (field present; value may be `null` in `0.0.0`)
+- Lunar phase (the `lunar_phase` object; `null` only for heliocentric charts or when a luminary is absent — see §[Lunar Phase](#lunar-phase))
 
 **Scope boundary — what is not in the reference format:**
 

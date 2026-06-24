@@ -29,10 +29,36 @@ release CRATE='':
 	cargo build --release {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }}
 	{{ if CRATE == '' { 'cargo run --release -q -p starcat -- placements > docs/placements.md' } else { 'true' } }}
 
-# Regenerate docs/placements.md from the pericynthion catalog (deterministic).
+# Verify + promote unsupported catalog bodies (fetches from Horizons if needed),
+# then regenerate docs/placements.md. Idempotent: already-promoted bodies are skipped.
+# Requires $STARCAT_JPL_DATA (for n373 KBO perturbers); $STARCAT_HORIZONS_DATA optional.
 [group('build')]
 placements:
-	cargo run --release -q -p starcat -- placements > docs/placements.md
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if confirmed=$(cargo run --release -q -p starcat -- placements --verify 2>/dev/null) \
+	        && [ -n "$confirmed" ]; then
+	    printf '%s\n' "$confirmed" | python3 scripts/promote_placements.py || true
+	    cargo build --release -q -p starcat
+	fi
+	cargo run --release -q -p starcat -- placements | tee docs/placements.md
+
+# Show which unsupported catalog bodies are confirmable without modifying anything.
+# Requires $STARCAT_JPL_DATA. Does not fetch from Horizons.
+[group('build')]
+placements-dry-run:
+	cargo run --release -q -p starcat -- placements --verify --dry-run
+	cargo run --release -q -p starcat -- placements
+
+# Regenerate crates/pericynthion/src/jpl/oracle_data.rs from the manifest and
+# immediately run cargo fmt so the committed file is the generate-then-fmt fixed point.
+[group('build')]
+oracle-regen:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	python3 scripts/gen_oracle.py scripts/oracle_manifest.tsv \
+	    > crates/pericynthion/src/jpl/oracle_data.rs
+	cargo fmt -p pericynthion
 
 # Type-check without producing binaries (or one CRATE).
 [group('build')]
@@ -156,9 +182,21 @@ fetch SOURCE:
 	            ./scripts/horizons_fetch.py "$chart" --mode "$mode" --force
 	        done
 	        ;;
+	    bsc5)
+	        # Yale Bright Star Catalogue 5th Revised Ed. (Hoffleit & Warren 1991).
+	        # 9110 records, 197 bytes each. Used by pericynthion build.rs to
+	        # generate the static BSC5_CATALOG array at compile time.
+	        wget \
+	            --no-clobber \
+	            --retry-connrefused=on \
+	            --read-timeout=20 \
+	            --timeout=15 \
+	            --tries=3 \
+	            https://cdsarc.cds.unistra.fr/ftp/cats/V/50/catalog.gz
+	        ;;
 	    *)
 	        echo "unknown fetch source: {{SOURCE}}" >&2
-	        echo "supported sources: de441 adbxml horizons" >&2
+	        echo "supported sources: de441 adbxml horizons bsc5" >&2
 	        exit 1
 	        ;;
 	esac
