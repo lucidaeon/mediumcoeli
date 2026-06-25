@@ -93,10 +93,15 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod antiscia;
 pub mod body;
+/// Embedded Yale Bright Star Catalogue (BSC5) raw data + CDS provenance,
+/// parsed by [`stars`]. See the module docs for regeneration.
+mod bsc5_catalogue;
 pub mod chart;
 pub mod chebyshev;
 pub mod coords;
+pub mod draconic;
 pub mod ephemeris;
 pub mod error;
 pub mod geo;

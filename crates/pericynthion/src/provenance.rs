@@ -13,7 +13,8 @@ pub const HORIZONS_API_URL: &str = "https://ssd.jpl.nasa.gov/api/horizons.api";
 pub enum RootKind {
     /// Under `$STARCAT_JPL_DATA` mirror root (path = `rel_path` joined to it).
     JplMirror,
-    /// Built into the binary from `catalog.gz` at the workspace root / build time.
+    /// Inlined into the binary from the CDS `catalog.gz` (now baked verbatim as
+    /// source in `bsc5_catalogue.rs`; no build step or decompression at run time).
     CdsBuild,
     /// Under `$STARCAT_HORIZONS_DATA` (file = `rel_path`, i.e. `<naif>.bsp`).
     HorizonsDir,

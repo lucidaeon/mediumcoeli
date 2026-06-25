@@ -81,6 +81,7 @@ pub mod obliquity;
 pub mod phase;
 pub mod precession;
 pub mod sidereal_time;
+pub mod tithi;
 pub mod topocentric;
 pub mod transform;
 pub mod vxax;

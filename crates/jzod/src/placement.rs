@@ -90,6 +90,15 @@ pub enum LotId {
 
 /// A celestial body placement: zodiacal position plus latitude, speed,
 /// retrograde flag, optional distance, and per-house-system house numbers.
+///
+/// The optional `antiscion` and `contra_antiscion` fields carry derived
+/// antiscia positions: the solstice-axis reflection (`(180° − λ) mod 360°`)
+/// and the equinox-axis reflection (`(360° − λ) mod 360°`) respectively.
+/// Both are omitted from JSON output when `None` (emit only when the caller
+/// explicitly requests antiscia output).
+///
+/// Fixed stars and lots intentionally have no antiscia fields: stars have no
+/// JZOD placement type, and [`Lot`] omits them by design.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Body {
     /// Body identifier.
@@ -104,14 +113,26 @@ pub struct Body {
     /// Retrograde flag (derived from the sign of `daily_speed`).
     pub retrograde: bool,
     /// Distance from the chart origin in AU, when known.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_au: Option<f64>,
     /// House number (1–12) keyed by house-system slug.
     #[serde(default)]
     pub house: BTreeMap<String, u8>,
+    /// Antiscion position: solstice-axis reflection of `position` (`(180° − λ) mod 360°`).
+    /// Emitted only when antiscia output is requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antiscion: Option<Position>,
+    /// Contra-antiscion position: equinox-axis reflection of `position` (`(360° − λ) mod 360°`).
+    /// Emitted only when antiscia output is requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contra_antiscion: Option<Position>,
 }
 
 /// A chart angle placement (no latitude, speed, or retrograde).
+///
+/// The optional `antiscion` and `contra_antiscion` fields carry derived
+/// antiscia positions (see [`Body`] for the reflection definitions).
+/// Both are omitted from JSON output when `None`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Angle {
     /// Angle identifier.
@@ -119,6 +140,14 @@ pub struct Angle {
     /// Zodiacal position (flattened).
     #[serde(flatten)]
     pub position: Position,
+    /// Antiscion position: solstice-axis reflection of `position`.
+    /// Emitted only when antiscia output is requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub antiscion: Option<Position>,
+    /// Contra-antiscion position: equinox-axis reflection of `position`.
+    /// Emitted only when antiscia output is requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contra_antiscion: Option<Position>,
 }
 
 /// A mathematical point placement (has a retrograde flag, no latitude/speed).
@@ -209,6 +238,8 @@ mod tests {
             retrograde: false,
             distance_au: None,
             house: std::collections::BTreeMap::new(),
+            antiscion: None,
+            contra_antiscion: None,
         };
         let v = serde_json::to_value(&body).unwrap();
         assert_eq!(v["id"], "sun");
@@ -231,5 +262,55 @@ mod tests {
         assert!(v.get("angles").is_none());
         assert!(v.get("points").is_none());
         assert!(v.get("lots").is_none());
+    }
+
+    /// When `antiscion` and `contra_antiscion` are `None`, neither key must
+    /// appear in the serialized JSON (opt-in: only emitted when requested).
+    #[test]
+    fn antiscion_fields_skipped_when_none() {
+        let body = Body {
+            id: BodyId::Sun,
+            position: Position::from_longitude(30.0),
+            ecliptic_latitude: crate::coord::Degrees8(0.0),
+            daily_speed: crate::coord::Degrees8(1.0),
+            retrograde: false,
+            distance_au: None,
+            house: std::collections::BTreeMap::new(),
+            antiscion: None,
+            contra_antiscion: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert!(
+            v.get("antiscion").is_none(),
+            "antiscion must be absent when None"
+        );
+        assert!(
+            v.get("contra_antiscion").is_none(),
+            "contra_antiscion must be absent when None"
+        );
+    }
+
+    /// When `antiscion` is `Some`, it must appear in the serialized JSON with
+    /// the expected sign and degree fields intact.
+    #[test]
+    fn antiscion_field_emits_position_when_some() {
+        // antiscion of 0° is 180° (Libra 0°).
+        let body = Body {
+            id: BodyId::Moon,
+            position: Position::from_longitude(0.0),
+            ecliptic_latitude: crate::coord::Degrees8(0.0),
+            daily_speed: crate::coord::Degrees8(13.0),
+            retrograde: false,
+            distance_au: None,
+            house: std::collections::BTreeMap::new(),
+            antiscion: Some(Position::from_longitude(180.0)),
+            contra_antiscion: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        let ant = v
+            .get("antiscion")
+            .expect("antiscion must be present when Some");
+        assert_eq!(ant["sign"], "libra", "antiscion of 0° must be Libra");
+        assert_eq!(ant["degree"], 0u8);
     }
 }

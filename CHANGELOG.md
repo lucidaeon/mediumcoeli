@@ -5,7 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/01dd8042b5b5bb0e8df0f55adf030cb556071872...main), [astrogram/0.2.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.3), [blackmoon/0.2.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.2), [jzod/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.4.0), [pericynthion/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.6.0), [starcat/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.5.0), [wristband/0.0.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.2), 2026.06.24
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/d28d3efee3375bc13bf43a270ee0f93c26518012...main), [astrogram/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.3.0), [jzod/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.5.0), [pericynthion/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.7.0), [starcat/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.6.0), 2026.06.25
+
+### Added — `pericynthion`
+
+- **Tithi** (`coords::tithi`): a `Tithi` type and a pure `tithi()` function
+  computing the 30-fold Vedic lunar day from the Moon–Sun elongation (12° steps,
+  no ephemeris dependency). `ComputedChart` now carries `tithi`, populated for
+  geocentric/topocentric charts and gated on Sun + Moon being present.
+- **Antiscia** (`antiscia`): pure `antiscion()` and `contra_antiscion()`
+  reflection involutions on ecliptic longitude (solstice axis `(180° − λ)`,
+  equinox axis `(360° − λ)`).
+- **Draconic projection** (`draconic`): a `draconic_longitude` uniform-shift
+  function plus `DraconicChart` / `project_chart`, re-projecting every emitted
+  longitude (bodies, asteroids, angles, nodes, lilith, lots, stars) about the
+  lunar node.
+- **Twilight grace band**: `is_twilight_chart()` flags a Night chart with the
+  Sun within 6° of the ASC or 3° of the DSC; `ComputedChart::interp_sect_twilight`
+  surfaces it **without** ever promoting binary `sect` to Day.
+- `catalogue_provenance()` exposes the embedded BSC5 CDS ReadMe, and
+  `placements::markdown()` gains a **Derived Views** section documenting
+  `--draconic` and `--antiscia`.
+
+### Changed — `pericynthion`
+
+- The **Yale Bright Star Catalogue (BSC5)** is now baked verbatim into
+  `bsc5_catalogue.rs` and parsed once via `LazyLock`. The committed `catalog.gz`,
+  the `build.rs` script, and the `flate2` build-dependency are **removed** — a
+  fresh `cargo test` is green with no decompression at build or run time.
+- The data oracle records Harvard `ybsc5.gz` as a byte-identical alternate BSC5
+  mirror (same BLAKE3 + 573 921 bytes) for provenance.
+
+### Added — `starcat`
+
+- **`compute --antiscia`**: appends an Antiscion / Contra-antiscion sub-table to
+  `--text` output and emits `antiscion` / `contra_antiscion` in `--jzod`.
+- **`compute --draconic`**: re-projects all longitudes into the draconic zodiac
+  (0° = Moon's node; mean/true follows `--nodes`), printing `Zodiac : draconic`;
+  applies to both `--text` and `--jzod`. Both flags default OFF and are no-ops in
+  `--page`.
+- A **Tithi** line in `--text` output, immediately after the Lunar Phase line.
+- `catalogue --points` documents the derived Antiscion / Contra-antiscion rows.
+
+### Added — `jzod`
+
+- **`Tithi`** struct (`index` / `name` / `fraction`), re-exported from the crate
+  root, plus an optional `Chart::tithi` field (skip-if-none; absent for
+  heliocentric charts).
+- Optional **`interp_sect_twilight: Option<bool>`** on `Chart`, supplementing
+  `sect`: a twilight chart is `sect: nocturnal` + `interp_sect_twilight: true`.
+- Optional **`antiscion` / `contra_antiscion`** `Position` fields on
+  `placement::Body` and `placement::Angle`, emitted only when antiscia output is
+  requested (fixed stars and lots have none by design).
+- JZOD.md candidate entries documenting the tithi, antiscia, draconic, and
+  twilight model additions as proposed (not yet ratified) spec.
+
+### Added — `astrogram`
+
+- **`Topocentric`** variant on `chart::CoordinateSystem`, threaded through every
+  exhaustive match into the JZOD writer (`jzod::CoordinateSystem::Topocentric`);
+  `from_str_slug` accepts `topocentric` / `topo` and `From<u8>` decodes `3`.
+
+### Changed — `astrogram`
+
+- SFcht has no topocentric encoding, so a topocentric chart falls back to the
+  geocentric byte on write (lossy); capability membership is unaffected, since
+  `ChartField::CoordinateSystem` tracks only whether a frame is stored.
+
+## [d28d3ef](https://github.com/lucidaeon/mediumcoeli/compare/01dd8042b5b5bb0e8df0f55adf030cb556071872...d28d3efee3375bc13bf43a270ee0f93c26518012), [astrogram/0.2.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.2.3), [blackmoon/0.2.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.2.2), [jzod/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.4.0), [pericynthion/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.6.0), [starcat/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.5.0), [wristband/0.0.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.0.2), 2026.06.24
 
 ### Added — `pericynthion`
 

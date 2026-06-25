@@ -49,8 +49,8 @@ use crate::ephemeris::Ephemeris;
 use crate::error::PericynthionError;
 use crate::houses::{HouseCusps, HouseSystem};
 use crate::lots::{
-    Sect, courage_rad, eros_rad, exaltation_rad, fortune_rad, necessity_rad, nemesis_rad, sect,
-    spirit_rad, victory_rad,
+    Sect, courage_rad, eros_rad, exaltation_rad, fortune_rad, is_twilight_chart, necessity_rad,
+    nemesis_rad, sect, spirit_rad, victory_rad,
 };
 use crate::spk::SpkEphemeris;
 use crate::time::calendar::{Calendar, CivilDate};
@@ -293,8 +293,16 @@ pub struct ComputedChart {
     pub houses: Vec<(HouseSystem, Option<HouseCusps>)>,
     /// Lunar phase. `None` in Heliocentric mode or when Sun/Moon are absent.
     pub lunar_phase: Option<LunarPhase>,
+    /// Vedic tithi (lunar day). `None` in Heliocentric mode or when Sun/Moon
+    /// are absent (same conditions as `lunar_phase`).
+    pub tithi: Option<crate::coords::tithi::Tithi>,
     /// Hellenistic sect (day / night). `None` when Ac or Sun is unavailable.
     pub sect: Option<Sect>,
+    /// `true` for a twilight chart — Sun below the horizon (`sect` stays
+    /// **nocturnal**) but within 6° of Ac or 3° of Ds, so it *may behave*
+    /// diurnally. `None` under the same conditions as
+    /// [`sect`](ComputedChart::sect) (Ac or Sun unavailable).
+    pub interp_sect_twilight: Option<bool>,
     /// Tropical ecliptic positions of caller-supplied resolved stars.
     /// Empty when no stars were requested; order matches the input slice.
     pub stars: Vec<ComputedStar>,
@@ -496,7 +504,16 @@ pub fn compute_with_spk(
             .map(|(sun, moon)| crate::coords::phase::lunar_phase(moon, sun))
     };
 
-    // ── 10. House cusps ──────────────────────────────────────────────────────
+    // ── 10. Tithi (geo/topo; needs Sun + Moon) ───────────────────────────────
+    let tithi: Option<crate::coords::tithi::Tithi> = if is_helio {
+        None
+    } else {
+        find_lon(Body::Sun)
+            .zip(find_lon(Body::Moon))
+            .map(|(sun, moon)| crate::coords::tithi::tithi(moon, sun))
+    };
+
+    // ── 11. House cusps ──────────────────────────────────────────────────────
     let house_cusps: Vec<(HouseSystem, Option<HouseCusps>)> =
         if is_helio || request.houses.is_empty() {
             request.houses.iter().map(|&h| (h, None)).collect()
@@ -521,14 +538,18 @@ pub fn compute_with_spk(
             }
         };
 
-    // ── 11. Sect (needs Ac + Sun) ─────────────────────────────────────────────
-    let sect_val: Option<Sect> = angles
+    // ── 12. Sect + twilight flag (needs Ac + Sun) ────────────────────────────
+    // Sect is strictly binary (Day/Night by hemisphere). The twilight flag is
+    // a separate interpretive predicate — it does NOT alter sect.
+    let sun_ac: Option<(f64, f64)> = angles
         .as_ref()
         .and_then(|a| a.ac_deg)
         .zip(find_lon(Body::Sun))
-        .map(|(ac_deg, sun_deg)| sect(sun_deg.to_radians(), ac_deg.to_radians()));
+        .map(|(ac_deg, sun_deg)| (sun_deg.to_radians(), ac_deg.to_radians()));
+    let sect_val: Option<Sect> = sun_ac.map(|(sun, ac)| sect(sun, ac));
+    let interp_sect_twilight: Option<bool> = sun_ac.map(|(sun, ac)| is_twilight_chart(sun, ac));
 
-    // ── 12. SPK asteroids (request order; skip ids no open SPK covers, or with
+    // ── 13. SPK asteroids (request order; skip ids no open SPK covers, or with
     //        no catalog name) ───────────────────────────────────────────────────
     let mut asteroids: Vec<ComputedAsteroid> = Vec::new();
     for &naif_id in &request.asteroids {
@@ -605,7 +626,9 @@ pub fn compute_with_spk(
         lots,
         houses: house_cusps,
         lunar_phase,
+        tithi,
         sect: sect_val,
+        interp_sect_twilight,
         stars,
     })
 }
@@ -749,6 +772,14 @@ pub fn compute_lots(
 mod tests {
     use super::*;
     use crate::lots::Sect;
+
+    #[test]
+    fn tithi_field_default_present() {
+        // Smoke test: verify the tithi function is reachable through the chart
+        // module's import path. The real wiring is verified by Task 3/4 tests.
+        // moon=12°, sun=0° → arc=12° → tithi index 2 (Dwitiya).
+        assert_eq!(crate::coords::tithi::tithi(12.0, 0.0).index, 2);
+    }
 
     #[test]
     fn computed_chart_stars_field_compiles() {
@@ -906,6 +937,53 @@ mod tests {
         };
         assert_eq!(cs.name, "Sirius");
         assert!((0.0..360.0).contains(&cs.position.longitude_deg));
+    }
+
+    #[test]
+    fn computed_chart_struct_carries_interp_sect_twilight() {
+        // Compile-time + default-shape guard: the field exists and is Option<bool>.
+        // (Full geometry is covered in lots.rs; this guards the ComputedChart wiring.)
+        fn _assert_field(c: &ComputedChart) -> Option<bool> {
+            c.interp_sect_twilight
+        }
+    }
+
+    #[test]
+    fn computed_chart_interp_sect_twilight_false_for_clear_day_chart() {
+        // Pure-geometry: Adèle Haenel reference — Sun=322.889° is above the horizon
+        // (ASC=124.919°), so sect == Day and interp_sect_twilight must be false.
+        use crate::lots::{is_twilight_chart, sect};
+        let sun_deg = 322.889_f64;
+        let ac_deg = 124.919_f64;
+        let (sun, ac) = (sun_deg.to_radians(), ac_deg.to_radians());
+        assert_eq!(sect(sun, ac), Sect::Day);
+        assert!(
+            !is_twilight_chart(sun, ac),
+            "clear day chart must not be interp_sect_twilight"
+        );
+    }
+
+    #[test]
+    fn computed_chart_interp_sect_twilight_true_in_grace_band() {
+        // Sun 4° past ASC (lower hemisphere = Night by binary hemisphere rule, but
+        // within 6° Asc grace band). sect() stays Night; is_twilight_chart() is true.
+        //
+        // Geometry: sect is Night when (sun − ac + 180°) mod 360° ≥ 180°. A sun 4°
+        // *after* ac gives (4+180) mod 360 = 184 ≥ 180 → Night. arc_sep(sun, ac) = 4°
+        // ≤ 6° so the twilight flag fires.
+        use crate::lots::{is_twilight_chart, sect};
+        let ac_deg = 90.0_f64;
+        let sun_deg = (ac_deg + 4.0).rem_euclid(360.0);
+        let (sun, ac) = (sun_deg.to_radians(), ac_deg.to_radians());
+        assert_eq!(
+            sect(sun, ac),
+            Sect::Night,
+            "grace-band chart is still Night"
+        );
+        assert!(
+            is_twilight_chart(sun, ac),
+            "grace-band chart must be interp_sect_twilight"
+        );
     }
 
     #[test]

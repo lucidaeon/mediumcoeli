@@ -1,4 +1,4 @@
-For testing web enpoints and for ephemeral chart generation, the following parameters are followed.
+For testing web endpoints and for ephemeral chart generation, the following parameters are followed.
 
 ## Date range
 Any valid date and time pairing that falls between 1658 - 2024 Gregorian

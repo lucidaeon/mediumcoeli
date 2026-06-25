@@ -60,6 +60,7 @@ mod tests {
             zodiac: Zodiac::Tropical,
             coordinate_system: CoordinateSystem::Geocentric,
             sect: None,
+            interp_sect_twilight: None,
             ephemeris: Ephemeris {
                 source: "test".into(),
                 calculated_at: "2026-06-08T20:45:18Z".into(),
@@ -69,6 +70,7 @@ mod tests {
             placements: Placements::default(),
             houses: crate::house::Houses::new(),
             lunar_phase: None,
+            tithi: None,
             nested: vec![],
         }
     }

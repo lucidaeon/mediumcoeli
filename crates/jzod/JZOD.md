@@ -39,6 +39,7 @@ An open format for storage, transmission, and processing of astrology chart data
 13. [Minimally Calculated Radix](#minimally-calculated-radix)
 14. [Compliance](#compliance)
 15. [Decision Chronology](#decision-chronology)
+15a. [Candidate Additions (proposed, pending ratification)](#candidate-additions-proposed-pending-ratification)
 16. [Open Questions](#open-questions)
     - [OQ-1 Relationship placement](#oq-1--relationship-placement-top-level-array-vs-per-chart)
     - [OQ-2 Relationship codes](#oq-2--relationship-codes-technical-detail)
@@ -753,6 +754,120 @@ A JZOD-compliant implementation:
 | 2026-06-13 | OQ-15 | Compute both mean and true/osculating BML | Silent divergence (~15°) is a research trust risk; declare both, don't choose one |
 | 2026-06-13 | OQ-14 | `"topocentric"` added to `coordinate_system` enum | Real third mode used in practice; meaningful for Moon (up to ~1°) |
 | 2026-06-13 | OQ-1 | Relationships live in a top-level array, not per-chart | Avoids mirroring; one edge store, no drift between A→B and B→A copies |
+
+---
+
+## Candidate Additions (proposed, pending ratification)
+
+*These additions are implemented on branch `feat/math-quickies` and available in the `jzod` crate. They are NOT yet ratified spec — they are captured here so collaborators and implementors can evaluate them before they stabilize.*
+
+---
+
+### Candidate A — `tithi: Option<Tithi>` on `Chart` (Vedic lunar day)
+
+**Branch:** `feat/math-quickies`
+**Status: candidate — not ratified.**
+
+A `tithi` field on `Chart` carries the Vedic lunar day (the 30-fold division of the synodic month). It is absent for heliocentric charts and any chart where the Sun or Moon is absent from placements.
+
+```json
+"tithi": {
+  "index": 12,
+  "name": "Dvadashi",
+  "fraction": 0.73
+}
+```
+
+| field | type | description |
+|---|---|---|
+| `index` | integer (u8) | 1-indexed tithi number, range 1–30. |
+| `name` | string | Traditional tithi name (e.g. "Pratipada", "Purnima", "Amavasya"). |
+| `fraction` | number (f64) | Fractional progress through the current tithi, range [0.0, 1.0). |
+
+The `Tithi` struct lives in `jzod::chart::Tithi`. The field is serialized with `#[serde(skip_serializing_if = "Option::is_none")]` — absent from JSON when `null`.
+
+**Relationship to OQ-6 (Vedic fields):** This is the first Vedic field to land. It does not resolve OQ-6 (which covers nakshatra, Vikrama Samvat, and deeper Jyotish support) — it is a narrow addition that fits cleanly alongside the existing `lunar_phase` object without structural conflict.
+
+---
+
+### Candidate B — `antiscion` and `contra_antiscion` on `Body` and `Angle` placements
+
+**Branch:** `feat/math-quickies`
+**Status: candidate — not ratified.**
+
+Optional derived fields on `placement::Body` and `placement::Angle`. Both fields carry a `Position` object (same shape as the sign/degree/minute/second notation used elsewhere). They are absent when antiscia were not computed, present when the `--antiscia` flag is passed to `starcat compute`.
+
+```json
+{
+  "id": "sun",
+  "ecliptic_longitude": 0.0,
+  "sign": "aries",
+  "degree": 0,
+  "minute": 0,
+  "second": 0,
+  "antiscion": {
+    "ecliptic_longitude": 180.0,
+    "sign": "libra",
+    "degree": 0,
+    "minute": 0,
+    "second": 0
+  },
+  "contra_antiscion": {
+    "ecliptic_longitude": 0.0,
+    "sign": "aries",
+    "degree": 0,
+    "minute": 0,
+    "second": 0
+  }
+}
+```
+
+Definitions:
+- **Antiscion** — solstice-axis reflection: `antiscion(λ) = (180° − λ) mod 360°`. A planet at 0° Aries has its antiscion at 0° Libra; the two points are equidistant from the Cancer/Capricorn axis.
+- **Contra-antiscion** — equinox-axis reflection: `contra_antiscion(λ) = (360° − λ) mod 360°`. The two points are equidistant from the Aries/Libra axis.
+
+Both fields serialize with `#[serde(skip_serializing_if = "Option::is_none")]` — absent from JSON when not computed.
+
+**Open design questions:** Should antiscia also be computed for `Point` and `Lot` placements? Should `antiscion` / `contra_antiscion` be top-level siblings to `ecliptic_longitude` or nested under a `derived` key? These questions remain open pending ratification.
+
+---
+
+### Candidate C — Draconic zodiac emission: `zodiac: { "name": "draconic" }`
+
+**Branch:** `feat/math-quickies`
+**Status: candidate — not ratified.**
+
+When `starcat compute --draconic` is passed, the emitted JZOD chart carries `"zodiac": { "name": "draconic" }` instead of `"tropical"`. All placement longitudes are re-projected by the uniform shift `(tropical_lon − node_lon) mod 360°`, where `node_lon` is the selected mean or true North Node longitude.
+
+The `Zodiac::Draconic` variant was stubbed in OQ-4 (resolved 2026-06-14). This candidate adds its first live emission.
+
+```json
+"zodiac": { "name": "draconic" }
+```
+
+No additional fields on the zodiac object are defined for draconic — the node longitude used for projection is an ephemeris-level detail and is not currently stored on the chart object. Whether to annotate the draconic zodiac with the node longitude (for reproducibility) is an open design question.
+
+**Relationship to OQ-4:** The object shape `{ "name": "draconic" }` is exactly what OQ-4 specified when it stubbed the variant. No structural change is needed; this candidate merely confirms the stub is now emitted in practice.
+
+---
+
+### Candidate D — `interp_sect_twilight: Option<bool>` on `Chart` (twilight-chart flag)
+
+**Branch:** `feat/math-quickies`
+**Status: candidate — not ratified.**
+
+An `interp_sect_twilight` field on `Chart` flags charts where the Sun is below the horizon but within 6° of the Ascendant or within 3° of the Descendant. Such a chart is called a **twilight chart** — it may behave diurnally in practice, but its sect classification remains **nocturnal**.
+
+Sect is strictly binary: Sun above the Asc/Desc axis → `"diurnal"`; Sun below → `"nocturnal"`. The twilight grace does NOT alter the sect value. A twilight chart carries **`sect: "nocturnal"`** and `interp_sect_twilight: true`. When the chart is unambiguously diurnal (Sun above the horizon), `interp_sect_twilight` is absent. When the chart is nocturnal but outside the grace band, `interp_sect_twilight` is absent. The flag is also absent for heliocentric charts or any chart where the Ascendant or Sun is unavailable.
+
+```json
+"sect": "nocturnal",
+"interp_sect_twilight": true
+```
+
+The field is declared on `jzod::Chart` after `sect`, with `#[serde(default, skip_serializing_if = "Option::is_none")]` — omitted from JSON when `None`.
+
+**Relationship to sect:** The `sect` field governs traditional planet strength assignments and hermetic lot formulae. Sect is strictly binary for lot calculations — a twilight chart uses the **nocturnal** lot formula (because `sect` is `"nocturnal"`). `interp_sect_twilight` is a separate interpretive flag that surfaces the grace-band sub-case for practitioners and researchers; it is NEVER applied to lot calculations.
 
 ---
 

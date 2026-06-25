@@ -112,6 +112,14 @@ fn compute_lightning_strike_leo_asc_frame() {
 
     // Sect should be Some (Ac + Sun present).
     assert!(chart.sect.is_some(), "sect should be Some");
+
+    // interp_sect_twilight should be Some (same preconditions as sect); for this well-lit
+    // reference moment the Sun is clearly above the horizon, so expect false.
+    assert_eq!(
+        chart.interp_sect_twilight,
+        Some(false),
+        "clear diurnal chart must not be twilight-grace"
+    );
 }
 
 #[test]

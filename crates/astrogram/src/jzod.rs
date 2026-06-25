@@ -106,9 +106,11 @@ fn chart_to_jzod(c: &Chart, calculated_at: &str) -> jzod::Chart {
         zodiac: zodiac_to_jzod(c.zodiac),
         coordinate_system: match c.coordinate_system {
             CoordinateSystem::Geocentric => jzod::CoordinateSystem::Geocentric,
+            CoordinateSystem::Topocentric => jzod::CoordinateSystem::Topocentric,
             CoordinateSystem::Heliocentric => jzod::CoordinateSystem::Heliocentric,
         },
         sect: None,
+        interp_sect_twilight: None,
         ephemeris: jzod::Ephemeris {
             source: concat!("blackmoon/", env!("CARGO_PKG_VERSION")).to_string(),
             calculated_at: calculated_at.to_string(),
@@ -118,6 +120,7 @@ fn chart_to_jzod(c: &Chart, calculated_at: &str) -> jzod::Chart {
         placements: jzod::Placements::default(),
         houses: jzod::Houses::new(),
         lunar_phase: None,
+        tithi: None,
         nested: vec![],
     }
 }
@@ -237,6 +240,25 @@ mod tests {
         let out = write_file(&[c]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(v["charts"][0].get("gender").is_none());
+    }
+
+    #[test]
+    fn coordinate_system_topocentric() {
+        let mut c = anna_freud();
+        c.coordinate_system = CoordinateSystem::Topocentric;
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["charts"][0]["coordinate_system"], "topocentric");
+    }
+
+    #[test]
+    fn topocentric_round_trips_to_jzod() {
+        let mut c = anna_freud();
+        c.coordinate_system = CoordinateSystem::Topocentric;
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).expect("valid JZOD JSON");
+        assert_eq!(v["version"], "0.0.0");
+        assert_eq!(v["charts"][0]["coordinate_system"], "topocentric");
     }
 
     #[test]

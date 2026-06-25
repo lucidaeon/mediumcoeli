@@ -6,7 +6,7 @@ date: 2063.04.05
 time: 11h06m41s
 location: Bozeman MT Gallatin County, US
 note: https://memory-alpha.fandom.com/wiki/Zefram_Cochrane#Developing_warp_drive
-note: Time beween warp flash and vulcan handshake was added to 11am
+note: Time between warp flash and vulcan handshake was added to 11am
 resolved coords: 45°N40'47" 111°W02'16"
 report:
  DeltaT = +81s; ET = 18:08:02 5 Apr 2063; JDE = 2474650.255585

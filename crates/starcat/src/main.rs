@@ -124,7 +124,8 @@ COORDINATE SYSTEM
 ZODIAC
   tropical     ecliptic longitude from the true vernal equinox (current)
   sidereal     tropical minus ayanamsha — 47+ calibrations (roadmap)
-  draconic     0° = Moon's mean North Node (roadmap)
+  draconic     0° = Moon's North Node — use --draconic in --text mode
+  antiscia     solstice-axis / equinox-axis reflections — use --antiscia in --text mode
 
 CHART POINTS EMITTED
   Bodies   geocentric/topocentric: Sun, Moon, Mercury, Venus, Mars,
@@ -138,6 +139,8 @@ CHART POINTS EMITTED
            Victory (+Jupiter), Nemesis (+Saturn), Sect; geo/topo only
   Houses   Whole Sign, Equal-from-ASC, Placidus, Regiomontanus, Porphyry,
            Alcabitius, Morinus (need lat + lon; geo/topo only)
+  Derived  Antiscion / Contra-antiscion: solstice/equinox-axis reflections
+           of every rendered longitude — appended when --antiscia is passed
 
 Run 'starcat compute --help' for the full argument reference.",
     arg_required_else_help = true
@@ -167,7 +170,8 @@ enum Command {
         #[arg(long)]
         bodies: bool,
         /// List mathematical points: angles (Asc/Desc/MC/IC/Vx/Ax), lunar nodes,
-        /// Black Moon Lilith, and the eight Hermetic lots.
+        /// Black Moon Lilith, the eight Hermetic lots, and derived views
+        /// (Antiscion / Contra-antiscion — see `--antiscia` on `compute`).
         #[arg(long)]
         points: bool,
         /// List named fixed stars. Default: 33 common-name stars (NOTABLE).
@@ -485,6 +489,19 @@ struct ComputeArgs {
     /// BSC5P designations (26Bet Per). See `starcat catalogue --stars`.
     #[arg(long = "stars", value_delimiter = ',')]
     stars: Vec<String>,
+
+    /// Append an Antiscion / Contra-antiscion sub-table to the `--text` output.
+    /// Each body's antiscion reflects across the Cancer/Capricorn (solstice)
+    /// axis; the contra-antiscion reflects across the Aries/Libra (equinox) axis.
+    /// No-op in `--page` / `--jzod` modes.
+    #[arg(long = "antiscia")]
+    antiscia: bool,
+
+    /// Re-project all longitudes into the draconic zodiac (0° = Moon's mean
+    /// North Node) before rendering `--text` output. The node variant is
+    /// controlled by `--nodes`. No-op in `--page` / `--jzod` modes.
+    #[arg(long = "draconic")]
+    draconic: bool,
 }
 
 /// Output format for sexagesimal coordinates.
@@ -879,6 +896,16 @@ fn print_points_catalogue() {
         ("Lots", "Courage", "requires Mars"),
         ("Lots", "Victory", "requires Jupiter"),
         ("Lots", "Nemesis", "requires Saturn"),
+        (
+            "Derived",
+            "Antiscion",
+            "solstice-axis reflection (180° − λ) mod 360° — see --antiscia on compute",
+        ),
+        (
+            "Derived",
+            "Contra-antiscion",
+            "equinox-axis reflection (360° − λ) mod 360° — see --antiscia on compute",
+        ),
     ];
     for (group, name, notes) in rows {
         println!("{group}\t{name}\t{notes}");
@@ -1053,8 +1080,24 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             lat: obs_lat,
             lon: obs_lon,
         };
-        let chart =
-            pericynthion::jzod::to_jzod_chart(&computed, &birth, uuid::Uuid::new_v4().to_string());
+        // Derive the draconic node longitude from the selected node mode, when
+        // --draconic is requested. None → tropical output.
+        let draconic_node: Option<f64> = if args.draconic {
+            match (args.nodes, &computed.nodes) {
+                (NodesMode::Mean, Some(n)) => Some(n.mean_nn_deg),
+                (NodesMode::True, Some(n)) => Some(n.true_nn_deg),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let chart = pericynthion::jzod::to_jzod_chart(
+            &computed,
+            &birth,
+            uuid::Uuid::new_v4().to_string(),
+            draconic_node,
+            args.antiscia,
+        );
         println!(
             "{}",
             jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart]))
@@ -1077,7 +1120,14 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             print_page(&args, &computed, fmt);
         }
     } else {
-        print_text(&computed, fmt, args.nodes, args.lilith);
+        print_text(
+            &computed,
+            fmt,
+            args.nodes,
+            args.lilith,
+            args.antiscia,
+            args.draconic,
+        );
     }
 
     Ok(())
@@ -1644,11 +1694,43 @@ fn cmd_placements_verify(dry_run: bool) -> Result<()> {
 // Output rendering
 // =============================================================================
 
+/// Format a [`pericynthion::coords::tithi::Tithi`] as a display line.
+///
+/// Produces `"Tithi: <name> (#<index>) <pct>%"` where `<pct>` is the
+/// intra-tithi progress rounded to the nearest whole percent.
+fn tithi_line(t: &pericynthion::coords::tithi::Tithi) -> String {
+    format!(
+        "Tithi: {} (#{}) {:.0}%",
+        t.name,
+        t.index,
+        t.fraction * 100.0
+    )
+}
+
+/// Build antiscia/contra-antiscia rows for a list of `(label, longitude)` points.
+///
+/// Returns a `Vec<(String, f64, f64)>` of `(label, antiscion_deg, contra_antiscion_deg)`.
+/// Delegates the reflection math to [`pericynthion::antiscia`]. No ephemeris required.
+fn antiscia_rows(points: &[(&str, f64)]) -> Vec<(String, f64, f64)> {
+    points
+        .iter()
+        .map(|&(label, lon)| {
+            (
+                label.to_string(),
+                pericynthion::antiscia::antiscion(lon),
+                pericynthion::antiscia::contra_antiscion(lon),
+            )
+        })
+        .collect()
+}
+
 fn print_text(
     computed: &ComputedChart,
     fmt: CoordFormat,
     nodes_mode: NodesMode,
     lilith_mode: LilithMode,
+    show_antiscia: bool,
+    show_draconic: bool,
 ) {
     println!("JD UT  : {:.6}", computed.jd_ut);
     println!("JD TT  : {:.6}", computed.jd_tt);
@@ -1664,6 +1746,28 @@ fn print_text(
         pericynthion::chart::CoordMode::Heliocentric => "heliocentric".to_string(),
     };
     println!("Coords : {coord_label}");
+
+    // Resolve tropical North Node longitude (mean or true per --nodes).
+    // Used both for --draconic projection and for point-table display.
+    let node_lon = match (nodes_mode, &computed.nodes) {
+        (NodesMode::Mean, Some(n)) => Some(n.mean_nn_deg),
+        (NodesMode::True, Some(n)) => Some(n.true_nn_deg),
+        _ => None,
+    };
+
+    // When --draconic is requested and the node is available, project the chart.
+    // Latitude, speed, and retrograde flags are invariant under the shift and
+    // are kept from `computed`.
+    let drac = if show_draconic {
+        node_lon.map(|nn| pericynthion::draconic::project_chart(computed, nn))
+    } else {
+        None
+    };
+
+    if drac.is_some() {
+        println!("Zodiac : draconic");
+    }
+
     println!();
     let lon_w = lon_col_width(fmt);
     let lat_w = lat_col_width(fmt);
@@ -1677,60 +1781,137 @@ fn print_text(
         lat_w = lat_w,
     );
     println!("{}", "-".repeat(8 + 1 + lon_w + 1 + lat_w + 1 + 14));
-    for cb in &computed.bodies {
+
+    // Collect (label, longitude) for antiscia input — bodies first.
+    let mut antiscia_pts: Vec<(&str, f64)> = Vec::new();
+
+    for (idx, cb) in computed.bodies.iter().enumerate() {
+        // Under --draconic, use the projected body longitude; lat/distance unchanged.
+        let lon_deg = drac
+            .as_ref()
+            .and_then(|d| d.bodies.get(idx).map(|&(_, l)| l))
+            .unwrap_or(cb.position.longitude_deg);
         println!(
             "{:<8} {} {} {:>14.6}",
             cb.body.name(),
-            format_zodiac_lon(cb.position.longitude_deg, fmt),
+            format_zodiac_lon(lon_deg, fmt),
             format_signed_lat(cb.position.latitude_deg, fmt),
             cb.position.distance_au
         );
+        antiscia_pts.push((cb.body.name(), lon_deg));
     }
     // Asteroids share the body table: same columns, appended after planets.
-    for ca in &computed.asteroids {
+    for (idx, ca) in computed.asteroids.iter().enumerate() {
+        let lon_deg = drac
+            .as_ref()
+            .and_then(|d| d.asteroids.get(idx).map(|&(_, l)| l))
+            .unwrap_or(ca.position.longitude_deg);
         println!(
             "{:<8} {} {} {:>14.6}",
             ca.name,
-            format_zodiac_lon(ca.position.longitude_deg, fmt),
+            format_zodiac_lon(lon_deg, fmt),
             format_signed_lat(ca.position.latitude_deg, fmt),
             ca.position.distance_au
         );
+        antiscia_pts.push((ca.name, lon_deg));
     }
 
     if let Some(ang) = &computed.angles {
-        // Select Nn/Sn based on nodes_mode
+        // Select Nn/Sn based on nodes_mode (tropical or draconic).
         let (nn_deg, sn_deg) = match (nodes_mode, &computed.nodes) {
             (NodesMode::Mean, Some(n)) => (Some(n.mean_nn_deg), Some(n.mean_sn_deg)),
             (NodesMode::True, Some(n)) => (Some(n.true_nn_deg), Some(n.true_sn_deg)),
             _ => (None, None),
         };
-        // Select Lil/Pri based on lilith_mode
+        // Select Lil/Pri based on lilith_mode (tropical or draconic).
         let (lil_deg, pri_deg) = match (lilith_mode, &computed.lilith) {
             (LilithMode::Mean, Some(l)) => (Some(l.mean_lilith_deg), Some(l.mean_priapus_deg)),
             (LilithMode::True, Some(l)) => (Some(l.true_lilith_deg), Some(l.true_priapus_deg)),
             _ => (None, None),
         };
 
+        // When draconic, build a lookup from label → draconic lon for angles/nodes/lilith.
+        // DraconicChart uses separate Vecs keyed by static label strings.
+        let drac_angle_lon = |label: &str| -> Option<f64> {
+            drac.as_ref()
+                .and_then(|d| d.angles.iter().find(|&&(l, _)| l == label).map(|&(_, v)| v))
+        };
+        // Node labels in DraconicChart: "MeanNn", "MeanSn", "TrueNn", "TrueSn".
+        let drac_node_lon = |drac_label: &str| -> Option<f64> {
+            drac.as_ref().and_then(|d| {
+                d.nodes
+                    .iter()
+                    .find(|&&(l, _)| l == drac_label)
+                    .map(|&(_, v)| v)
+            })
+        };
+        // Lilith labels in DraconicChart: "MeanLilith", "MeanPriapus", "TrueLilith", "TruePriapus".
+        let drac_lilith_lon = |drac_label: &str| -> Option<f64> {
+            drac.as_ref().and_then(|d| {
+                d.lilith
+                    .iter()
+                    .find(|&&(l, _)| l == drac_label)
+                    .map(|&(_, v)| v)
+            })
+        };
+
+        // Resolve point longitudes — draconic when available, tropical otherwise.
+        let mc_lon = drac_angle_lon("Mc").unwrap_or(ang.mc_deg);
+        let ic_lon = drac_angle_lon("Ic").unwrap_or(ang.ic_deg);
+        let ac_lon = ang.ac_deg.map(|v| drac_angle_lon("Ac").unwrap_or(v));
+        let ds_lon = ang.ds_deg.map(|v| drac_angle_lon("Ds").unwrap_or(v));
+        let vx_lon = ang.vx_deg.map(|v| drac_angle_lon("Vx").unwrap_or(v));
+        let ax_lon = ang.ax_deg.map(|v| drac_angle_lon("Ax").unwrap_or(v));
+        let nn_lon = nn_deg.map(|v| {
+            let dl = match nodes_mode {
+                NodesMode::Mean => "MeanNn",
+                NodesMode::True => "TrueNn",
+            };
+            drac_node_lon(dl).unwrap_or(v)
+        });
+        let sn_lon = sn_deg.map(|v| {
+            let dl = match nodes_mode {
+                NodesMode::Mean => "MeanSn",
+                NodesMode::True => "TrueSn",
+            };
+            drac_node_lon(dl).unwrap_or(v)
+        });
+        let lil_lon = lil_deg.map(|v| {
+            let dl = match lilith_mode {
+                LilithMode::Mean => "MeanLilith",
+                LilithMode::True => "TrueLilith",
+            };
+            drac_lilith_lon(dl).unwrap_or(v)
+        });
+        let pri_lon = pri_deg.map(|v| {
+            let dl = match lilith_mode {
+                LilithMode::Mean => "MeanPriapus",
+                LilithMode::True => "TruePriapus",
+            };
+            drac_lilith_lon(dl).unwrap_or(v)
+        });
+
         println!();
         println!("{:<8} {:>lon_w$}", "Point", "Longitude", lon_w = lon_w);
         println!("{}", "-".repeat(8 + 1 + lon_w));
         // Display labels use the standardized 2-letter UPPERlower convention:
-        // As / Ds (Ascendant axis), Mc / Ic (meridian axis), Vx / Ax (vertex
+        // Ac / Ds (Ascendant axis), Mc / Ic (meridian axis), Vx / Ax (vertex
         // axis), Nn / Sn (lunar nodes).
         for (label, lon) in [
-            ("Mc", Some(ang.mc_deg)),
-            ("Ic", Some(ang.ic_deg)),
-            ("Ac", ang.ac_deg),
-            ("Ds", ang.ds_deg),
-            ("Vx", ang.vx_deg),
-            ("Ax", ang.ax_deg),
-            ("Nn", nn_deg),
-            ("Sn", sn_deg),
-            ("Lil", lil_deg),
-            ("Pri", pri_deg),
+            ("Mc", Some(mc_lon)),
+            ("Ic", Some(ic_lon)),
+            ("Ac", ac_lon),
+            ("Ds", ds_lon),
+            ("Vx", vx_lon),
+            ("Ax", ax_lon),
+            ("Nn", nn_lon),
+            ("Sn", sn_lon),
+            ("Lil", lil_lon),
+            ("Pri", pri_lon),
         ] {
             if let Some(lon_deg) = lon {
                 println!("{:<8} {}", label, format_zodiac_lon(lon_deg, fmt));
+                antiscia_pts.push((label, lon_deg));
             }
         }
     }
@@ -1740,12 +1921,12 @@ fn print_text(
         println!();
         println!("{:<16} {:>lon_w$}", "Star", "Longitude", lon_w = lon_w);
         println!("{}", "-".repeat(16 + 1 + lon_w));
-        for star in &computed.stars {
-            println!(
-                "{:<16} {}",
-                star.name,
-                format_zodiac_lon(star.position.longitude_deg, fmt)
-            );
+        for (idx, star) in computed.stars.iter().enumerate() {
+            let lon_deg = drac
+                .as_ref()
+                .and_then(|d| d.stars.get(idx).map(|&(_, l)| l))
+                .unwrap_or(star.position.longitude_deg);
+            println!("{:<16} {}", star.name, format_zodiac_lon(lon_deg, fmt));
         }
     }
 
@@ -1763,24 +1944,57 @@ fn print_text(
         // Ordering: Fortune, Spirit, Exaltation always; downstream lots in
         // the captain-specified sequence Necessity → Eros → Courage →
         // Victory → Nemesis, each only when its planet is present.
-        let mut rows: Vec<(&str, f64)> = vec![
+        let base_lots: &[(&str, f64)] = &[
             ("Fortune", l.fortune_deg),
             ("Spirit", l.spirit_deg),
             ("Exaltation", l.exaltation_deg),
         ];
-        for (label, val) in [
+        let opt_lots: &[(&str, Option<f64>)] = &[
             ("Necessity", l.necessity_deg),
             ("Eros", l.eros_deg),
             ("Courage", l.courage_deg),
             ("Victory", l.victory_deg),
             ("Nemesis", l.nemesis_deg),
-        ] {
+        ];
+        let drac_lot_lon = |label: &str, tropical: f64| -> f64 {
+            drac.as_ref()
+                .and_then(|d| d.lots.iter().find(|&&(l, _)| l == label).map(|&(_, v)| v))
+                .unwrap_or(tropical)
+        };
+        let mut rows: Vec<(&str, f64)> = base_lots
+            .iter()
+            .map(|&(label, v)| (label, drac_lot_lon(label, v)))
+            .collect();
+        for &(label, val) in opt_lots {
             if let Some(v) = val {
-                rows.push((label, v));
+                rows.push((label, drac_lot_lon(label, v)));
             }
         }
         for (label, lon_deg) in rows {
             println!("{:<11} {}", label, format_zodiac_lon(lon_deg, fmt));
+        }
+    }
+
+    // Antiscion / contra-antiscion sub-table — gated behind --antiscia.
+    // Applied to whatever longitudes were rendered above (tropical or draconic).
+    if show_antiscia && !antiscia_pts.is_empty() {
+        let ant_lon_w = lon_col_width(fmt);
+        println!();
+        println!(
+            "{:<8} {:>ant_lon_w$} {:>ant_lon_w$}",
+            "Point",
+            "Antiscion",
+            "C-Antiscion",
+            ant_lon_w = ant_lon_w,
+        );
+        println!("{}", "-".repeat(8 + 1 + ant_lon_w + 1 + ant_lon_w));
+        for (label, ant, con) in antiscia_rows(&antiscia_pts) {
+            println!(
+                "{:<8} {} {}",
+                label,
+                format_zodiac_lon(ant, fmt),
+                format_zodiac_lon(con, fmt),
+            );
         }
     }
 
@@ -1792,6 +2006,10 @@ fn print_text(
             lp.synodic_arc_deg,
             lp.lunation_day
         );
+    }
+
+    if let Some(t) = &computed.tithi {
+        println!("{}", tithi_line(t));
     }
 
     if !computed.houses.is_empty() {
@@ -2766,5 +2984,53 @@ mod tests {
         assert!(!present_integrity_failed(&[missing.clone(), ok.clone()]));
         // Present-integrity: a present corrupt file fails even amid absences.
         assert!(present_integrity_failed(&[missing, corrupt]));
+    }
+
+    #[test]
+    fn tithi_line_formats_name_index_pct() {
+        use pericynthion::coords::tithi::tithi;
+        // tithi(6.0, 0.0): arc=6°, index=1 (Pratipada), fraction=0.5 → 50%
+        let t = tithi(6.0, 0.0);
+        assert_eq!(super::tithi_line(&t), "Tithi: Pratipada (#1) 50%");
+    }
+
+    #[test]
+    fn tithi_line_amavasya() {
+        use pericynthion::coords::tithi::tithi;
+        // tithi(348.0, 0.0): arc=348°, index=30 (Amavasya), fraction=0.0 → 0%
+        let t = tithi(348.0, 0.0);
+        assert_eq!(super::tithi_line(&t), "Tithi: Amavasya (#30) 0%");
+    }
+
+    /// `antiscia_rows` must produce `(label, antiscion_deg, contra_antiscion_deg)`
+    /// triples matching the pericynthion reflections.
+    ///
+    /// Sun at 0°: antiscion = 180°, contra = 0°.
+    /// Moon at 90°: antiscion = 90°, contra = 270°.
+    #[test]
+    fn antiscia_rows_synthetic() {
+        let points: &[(&str, f64)] = &[("Sun", 0.0), ("Moon", 90.0)];
+        let rows = super::antiscia_rows(points);
+        assert_eq!(rows.len(), 2);
+        let (ref label0, ant0, con0) = rows[0];
+        assert_eq!(label0, "Sun");
+        assert!(
+            (ant0 - 180.0).abs() < 1e-12,
+            "Sun antiscion expected 180°, got {ant0}"
+        );
+        assert!(
+            (con0 - 0.0).abs() < 1e-12,
+            "Sun contra expected 0°, got {con0}"
+        );
+        let (ref label1, ant1, con1) = rows[1];
+        assert_eq!(label1, "Moon");
+        assert!(
+            (ant1 - 90.0).abs() < 1e-12,
+            "Moon antiscion expected 90°, got {ant1}"
+        );
+        assert!(
+            (con1 - 270.0).abs() < 1e-12,
+            "Moon contra expected 270°, got {con1}"
+        );
     }
 }

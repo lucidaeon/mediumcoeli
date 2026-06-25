@@ -13,9 +13,9 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.6.0" }
-astrogram = { path = "crates/astrogram", version = "0.2.3" }
-jzod = { path = "crates/jzod", version = "0.4.0" }
+pericynthion = { path = "crates/pericynthion", version = "0.7.0" }
+astrogram = { path = "crates/astrogram", version = "0.3.0" }
+jzod = { path = "crates/jzod", version = "0.5.0" }
 wristband = { path = "crates/wristband", version = "0.0.2" }
 
 # Errors

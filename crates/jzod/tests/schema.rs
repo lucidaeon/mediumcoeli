@@ -19,10 +19,14 @@ fn full_chart() -> Chart {
         retrograde: false,
         distance_au: Some(0.986),
         house,
+        antiscion: None,
+        contra_antiscion: None,
     };
     let asc = Angle {
         id: AngleId::Ascendant,
         position: Position::from_longitude(58.261_667_55),
+        antiscion: None,
+        contra_antiscion: None,
     };
 
     let mut houses = jzod::Houses::new();
@@ -58,6 +62,7 @@ fn full_chart() -> Chart {
         zodiac: Zodiac::Tropical,
         coordinate_system: CoordinateSystem::Geocentric,
         sect: Some(Sect::Diurnal),
+        interp_sect_twilight: None,
         ephemeris: Ephemeris {
             source: "DE441".into(),
             calculated_at: "2026-06-08T20:45:18Z".into(),
@@ -72,6 +77,7 @@ fn full_chart() -> Chart {
         },
         houses,
         lunar_phase: None,
+        tithi: None,
         nested: vec![],
     }
 }

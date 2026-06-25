@@ -169,6 +169,17 @@ pub struct LunarPhase {
     pub lunation_day: u8,
 }
 
+/// Vedic tithi (lunar day): 30-fold division of the synodic month.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tithi {
+    /// 1-indexed tithi number, range 1–30.
+    pub index: u8,
+    /// Traditional name (e.g. "Pratipada", "Purnima", "Amavasya").
+    pub name: String,
+    /// Progress through the current tithi, range [0.0, 1.0).
+    pub fraction: f64,
+}
+
 /// A single JZOD chart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Chart {
@@ -195,6 +206,14 @@ pub struct Chart {
     /// Sect, when computed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sect: Option<Sect>,
+    /// Twilight-chart flag. `true` when the Sun is below the horizon (`sect`
+    /// stays **nocturnal**) but within 6° of the Ascendant or 3° of the
+    /// Descendant, so the chart *may behave* diurnally. Supplements — never
+    /// replaces — [`sect`](Chart::sect): a twilight chart is
+    /// `sect: nocturnal` + `interp_sect_twilight: true`. Omitted when absent
+    /// (heliocentric charts, or Ac/Sun unavailable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interp_sect_twilight: Option<bool>,
     /// Ephemeris provenance.
     pub ephemeris: Ephemeris,
     /// Computed placements.
@@ -204,6 +223,9 @@ pub struct Chart {
     pub houses: Houses,
     /// Lunar phase. `null` for heliocentric charts or when Sun/Moon are absent.
     pub lunar_phase: Option<LunarPhase>,
+    /// Vedic tithi. Absent for heliocentric charts or when Sun/Moon are absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tithi: Option<Tithi>,
     /// Nested derivative/associated charts. Omitted when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nested: Vec<Chart>,
@@ -300,8 +322,20 @@ mod tests {
     }
 
     #[test]
-    fn chart_renders_type_key_and_null_lunar_phase() {
-        let chart = Chart {
+    fn tithi_serializes_as_object() {
+        let t = Tithi {
+            index: 1,
+            name: "Pratipada".into(),
+            fraction: 0.5,
+        };
+        let v = serde_json::to_value(&t).unwrap();
+        assert_eq!(v["index"], 1);
+        assert_eq!(v["name"], "Pratipada");
+        assert!((v["fraction"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    }
+
+    fn sample_chart() -> Chart {
+        Chart {
             uid: "u".into(),
             chart_type: ChartType::Radix,
             name: None,
@@ -329,6 +363,7 @@ mod tests {
             zodiac: Zodiac::Tropical,
             coordinate_system: CoordinateSystem::Geocentric,
             sect: None,
+            interp_sect_twilight: None,
             ephemeris: Ephemeris {
                 source: "test".into(),
                 calculated_at: "1970-01-01T00:00:00Z".into(),
@@ -338,14 +373,46 @@ mod tests {
             placements: crate::placement::Placements::default(),
             houses: crate::house::Houses::new(),
             lunar_phase: None,
+            tithi: None,
             nested: vec![],
-        };
-        let v = serde_json::to_value(&chart).unwrap();
+        }
+    }
+
+    #[test]
+    fn chart_renders_type_key_and_null_lunar_phase() {
+        let v = serde_json::to_value(sample_chart()).unwrap();
         assert_eq!(v["type"], "radix");
         assert!(v.get("chart_type").is_none());
         assert!(v["lunar_phase"].is_null()); // present and null
+        assert!(v.get("tithi").is_none()); // absent when None
         assert!(v.get("houses").is_none()); // empty houses skipped
         assert!(v.get("sect").is_none());
         assert!(v.get("nested").is_none());
+        assert!(v.get("interp_sect_twilight").is_none()); // absent when None
+    }
+
+    #[test]
+    fn interp_sect_twilight_omitted_when_none() {
+        let v = serde_json::to_value(sample_chart()).unwrap();
+        assert!(v.get("interp_sect_twilight").is_none());
+    }
+
+    #[test]
+    fn interp_sect_twilight_serializes_beside_sect_when_set() {
+        let mut c = sample_chart();
+        c.sect = Some(Sect::Diurnal);
+        c.interp_sect_twilight = Some(true);
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["sect"], "diurnal");
+        assert_eq!(v["interp_sect_twilight"], true);
+    }
+
+    #[test]
+    fn interp_sect_twilight_round_trips() {
+        let mut c = sample_chart();
+        c.interp_sect_twilight = Some(false);
+        let s = serde_json::to_string(&c).unwrap();
+        let back: Chart = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.interp_sect_twilight, Some(false));
     }
 }

@@ -33,6 +33,34 @@ pub fn sect(sun_lon_rad: f64, ac_rad: f64) -> Sect {
     }
 }
 
+/// Shortest arc (unsigned) between two angles in radians, result in [0, π].
+fn arc_sep(a: f64, b: f64) -> f64 {
+    ((a - b + PI).rem_euclid(TAU) - PI).abs()
+}
+
+/// Interpretive flag: returns `true` when the chart is in the night hemisphere
+/// AND the Sun lies within 6° of the Ascendant **or** within 3° of the
+/// Descendant.
+///
+/// Such a chart is called a **twilight chart** — it may behave diurnally in
+/// practice, but its [`Sect`] classification remains [`Sect::Night`]. This flag
+/// is NEVER applied to Hermetic lot calculations; lots use the plain, binary
+/// [`sect`] result.
+///
+/// The flag is absent (caller returns `None`) whenever the Ascendant or Sun is
+/// unavailable, and is meaningless for heliocentric charts.
+///
+/// Inputs are radians.
+#[must_use]
+pub fn is_twilight_chart(sun_lon_rad: f64, ac_rad: f64) -> bool {
+    if sect(sun_lon_rad, ac_rad) == Sect::Day {
+        return false;
+    }
+    let dsc = (ac_rad + PI).rem_euclid(TAU);
+    arc_sep(sun_lon_rad, ac_rad) <= 6.0_f64.to_radians()
+        || arc_sep(sun_lon_rad, dsc) <= 3.0_f64.to_radians()
+}
+
 /// Base lot formula: `(ac + a − b) mod 2π`.
 #[must_use]
 pub fn lot_rad(ac: f64, a: f64, b: f64) -> f64 {
@@ -253,4 +281,74 @@ mod tests {
     // Reference-chart Fortune tests against refchart's resolved coords live
     // in `tests/acceptance_refchart.rs` so the constants stay in a single
     // place.
+
+    // ── Twilight flag (6° ASC / 3° DSC) ─────────────────────────────────────
+    // Geometry: ASC=180° (Libra), so DSC=0° (Aries). Lower hemisphere is the
+    // ASC→IC→DSC arc (180°→270°→0°).
+    //
+    // Key invariant: sect() always stays binary — is_twilight_chart() is the
+    // separate predicate. A twilight chart is NIGHT for sect purposes.
+
+    #[test]
+    fn upper_hemisphere_is_day_and_not_twilight() {
+        let ac = 180_f64.to_radians();
+        let sun = 90_f64.to_radians(); // at MC, well above horizon
+        assert_eq!(sect(sun, ac), Sect::Day);
+        assert!(
+            !is_twilight_chart(sun, ac),
+            "day-by-hemisphere is never twilight"
+        );
+    }
+
+    #[test]
+    fn below_horizon_within_6deg_of_asc_is_twilight_but_stays_night() {
+        let ac = 180_f64.to_radians();
+        let sun = 185_f64.to_radians(); // 5° past ASC into lower hemisphere
+        assert_eq!(sect(sun, ac), Sect::Night, "sect stays Night in grace band");
+        assert!(
+            is_twilight_chart(sun, ac),
+            "within 6° ASC band → twilight flag"
+        );
+    }
+
+    #[test]
+    fn below_horizon_just_outside_6deg_of_asc_is_night_not_twilight() {
+        let ac = 180_f64.to_radians();
+        let sun = 187_f64.to_radians(); // 7° below ASC, outside the 6° band
+        assert_eq!(sect(sun, ac), Sect::Night);
+        assert!(!is_twilight_chart(sun, ac));
+    }
+
+    #[test]
+    fn below_horizon_within_3deg_of_dsc_is_twilight_but_stays_night() {
+        let ac = 180_f64.to_radians();
+        let sun = 358_f64.to_radians(); // 2° short of DSC(0°), lower-hemisphere side
+        assert_eq!(
+            sect(sun, ac),
+            Sect::Night,
+            "sect stays Night in DSC grace band"
+        );
+        assert!(
+            is_twilight_chart(sun, ac),
+            "within 3° DSC band → twilight flag"
+        );
+    }
+
+    #[test]
+    fn below_horizon_just_outside_3deg_of_dsc_is_night_not_twilight() {
+        let ac = 180_f64.to_radians();
+        let sun = 356_f64.to_radians(); // 4° short of DSC, outside the 3° band
+        assert_eq!(sect(sun, ac), Sect::Night);
+        assert!(!is_twilight_chart(sun, ac));
+    }
+
+    #[test]
+    fn dsc_band_is_only_3deg_not_6deg() {
+        // 5° from DSC: inside 6° but the DSC band is only 3°, and it is below
+        // the horizon, so it must remain Night and not be flagged twilight.
+        let ac = 180_f64.to_radians();
+        let sun = 355_f64.to_radians(); // 5° short of DSC(0°)
+        assert_eq!(sect(sun, ac), Sect::Night);
+        assert!(!is_twilight_chart(sun, ac));
+    }
 }

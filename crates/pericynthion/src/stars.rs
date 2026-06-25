@@ -1,8 +1,9 @@
 //! Yale Bright Star Catalogue (BSC5) — static lookup table and fixed-star engine.
 //!
-//! [`BSC5_CATALOG`] is generated at build time from `catalog.gz` (Yale BSC5P,
-//! Hoffleit & Warren 1991). If the file has not been downloaded it is empty;
-//! run `just fetch bsc5` then rebuild.
+//! [`BSC5_CATALOG`] is parsed once (via [`std::sync::LazyLock`]) from the
+//! catalogue text inlined in the private `bsc5_catalogue` module (Yale BSC5P, Hoffleit &
+//! Warren 1991). The data is baked into the source — there is no `catalog.gz`
+//! in the tree and no decompression at build or run time.
 //!
 //! J2000 ICRS coordinates. `pm_ra` is the projected proper motion
 //! cos(Dec)·dRA/dt (arcsec/yr), matching the BSC5 convention.
@@ -92,6 +93,14 @@ pub const NOTABLE: &[(&str, u16)] = &[
     ("Scheat", 8775),
     ("Markab", 8781),
 ];
+
+/// The embedded CDS `ReadMe` for the Bright Star Catalogue (V/50): the
+/// authoritative byte-by-byte record format and provenance for the data behind
+/// [`BSC5_CATALOG`]. Returned verbatim from the private `bsc5_catalogue` module.
+#[must_use]
+pub fn catalogue_provenance() -> &'static str {
+    crate::bsc5_catalogue::BSC5_README
+}
 
 /// Markdown section summarising BSC5 catalog contents for `docs/placements.md`.
 #[must_use]
@@ -766,7 +775,60 @@ fn icrs_unit_vector(ra_deg: f64, dec_deg: f64) -> Vector3 {
     [cos_dec * ra.cos(), cos_dec * ra.sin(), dec.sin()]
 }
 
-include!(concat!(env!("OUT_DIR"), "/bsc5_generated.rs"));
+/// The Yale Bright Star Catalogue, parsed once from the embedded raw text in
+/// the private `bsc5_catalogue` module (`BSC5_RAW`). Indexed lookups live on [`BscEntry`].
+pub static BSC5_CATALOG: std::sync::LazyLock<Vec<BscEntry>> = std::sync::LazyLock::new(parse_bsc5);
+
+/// Slice a fixed-width column `[a, b)` from a record line, clamping the end to
+/// the line length. Records are pure ASCII, so byte and char offsets coincide.
+fn col(line: &'static str, a: usize, b: usize) -> &'static str {
+    line.get(a..b.min(line.len())).unwrap_or("")
+}
+
+/// Parse the inlined BSC5 catalogue into typed entries. Byte offsets follow the
+/// CDS V/50 record layout documented in [`crate::bsc5_catalogue::BSC5_README`].
+fn parse_bsc5() -> Vec<BscEntry> {
+    crate::bsc5_catalogue::BSC5_RAW
+        .lines()
+        .filter_map(parse_bsc5_line)
+        .collect()
+}
+
+/// Parse one BSC5 record line, or `None` for headers/blank lines and records
+/// without J2000 coordinates (the handful of non-stellar objects).
+fn parse_bsc5_line(line: &'static str) -> Option<BscEntry> {
+    if line.len() < 90 {
+        return None;
+    }
+    let hr: u16 = col(line, 0, 4).trim().parse().ok()?;
+    let name = col(line, 4, 14).trim();
+    // J2000 RA (bytes 75–82) and Dec (sign at 83, bytes 84–89).
+    let ra_h: f64 = col(line, 75, 77).trim().parse().ok()?;
+    let ra_m: f64 = col(line, 77, 79).trim().parse().ok()?;
+    let ra_s: f64 = col(line, 79, 83).trim().parse().ok()?;
+    let dec_sign = line.as_bytes()[83];
+    let dec_d: f64 = col(line, 84, 86).trim().parse().ok()?;
+    let dec_m: f64 = col(line, 86, 88).trim().parse().ok()?;
+    let dec_s: f64 = col(line, 88, 90).trim().parse().ok()?;
+    // V magnitude (bytes 102–106) and proper motion (RA 148–153, Dec 154–159).
+    let vmag = col(line, 102, 107).trim().parse().ok();
+    let pm_ra = col(line, 148, 154).trim().parse().ok();
+    let pm_dec = col(line, 154, 160).trim().parse().ok();
+
+    let ra_deg = (ra_h + ra_m / 60.0 + ra_s / 3600.0) * 15.0;
+    let dec_abs = dec_d + dec_m / 60.0 + dec_s / 3600.0;
+    let dec_deg = if dec_sign == b'-' { -dec_abs } else { dec_abs };
+
+    Some(BscEntry {
+        hr,
+        name,
+        ra_deg,
+        dec_deg,
+        vmag,
+        pm_ra,
+        pm_dec,
+    })
+}
 
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
@@ -832,6 +894,24 @@ mod fixed_star_tests {
 #[allow(clippy::float_cmp)]
 mod resolve_tests {
     use super::*;
+
+    #[test]
+    fn embedded_catalogue_parses_in_full_with_provenance() {
+        // The inlined BSC5 raw text must parse to the full ~9110-record catalogue
+        // (a handful of non-stellar rows lack coordinates and are dropped).
+        let n = BSC5_CATALOG.len();
+        assert!(
+            (9000..=9110).contains(&n),
+            "expected the full BSC5, parsed {n} entries"
+        );
+        // Provenance ships alongside the data.
+        assert!(catalogue_provenance().contains("Bright Star Catalogue"));
+        // Spot-check a landmark record survived parsing.
+        assert_eq!(
+            BscEntry::by_hr(2491).map(|e| e.name.is_empty()),
+            Some(false)
+        ); // Sirius
+    }
 
     #[test]
     fn resolve_by_common_name_case_insensitive() {
@@ -919,9 +999,6 @@ mod resolve_tests {
 
     #[test]
     fn resolved_star_position_returns_valid_ecliptic() {
-        if BSC5_CATALOG.is_empty() {
-            return; // catalog not fetched, skip
-        }
         let r = resolve_star("Sirius").unwrap();
         let pos = r.position(2_451_545.0);
         assert!((0.0..360.0).contains(&pos.longitude_deg));
@@ -930,18 +1007,12 @@ mod resolve_tests {
 
     #[test]
     fn display_name_prefers_common_over_bsc5_designation() {
-        if BSC5_CATALOG.is_empty() {
-            return;
-        }
         let r = resolve_star("algol").unwrap();
         assert_eq!(r.display_name(), "Algol"); // common name, not "26Bet Per"
     }
 
     #[test]
     fn named_bsc5_entries_only_nonempty_names() {
-        if BSC5_CATALOG.is_empty() {
-            return;
-        }
         let named: Vec<_> = named_bsc5_entries().collect();
         assert!(!named.is_empty());
         assert!(named.iter().all(|e| !e.name.is_empty()));

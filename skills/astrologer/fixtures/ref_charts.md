@@ -1,6 +1,6 @@
 # Reference Charts
 
-The following conatains human readable test input data and corresponding verification data.
+The following contains human readable test input data and corresponding verification data.
 
 Reference charts are constructed with the following particulars:
 

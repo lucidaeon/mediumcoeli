@@ -111,7 +111,9 @@ fn zodiac_u8(z: &Zodiac) -> u8 {
 
 fn coord_system_u8(cs: &CoordinateSystem) -> u8 {
     match cs {
-        CoordinateSystem::Geocentric => 1,
+        // Mirror the encoder: SFcht has no topocentric encoding, so topocentric
+        // shares the geocentric byte.
+        CoordinateSystem::Geocentric | CoordinateSystem::Topocentric => 1,
         CoordinateSystem::Heliocentric => 2,
     }
 }

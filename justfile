@@ -183,16 +183,37 @@ fetch SOURCE:
 	        done
 	        ;;
 	    bsc5)
-	        # Yale Bright Star Catalogue 5th Revised Ed. (Hoffleit & Warren 1991).
-	        # 9110 records, 197 bytes each. Used by pericynthion build.rs to
-	        # generate the static BSC5_CATALOG array at compile time.
-	        wget \
-	            --no-clobber \
-	            --retry-connrefused=on \
-	            --read-timeout=20 \
-	            --timeout=15 \
-	            --tries=3 \
-	            https://cdsarc.cds.unistra.fr/ftp/cats/V/50/catalog.gz
+	        # Yale Bright Star Catalogue 5th Revised Ed. (Hoffleit & Warren 1991),
+	        # CDS V/50. These are the regeneration inputs for the inlined
+	        # crates/pericynthion/src/bsc5_catalogue.rs: the catalogue records
+	        # (catalog.gz, ~9110 records) and the CDS ReadMe (record format +
+	        # provenance). Both land gitignored in the workspace root; after
+	        # fetching, re-inline their contents into bsc5_catalogue.rs verbatim.
+	        #
+	        # The HTTPS host (cdsarc.cds.unistra.fr) now sits behind an anti-bot JS
+	        # wall that serves an HTML challenge to CLI downloaders — wget happily
+	        # saved that page as catalog.gz. We pull over plain FTP from the
+	        # u-strasbg mirror (no bot wall) and verify catalog.gz is real gzip,
+	        # failing loudly rather than producing a corrupt regeneration input.
+	        if [ -f catalog.gz ] && gzip -t catalog.gz 2>/dev/null; then
+	            echo "catalog.gz already present and valid — skipping"
+	        else
+	            rm -f catalog.gz catalog.gz.aria2
+	            aria2c -o catalog.gz --connect-timeout=15 --max-tries=3 --retry-wait=2 \
+	                --allow-overwrite=true --auto-file-renaming=false \
+	                "ftp://cdsarc.u-strasbg.fr/cats/V/50/catalog.gz"
+	            if ! gzip -t catalog.gz 2>/dev/null; then
+	                echo "ERROR: catalog.gz is not valid gzip (mirror down/blocked); removing" >&2
+	                rm -f catalog.gz
+	                exit 1
+	            fi
+	            echo "catalog.gz fetched + verified ($(gzip -dc catalog.gz | wc -c) bytes uncompressed)"
+	        fi
+	        rm -f ReadMe ReadMe.aria2
+	        aria2c -o ReadMe --connect-timeout=15 --max-tries=3 --retry-wait=2 \
+	            --allow-overwrite=true --auto-file-renaming=false \
+	            "ftp://cdsarc.u-strasbg.fr/cats/V/50/ReadMe"
+	        echo "ReadMe fetched ($(wc -c < ReadMe) bytes)"
 	        ;;
 	    *)
 	        echo "unknown fetch source: {{SOURCE}}" >&2

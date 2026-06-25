@@ -31,6 +31,9 @@ Done: is defined as written, tested, and documented.
 
 In Pericynthion's catalogue: Pericynthion knows about a celestial body or object. This holds regardless of whether the codebase has constants or metadata wired up for it, and regardless of whether the required ephemeris data is present to compute its position in a chart. We know where it is, or know **how** to know where it is.
 
+Normalize (record fields): Read records, replace any non-cp1252 chars with a cp1252 equivalent, and
+write the record back in situ.
+
 # Skills
 
 Always use the /astrologer skill or integrated [Astrologer skill](./skills/astrologer/SKILL.md). 

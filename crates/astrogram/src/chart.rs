@@ -244,12 +244,15 @@ impl Zodiac {
 #[serde(rename_all = "snake_case")]
 pub enum CoordinateSystem {
     Geocentric,
+    Topocentric,
     Heliocentric,
 }
 
 impl From<u8> for CoordinateSystem {
     fn from(n: u8) -> Self {
         match n {
+            // SFcht never writes 3; this is a defensive decode mapping only.
+            3 => Self::Topocentric,
             2 => Self::Heliocentric,
             _ => Self::Geocentric,
         }
@@ -259,12 +262,14 @@ impl From<u8> for CoordinateSystem {
 impl CoordinateSystem {
     /// Parse a coordinate-system slug into a [`CoordinateSystem`] variant.
     ///
-    /// Accepts `"geocentric"` / `"geo"` and `"heliocentric"` / `"helio"` (case-insensitive).
-    /// Returns `None` for unrecognised slugs.
+    /// Accepts `"geocentric"` / `"geo"`, `"topocentric"` / `"topo"`, and
+    /// `"heliocentric"` / `"helio"` (case-insensitive). Returns `None` for
+    /// unrecognised slugs.
     #[must_use]
     pub fn from_str_slug(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "geocentric" | "geo" => Some(Self::Geocentric),
+            "topocentric" | "topo" => Some(Self::Topocentric),
             "heliocentric" | "helio" => Some(Self::Heliocentric),
             _ => None,
         }
@@ -379,6 +384,21 @@ mod parse_tests {
             CoordinateSystem::from_str_slug("helio"),
             Some(CoordinateSystem::Heliocentric)
         );
+        assert_eq!(
+            CoordinateSystem::from_str_slug("topo"),
+            Some(CoordinateSystem::Topocentric)
+        );
+        assert_eq!(
+            CoordinateSystem::from_str_slug("topocentric"),
+            Some(CoordinateSystem::Topocentric)
+        );
         assert_eq!(CoordinateSystem::from_str_slug("sideways"), None);
+    }
+
+    #[test]
+    fn coordinate_system_from_u8() {
+        assert_eq!(CoordinateSystem::from(1u8), CoordinateSystem::Geocentric);
+        assert_eq!(CoordinateSystem::from(2u8), CoordinateSystem::Heliocentric);
+        assert_eq!(CoordinateSystem::from(3u8), CoordinateSystem::Topocentric);
     }
 }

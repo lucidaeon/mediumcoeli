@@ -26,7 +26,7 @@
 //! +118  char[32]  source_rating
 //! +151  u8        house_system
 //! +152  u8        zodiac
-//! +157  u8        coordinate_system
+//! +157  u8        coordinate_system (1=geocentric, 2=heliocentric; topocentric is not representable and is written as geocentric)
 //! +158  u16 LE    record_index (1-based)
 //! +162  char[50]  secondary_name
 //! +292  u32 LE    sub_chart_count
@@ -365,7 +365,9 @@ fn zodiac_to_u8(z: Zodiac) -> u8 {
 
 fn coordinate_system_to_u8(cs: CoordinateSystem) -> u8 {
     match cs {
-        CoordinateSystem::Geocentric => 1,
+        // SFcht has no topocentric encoding; topocentric falls back to the
+        // geocentric byte (lossy, see WRITE_CAPS note).
+        CoordinateSystem::Geocentric | CoordinateSystem::Topocentric => 1,
         CoordinateSystem::Heliocentric => 2,
     }
 }
@@ -533,5 +535,12 @@ mod cap_roundtrip {
         let mut declared: Vec<ChartField> = WRITE_CAPS.fields().to_vec();
         declared.sort_by_key(|f| format!("{f:?}"));
         assert_eq!(got, declared, "sfcht WRITE_CAPS disagrees with round-trip");
+    }
+
+    #[test]
+    fn sfcht_topocentric_falls_back_to_geocentric() {
+        // SFcht has no topocentric encoding; it is written as geocentric (byte 1).
+        assert_eq!(coordinate_system_to_u8(CoordinateSystem::Topocentric), 1);
+        assert_eq!(coordinate_system_to_u8(CoordinateSystem::Geocentric), 1);
     }
 }

@@ -23,7 +23,7 @@
 //! ```
 //!
 //! ```rust,ignore
-//! let chart = pericynthion::jzod::to_jzod_chart(&computed, birth, uid);
+//! let chart = pericynthion::jzod::to_jzod_chart(&computed, &birth, uid, None, false);
 //! println!("{}", jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart])));
 //! ```
 
@@ -157,10 +157,20 @@ pub fn house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
 /// - `birth` — civil date/time and location fields that accompany the chart.
 /// - `uid` — a pre-generated unique identifier (e.g. `uuid::Uuid::new_v4().to_string()`).
 ///   Passed in by the caller so that `pericynthion` does not depend on `uuid`.
+/// - `draconic_node` — when `Some(node_lon_deg)`, every placement longitude is
+///   projected into the draconic zodiac via
+///   [`crate::draconic::draconic_longitude`] and `chart.zodiac` is set to
+///   [`jzod::Zodiac::Draconic`]. When `None`, tropical longitudes are emitted
+///   and `chart.zodiac` is [`jzod::Zodiac::Tropical`].
+/// - `emit_antiscia` — when `true`, the `antiscion` and `contra_antiscion`
+///   optional fields on [`jzod::placement::Body`] and [`jzod::placement::Angle`]
+///   are populated from [`crate::antiscia::antiscion`] /
+///   [`crate::antiscia::contra_antiscion`] applied to the *emitted* longitude
+///   (after any draconic projection). When `false`, both fields are `None`.
 ///
 /// # Mapping notes
 ///
-/// - **Zodiac** is always `Tropical` (the only zodiac this library computes).
+/// - **Zodiac**: `Tropical` when `draconic_node` is `None`; `Draconic` otherwise.
 /// - **Bodies**: speed and retrograde are read from `computed.bodies[i]`; no
 ///   recomputation is performed.
 /// - **Nodes / Lilith**: both mean and true variants are read from
@@ -172,7 +182,13 @@ pub fn house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
 ///   [`jzod::time::calculated_at_now`].
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) -> jzod::Chart {
+pub fn to_jzod_chart(
+    computed: &ComputedChart,
+    birth: &ChartBirth,
+    uid: String,
+    draconic_node: Option<f64>,
+    emit_antiscia: bool,
+) -> jzod::Chart {
     // ── Coordinate system ────────────────────────────────────────────────────
     let coord_system = match &computed.mode {
         crate::chart::CoordMode::Geocentric => jzod::CoordinateSystem::Geocentric,
@@ -180,13 +196,55 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
         crate::chart::CoordMode::Heliocentric => jzod::CoordinateSystem::Heliocentric,
     };
 
+    // ── Zodiac ───────────────────────────────────────────────────────────────
+    // Draconic when a node longitude is supplied; tropical otherwise.
+    let zodiac = if draconic_node.is_some() {
+        jzod::Zodiac::Draconic
+    } else {
+        jzod::Zodiac::Tropical
+    };
+
+    // ── Longitude projection ─────────────────────────────────────────────────
+    // When draconic_node is Some, every emitted longitude is shifted through
+    // draconic_longitude before conversion to a zodiacal Position.
+    let project_lon = |tropical_lon: f64| -> f64 {
+        match draconic_node {
+            Some(node) => crate::draconic::draconic_longitude(tropical_lon, node),
+            None => tropical_lon,
+        }
+    };
+
+    // ── Antiscia helpers ─────────────────────────────────────────────────────
+    // Build antiscion/contra_antiscion Positions from an *emitted* longitude.
+    let make_antiscia =
+        |emitted_lon: f64| -> (Option<jzod::coord::Position>, Option<jzod::coord::Position>) {
+            if emit_antiscia {
+                (
+                    Some(jzod::coord::Position::from_longitude(
+                        crate::antiscia::antiscion(emitted_lon),
+                    )),
+                    Some(jzod::coord::Position::from_longitude(
+                        crate::antiscia::contra_antiscion(emitted_lon),
+                    )),
+                )
+            } else {
+                (None, None)
+            }
+        };
+
     // ── Sect ─────────────────────────────────────────────────────────────────
     let jzod_sect = computed.sect.map(|s| match s {
         Sect::Day => jzod::Sect::Diurnal,
         Sect::Night => jzod::Sect::Nocturnal,
     });
 
+    // ── Civil-boundary twilight flag ──────────────────────────────────────────
+    // Propagated verbatim from ComputedChart; None when sect was not computed.
+    let interp_sect_twilight = computed.interp_sect_twilight;
+
     // ── House assignment helper ──────────────────────────────────────────────
+    // House cusps are always computed in tropical coordinates; house number
+    // assignment uses the tropical longitude regardless of draconic projection.
     let body_houses = |lon_deg: f64| -> BTreeMap<String, u8> {
         let mut map = BTreeMap::new();
         for (sys, cusps) in &computed.houses {
@@ -205,28 +263,38 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
     let mut bodies: Vec<jzod::placement::Body> = computed
         .bodies
         .iter()
-        .map(|cb| jzod::placement::Body {
-            id: jzod::BodyId::from(cb.body),
-            position: jzod::coord::Position::from_longitude(cb.position.longitude_deg),
-            ecliptic_latitude: jzod::coord::Degrees8(cb.position.latitude_deg),
-            daily_speed: jzod::coord::Degrees8(cb.daily_speed_deg),
-            retrograde: cb.retrograde,
-            distance_au: Some(cb.position.distance_au),
-            house: body_houses(cb.position.longitude_deg),
+        .map(|cb| {
+            let emitted_lon = project_lon(cb.position.longitude_deg);
+            let (antiscion, contra_antiscion) = make_antiscia(emitted_lon);
+            jzod::placement::Body {
+                id: jzod::BodyId::from(cb.body),
+                position: jzod::coord::Position::from_longitude(emitted_lon),
+                ecliptic_latitude: jzod::coord::Degrees8(cb.position.latitude_deg),
+                daily_speed: jzod::coord::Degrees8(cb.daily_speed_deg),
+                retrograde: cb.retrograde,
+                distance_au: Some(cb.position.distance_au),
+                house: body_houses(cb.position.longitude_deg),
+                antiscion,
+                contra_antiscion,
+            }
         })
         .collect();
     for ca in &computed.asteroids {
         let Some(id) = asteroid_naif_to_jzod_body_id(ca.naif_id) else {
             continue;
         };
+        let emitted_lon = project_lon(ca.position.longitude_deg);
+        let (antiscion, contra_antiscion) = make_antiscia(emitted_lon);
         bodies.push(jzod::placement::Body {
             id,
-            position: jzod::coord::Position::from_longitude(ca.position.longitude_deg),
+            position: jzod::coord::Position::from_longitude(emitted_lon),
             ecliptic_latitude: jzod::coord::Degrees8(ca.position.latitude_deg),
             daily_speed: jzod::coord::Degrees8(ca.daily_speed_deg),
             retrograde: ca.retrograde,
             distance_au: Some(ca.position.distance_au),
             house: body_houses(ca.position.longitude_deg),
+            antiscion,
+            contra_antiscion,
         });
     }
 
@@ -234,25 +302,45 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
     let mut angles_vec: Vec<jzod::Angle> = Vec::new();
     if let Some(a) = &computed.angles {
         if let Some(ac) = a.ac_deg {
+            let emitted_lon = project_lon(ac);
+            let (antiscion, contra_antiscion) = make_antiscia(emitted_lon);
             angles_vec.push(jzod::Angle {
                 id: jzod::AngleId::Ascendant,
-                position: jzod::coord::Position::from_longitude(ac),
+                position: jzod::coord::Position::from_longitude(emitted_lon),
+                antiscion,
+                contra_antiscion,
             });
         }
         if let Some(ds) = a.ds_deg {
+            let emitted_lon = project_lon(ds);
+            let (antiscion, contra_antiscion) = make_antiscia(emitted_lon);
             angles_vec.push(jzod::Angle {
                 id: jzod::AngleId::Descendant,
-                position: jzod::coord::Position::from_longitude(ds),
+                position: jzod::coord::Position::from_longitude(emitted_lon),
+                antiscion,
+                contra_antiscion,
             });
         }
-        angles_vec.push(jzod::Angle {
-            id: jzod::AngleId::Midheaven,
-            position: jzod::coord::Position::from_longitude(a.mc_deg),
-        });
-        angles_vec.push(jzod::Angle {
-            id: jzod::AngleId::ImumCoeli,
-            position: jzod::coord::Position::from_longitude(a.ic_deg),
-        });
+        {
+            let emitted_lon = project_lon(a.mc_deg);
+            let (antiscion, contra_antiscion) = make_antiscia(emitted_lon);
+            angles_vec.push(jzod::Angle {
+                id: jzod::AngleId::Midheaven,
+                position: jzod::coord::Position::from_longitude(emitted_lon),
+                antiscion,
+                contra_antiscion,
+            });
+        }
+        {
+            let emitted_lon = project_lon(a.ic_deg);
+            let (antiscion, contra_antiscion) = make_antiscia(emitted_lon);
+            angles_vec.push(jzod::Angle {
+                id: jzod::AngleId::ImumCoeli,
+                position: jzod::coord::Position::from_longitude(emitted_lon),
+                antiscion,
+                contra_antiscion,
+            });
+        }
     }
 
     // ── Points array: Vertex/Anti-Vertex, then Nodes, then Lilith ───────────
@@ -264,14 +352,14 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
         if let Some(vx) = a.vx_deg {
             points_vec.push(jzod::Point {
                 id: jzod::PointId::Vertex,
-                position: jzod::coord::Position::from_longitude(vx),
+                position: jzod::coord::Position::from_longitude(project_lon(vx)),
                 retrograde: false,
             });
         }
         if let Some(ax) = a.ax_deg {
             points_vec.push(jzod::Point {
                 id: jzod::PointId::AntiVertex,
-                position: jzod::coord::Position::from_longitude(ax),
+                position: jzod::coord::Position::from_longitude(project_lon(ax)),
                 retrograde: false,
             });
         }
@@ -281,22 +369,22 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
     if let Some(n) = &computed.nodes {
         points_vec.push(jzod::Point {
             id: jzod::PointId::NorthNodeMean,
-            position: jzod::coord::Position::from_longitude(n.mean_nn_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(n.mean_nn_deg)),
             retrograde: true, // mean node is always retrograde by construction
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::SouthNodeMean,
-            position: jzod::coord::Position::from_longitude(n.mean_sn_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(n.mean_sn_deg)),
             retrograde: true,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::NorthNodeTrue,
-            position: jzod::coord::Position::from_longitude(n.true_nn_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(n.true_nn_deg)),
             retrograde: n.true_retrograde,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::SouthNodeTrue,
-            position: jzod::coord::Position::from_longitude(n.true_sn_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(n.true_sn_deg)),
             retrograde: n.true_retrograde,
         });
     }
@@ -305,22 +393,22 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
     if let Some(l) = &computed.lilith {
         points_vec.push(jzod::Point {
             id: jzod::PointId::BlackMoonLilithMean,
-            position: jzod::coord::Position::from_longitude(l.mean_lilith_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.mean_lilith_deg)),
             retrograde: false, // mean Lilith is always prograde
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::PriapusMean,
-            position: jzod::coord::Position::from_longitude(l.mean_priapus_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.mean_priapus_deg)),
             retrograde: false,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::BlackMoonLilithTrue,
-            position: jzod::coord::Position::from_longitude(l.true_lilith_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.true_lilith_deg)),
             retrograde: l.true_retrograde,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::PriapusTrue,
-            position: jzod::coord::Position::from_longitude(l.true_priapus_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.true_priapus_deg)),
             retrograde: l.true_retrograde,
         });
     }
@@ -330,44 +418,44 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
     if let Some(l) = &computed.lots {
         lots_vec.push(jzod::Lot {
             id: jzod::LotId::LotOfFortune,
-            position: jzod::coord::Position::from_longitude(l.fortune_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.fortune_deg)),
         });
         lots_vec.push(jzod::Lot {
             id: jzod::LotId::LotOfSpirit,
-            position: jzod::coord::Position::from_longitude(l.spirit_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.spirit_deg)),
         });
         lots_vec.push(jzod::Lot {
             id: jzod::LotId::LotOfExaltation,
-            position: jzod::coord::Position::from_longitude(l.exaltation_deg),
+            position: jzod::coord::Position::from_longitude(project_lon(l.exaltation_deg)),
         });
         if let Some(d) = l.necessity_deg {
             lots_vec.push(jzod::Lot {
                 id: jzod::LotId::LotOfNecessity,
-                position: jzod::coord::Position::from_longitude(d),
+                position: jzod::coord::Position::from_longitude(project_lon(d)),
             });
         }
         if let Some(d) = l.eros_deg {
             lots_vec.push(jzod::Lot {
                 id: jzod::LotId::LotOfEros,
-                position: jzod::coord::Position::from_longitude(d),
+                position: jzod::coord::Position::from_longitude(project_lon(d)),
             });
         }
         if let Some(d) = l.courage_deg {
             lots_vec.push(jzod::Lot {
                 id: jzod::LotId::LotOfCourage,
-                position: jzod::coord::Position::from_longitude(d),
+                position: jzod::coord::Position::from_longitude(project_lon(d)),
             });
         }
         if let Some(d) = l.victory_deg {
             lots_vec.push(jzod::Lot {
                 id: jzod::LotId::LotOfVictory,
-                position: jzod::coord::Position::from_longitude(d),
+                position: jzod::coord::Position::from_longitude(project_lon(d)),
             });
         }
         if let Some(d) = l.nemesis_deg {
             lots_vec.push(jzod::Lot {
                 id: jzod::LotId::LotOfNemesis,
-                position: jzod::coord::Position::from_longitude(d),
+                position: jzod::coord::Position::from_longitude(project_lon(d)),
             });
         }
     }
@@ -406,6 +494,13 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
         lunation_day: lp.lunation_day,
     });
 
+    // ── Tithi ────────────────────────────────────────────────────────────────
+    let tithi = computed.tithi.as_ref().map(|t| jzod::Tithi {
+        index: t.index,
+        name: t.name.to_string(),
+        fraction: t.fraction,
+    });
+
     // ── Assemble the chart ───────────────────────────────────────────────────
     jzod::Chart {
         uid,
@@ -432,9 +527,10 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
                 longitude: birth.lon,
             },
         },
-        zodiac: jzod::Zodiac::Tropical,
+        zodiac,
         coordinate_system: coord_system,
         sect: jzod_sect,
+        interp_sect_twilight,
         ephemeris: jzod::Ephemeris {
             source: "DE441".to_string(),
             calculated_at: jzod::time::calculated_at_now(),
@@ -449,6 +545,7 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
         },
         houses: jzod_houses,
         lunar_phase,
+        tithi,
         nested: vec![],
     }
 }
@@ -459,6 +556,209 @@ pub fn to_jzod_chart(computed: &ComputedChart, birth: &ChartBirth, uid: String) 
 
 #[cfg(all(test, feature = "jzod"))]
 mod jzod_tests {
+    /// `ComputedChart::tithi` is propagated verbatim (index + name + fraction)
+    /// to `jzod::Chart::tithi` by `to_jzod_chart`.
+    #[test]
+    fn tithi_maps_to_jzod_chart() {
+        use crate::chart::{ComputedChart, CoordMode};
+        use crate::coords::tithi::Tithi;
+
+        let mut computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![],
+            asteroids: vec![],
+            angles: None,
+            nodes: None,
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+        };
+
+        // Set tithi directly — moon=12°, sun=0° → index 2 (Dwitiya).
+        computed.tithi = Some(Tithi {
+            index: 2,
+            name: "Dwitiya",
+            fraction: 0.4,
+        });
+
+        let birth = super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        let t = chart
+            .tithi
+            .expect("tithi must be Some when computed.tithi is set");
+        assert_eq!(t.index, 2);
+        assert_eq!(t.name, "Dwitiya");
+        assert!((t.fraction - 0.4).abs() < 1e-9);
+    }
+
+    /// When `draconic_node` is `Some(node_lon)`, `to_jzod_chart` must:
+    ///   - set `chart.zodiac == jzod::Zodiac::Draconic`
+    ///   - project every body longitude through `draconic_longitude(lon, node)`
+    #[test]
+    fn to_jzod_chart_emits_draconic_zodiac() {
+        use crate::body::Body;
+        use crate::chart::{ComputedBody, ComputedChart, CoordMode};
+        use crate::coords::apparent::EclipticPosition;
+
+        let sun_lon = 120.0_f64;
+        let node_lon = 47.0_f64;
+        let expected_drac = crate::draconic::draconic_longitude(sun_lon, node_lon);
+
+        let computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![ComputedBody {
+                body: Body::Sun,
+                position: EclipticPosition {
+                    longitude_deg: sun_lon,
+                    latitude_deg: 0.0,
+                    distance_au: 1.0,
+                },
+                daily_speed_deg: 1.0,
+                retrograde: false,
+            }],
+            asteroids: vec![],
+            angles: None,
+            nodes: None,
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+        };
+        let birth = super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            Some(node_lon),
+            false,
+        );
+
+        assert_eq!(
+            chart.zodiac,
+            jzod::Zodiac::Draconic,
+            "zodiac must be Draconic when node is supplied"
+        );
+        let sun_body = chart
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .expect("Sun must be in placements");
+        assert!(
+            (sun_body.position.ecliptic_longitude.0 - expected_drac).abs() < 1e-9,
+            "Sun draconic longitude must equal draconic_longitude({sun_lon}, {node_lon}) = {expected_drac}, got {}",
+            sun_body.position.ecliptic_longitude.0
+        );
+    }
+
+    /// When `emit_antiscia` is `true`, each body must carry `antiscion` and
+    /// `contra_antiscion` positions matching the antiscia functions.
+    #[test]
+    fn to_jzod_chart_emits_antiscia_when_requested() {
+        use crate::body::Body;
+        use crate::chart::{ComputedBody, ComputedChart, CoordMode};
+        use crate::coords::apparent::EclipticPosition;
+
+        let sun_lon = 30.0_f64;
+        let expected_ant = crate::antiscia::antiscion(sun_lon);
+        let expected_con = crate::antiscia::contra_antiscion(sun_lon);
+
+        let computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![ComputedBody {
+                body: Body::Sun,
+                position: EclipticPosition {
+                    longitude_deg: sun_lon,
+                    latitude_deg: 0.0,
+                    distance_au: 1.0,
+                },
+                daily_speed_deg: 1.0,
+                retrograde: false,
+            }],
+            asteroids: vec![],
+            angles: None,
+            nodes: None,
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+        };
+        let birth = super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, true);
+
+        let sun = chart
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .expect("Sun must be in placements");
+        let ant = sun
+            .antiscion
+            .expect("antiscion must be Some when emit_antiscia=true");
+        let con = sun
+            .contra_antiscion
+            .expect("contra_antiscion must be Some when emit_antiscia=true");
+        assert!(
+            (ant.ecliptic_longitude.0 - expected_ant).abs() < 1e-9,
+            "antiscion of {sun_lon}° must be {expected_ant}°, got {}",
+            ant.ecliptic_longitude.0
+        );
+        assert!(
+            (con.ecliptic_longitude.0 - expected_con).abs() < 1e-9,
+            "contra_antiscion of {sun_lon}° must be {expected_con}°, got {}",
+            con.ecliptic_longitude.0
+        );
+    }
+
     #[test]
     fn asteroid_naif_maps_both_schemes_and_jzod_known_bodies() {
         use super::asteroid_naif_to_jzod_body_id as m;
@@ -509,6 +809,155 @@ mod jzod_tests {
             jzod::BodyId::from(crate::body::Body::Pluto),
             jzod::BodyId::Pluto
         );
+    }
+
+    /// When `draconic_node` is `Some(node_lon)`, every Point and Lot longitude
+    /// must be projected through `draconic_longitude`, not left as tropical.
+    #[test]
+    fn to_jzod_chart_draconic_projects_points_and_lots() {
+        use crate::chart::{ComputedChart, CoordMode, Lots, NodePoints};
+        use crate::lots::Sect;
+
+        let node_lon = 47.0_f64;
+        // Tropical values that must be projected.
+        let tropical_nn = 80.0_f64;
+        let tropical_fortune = 200.0_f64;
+
+        let expected_nn = crate::draconic::draconic_longitude(tropical_nn, node_lon);
+        let expected_fortune = crate::draconic::draconic_longitude(tropical_fortune, node_lon);
+
+        let computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![],
+            asteroids: vec![],
+            angles: None,
+            nodes: Some(NodePoints {
+                mean_nn_deg: tropical_nn,
+                mean_sn_deg: (tropical_nn + 180.0).rem_euclid(360.0),
+                true_nn_deg: tropical_nn,
+                true_sn_deg: (tropical_nn + 180.0).rem_euclid(360.0),
+                true_retrograde: true,
+            }),
+            lilith: None,
+            lots: Some(Lots {
+                sect: Sect::Day,
+                fortune_deg: tropical_fortune,
+                spirit_deg: 10.0,
+                exaltation_deg: 20.0,
+                eros_deg: None,
+                necessity_deg: None,
+                courage_deg: None,
+                victory_deg: None,
+                nemesis_deg: None,
+            }),
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+        };
+        let birth = super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            Some(node_lon),
+            false,
+        );
+
+        // NorthNodeMean must be projected, not tropical.
+        let nn = chart
+            .placements
+            .points
+            .iter()
+            .find(|p| p.id == jzod::PointId::NorthNodeMean)
+            .expect("NorthNodeMean must be in points");
+        assert!(
+            (nn.position.ecliptic_longitude.0 - expected_nn).abs() < 1e-9,
+            "NorthNodeMean draconic longitude must equal {expected_nn}, got {} (tropical was {tropical_nn})",
+            nn.position.ecliptic_longitude.0
+        );
+
+        // LotOfFortune must be projected, not tropical.
+        let fortune = chart
+            .placements
+            .lots
+            .iter()
+            .find(|l| l.id == jzod::LotId::LotOfFortune)
+            .expect("LotOfFortune must be in lots");
+        assert!(
+            (fortune.position.ecliptic_longitude.0 - expected_fortune).abs() < 1e-9,
+            "LotOfFortune draconic longitude must equal {expected_fortune}, got {} (tropical was {tropical_fortune})",
+            fortune.position.ecliptic_longitude.0
+        );
+    }
+
+    /// `ComputedChart::interp_sect_twilight` is propagated verbatim (Some(true) / Some(false) / None)
+    /// to `jzod::Chart::interp_sect_twilight` by `to_jzod_chart`. `sect` mapping is unchanged.
+    ///
+    /// A twilight chart has `sect: Night` + `interp_sect_twilight: Some(true)` — the Sun is
+    /// below the horizon (nocturnal) but near the Asc/Desc grace band.
+    #[test]
+    fn jzod_chart_carries_interp_sect_twilight() {
+        use crate::chart::{ComputedChart, CoordMode};
+        use crate::lots::Sect;
+
+        let mut computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![],
+            asteroids: vec![],
+            angles: None,
+            nodes: None,
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: Some(Sect::Night),
+            interp_sect_twilight: Some(true),
+            stars: vec![],
+        };
+
+        let birth = super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+
+        // Twilight chart: nocturnal sect + twilight flag both pass through.
+        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        assert_eq!(chart.sect, Some(jzod::Sect::Nocturnal));
+        assert_eq!(chart.interp_sect_twilight, Some(true));
+
+        // Also verify Some(false) and None pass through correctly.
+        computed.interp_sect_twilight = Some(false);
+        let chart2 = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        assert_eq!(chart2.interp_sect_twilight, Some(false));
+
+        computed.interp_sect_twilight = None;
+        let chart3 = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        assert_eq!(chart3.interp_sect_twilight, None);
     }
 
     #[test]
@@ -630,7 +1079,7 @@ mod jzod_tests {
             lat: None,
             lon: None,
         };
-        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string());
+        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
 
         // All 5 asteroids must appear in the JZOD placements with nonzero daily_speed.
         let expected: &[(jzod::BodyId, &str)] = &[

@@ -508,6 +508,21 @@ pub fn markdown() -> String {
     while out.ends_with("\n\n") {
         out.pop();
     }
+    // Append the derived-views section. These are not catalog entries — they
+    // are view modifiers that transform the set of placement longitudes already
+    // emitted. The Fixed Stars section is appended separately by `starcat placements`
+    // via `pericynthion::stars::markdown_stats()`.
+    out.push_str(
+        "\n## Derived Views\n\n\
+         Derived views re-project or augment the placement longitudes already emitted. \
+         They are not independently computed bodies — they require the base tropical placement \
+         set to be present.\n\n\
+         | View | Flag | Description |\n\
+         |------|------|-------------|\n\
+         | Draconic zodiac | `--draconic` | Re-projects every placement longitude by `(λ − node_lon) mod 360°`, where `node_lon` is the selected North Node (mean or true). Chart-level `zodiac` becomes `{ \"name\": \"draconic\" }` in JZOD output. |\n\
+         | Antiscion | `--antiscia` | Appends solstice-axis reflection `(180° − λ) mod 360°` for every body and angle. Bodies equidistant from the Cancer/Capricorn axis share an antiscion. |\n\
+         | Contra-antiscion | `--antiscia` | Appends equinox-axis reflection `(360° − λ) mod 360°` for every body and angle. Bodies equidistant from the Aries/Libra axis share a contra-antiscion. |\n",
+    );
     out
 }
 

@@ -10,12 +10,12 @@ Astrology software written in Rust.
     - Astrolog AAF
     - Zeus
 
-  - Web plaforms
+  - Web platforms
     - astro.com
     - astrotheoros.com
     - lunaastrology.com
 
-> Blackmoon is pre-release. It should only be used by those who have sucessfully restored databases from backups. It is recommended to backup your Astrology databases on at least one flash drive and one cloud drive. See your Astrology software user guide for information.
+> Blackmoon is pre-release. It should only be used by those who have successfully restored databases from backups. It is recommended to backup your Astrology databases on at least one flash drive and one cloud drive. See your Astrology software user guide for information.
 
 - **[Starcat](crates/starcat/README.md)** — ephemeris computation and presentation. Reads NASA JPL DE441 binary files and produces ecliptic-of-date apparent positions for Astrological placements. Supports multiple geographic coordinate systems, astronomical coordinate systems, and astrological house systems.
 

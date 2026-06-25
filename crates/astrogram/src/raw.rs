@@ -142,6 +142,7 @@ fn zodiac_name(z: Zodiac) -> &'static str {
 fn coord_sys_name(c: CoordinateSystem) -> &'static str {
     match c {
         CoordinateSystem::Geocentric => "geocentric",
+        CoordinateSystem::Topocentric => "topocentric",
         CoordinateSystem::Heliocentric => "heliocentric",
     }
 }

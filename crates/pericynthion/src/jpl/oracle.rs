@@ -420,6 +420,27 @@ mod tests {
     }
 
     #[test]
+    fn harvard_ybsc5_is_a_byte_identical_alternate_of_cds_catalog() {
+        let cds: Vec<&super::OracleFile> = super::manifest_dirs()
+            .iter()
+            .filter(|d| matches!(d.kind, super::SourceKind::CdsCatalog))
+            .flat_map(|d| d.files.iter())
+            .collect();
+        let cat = cds
+            .iter()
+            .find(|f| f.name == "catalog.gz")
+            .expect("CDS catalog.gz present");
+        let ybsc5 = cds
+            .iter()
+            .find(|f| f.name == "ybsc5.gz")
+            .expect("Harvard ybsc5.gz present");
+        // Same BSC5 bytes mirrored from two hosts: identical hash + size.
+        assert_eq!(cat.blake3_hex, ybsc5.blake3_hex);
+        assert_eq!(cat.size, ybsc5.size);
+        assert_eq!(ybsc5.provides, &[super::STAR_CLASS_ALL]);
+    }
+
+    #[test]
     fn sb441_bundles_declare_their_bodies() {
         let by_name = |n: &str| {
             super::manifest_dirs()
