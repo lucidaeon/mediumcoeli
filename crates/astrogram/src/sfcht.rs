@@ -285,6 +285,24 @@ pub fn write_file_with_description(
     Ok(buf)
 }
 
+/// Write `SFcht` bytes for `charts`, preserving the header `description` from
+/// `existing` if those bytes parse as an `SFcht` file (else writing `None`).
+/// One-step replacement for the read→`parse_file`→`write_file_with_description`
+/// dance, usable from raw bytes without a filesystem path.
+///
+/// # Errors
+/// [`ParseError`] if writing fails. A non-parsing `existing` is treated as
+/// "no description", not an error.
+pub fn write_file_preserving(
+    existing: Option<&[u8]>,
+    charts: &[Chart],
+) -> Result<Vec<u8>, ParseError> {
+    let desc = existing
+        .and_then(|b| parse_file(b).ok())
+        .map(|(hdr, _)| hdr.description);
+    write_file_with_description(charts, desc.as_deref())
+}
+
 fn encode_cp1252_field(s: &str, field_len: usize) -> Vec<u8> {
     let (encoded, _, _) = encoding_rs::WINDOWS_1252.encode(s);
     let mut out = vec![0u8; field_len];
@@ -516,6 +534,31 @@ fn parse_chart_at(bytes: &[u8], pos: usize) -> Result<(Chart, usize), ParseError
     };
 
     Ok((chart, q - pos))
+}
+
+#[cfg(test)]
+mod preserving_tests {
+    use super::*;
+
+    #[test]
+    fn write_file_preserving_reuses_existing_description() {
+        let chart = crate::test_support::fully_populated();
+        // First write with an explicit description.
+        let first =
+            write_file_with_description(std::slice::from_ref(&chart), Some("KEEPME")).unwrap();
+        // Preserving write fed the first bytes should carry the description.
+        let out = write_file_preserving(Some(&first), std::slice::from_ref(&chart)).unwrap();
+        let (hdr, _) = parse_file(&out).unwrap();
+        assert_eq!(hdr.description, "KEEPME");
+    }
+
+    #[test]
+    fn write_file_preserving_none_matches_plain_write() {
+        let chart = crate::test_support::fully_populated();
+        let a = write_file_preserving(None, std::slice::from_ref(&chart)).unwrap();
+        let b = write_file_with_description(&[chart], None).unwrap();
+        assert_eq!(a, b);
+    }
 }
 
 #[cfg(test)]

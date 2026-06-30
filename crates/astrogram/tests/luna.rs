@@ -679,7 +679,7 @@ fn non_cp1252_char_needs_fetch() {
 
 #[test]
 fn luna_session_new_type_check() {
-    let result = astrogram::luna::LunaSession::new("dummy-cookie", 0);
+    let result = astrogram::luna::LunaSession::new("dummy-cookie", 0, "test/1.0");
     assert!(
         result.is_ok(),
         "LunaSession::new should not fail with a simple cookie string"

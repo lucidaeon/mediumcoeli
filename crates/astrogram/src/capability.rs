@@ -30,6 +30,21 @@ pub enum ChartField {
 }
 
 impl ChartField {
+    /// Every [`ChartField`] variant, once. The single source for iterating the
+    /// full field set (e.g. computing which fields a format drops). Keep in sync
+    /// with the enum — `all_fields_lists_every_variant_once` enforces it.
+    pub const ALL: &'static [ChartField] = &[
+        ChartField::SecondaryName,
+        ChartField::Region,
+        ChartField::SourceRating,
+        ChartField::HouseSystem,
+        ChartField::Zodiac,
+        ChartField::CoordinateSystem,
+        ChartField::SubCharts,
+        ChartField::Notes,
+        ChartField::EventType,
+    ];
+
     /// Human-readable label used in disclosures.
     #[must_use]
     pub fn label(self) -> &'static str {
@@ -245,5 +260,37 @@ mod tests {
     #[test]
     fn fill_fields_sfcht_to_sfcht_is_empty() {
         assert!(fill_fields(Format::Sfcht, Format::Sfcht).is_empty());
+    }
+
+    #[test]
+    fn all_fields_lists_every_variant_once() {
+        // Compile-time guard: adding a ChartField variant breaks this match,
+        // forcing it into ALL. (The match arms below must enumerate every variant.)
+        fn known(f: ChartField) {
+            match f {
+                ChartField::SecondaryName
+                | ChartField::Region
+                | ChartField::SourceRating
+                | ChartField::HouseSystem
+                | ChartField::Zodiac
+                | ChartField::CoordinateSystem
+                | ChartField::SubCharts
+                | ChartField::Notes
+                | ChartField::EventType => {}
+            }
+        }
+        for &f in ChartField::ALL {
+            known(f);
+        }
+        // No duplicates, and every variant is present.
+        let mut seen: Vec<&str> = ChartField::ALL.iter().map(|f| f.label()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), ChartField::ALL.len(), "ALL has a duplicate");
+        assert_eq!(
+            ChartField::ALL.len(),
+            9,
+            "ALL must list all 9 ChartField variants"
+        );
     }
 }

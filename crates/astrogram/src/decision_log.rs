@@ -128,3 +128,50 @@ impl DecisionLog {
         Ok(out)
     }
 }
+
+/// The XDG-compliant default decision-log path from explicit base dirs:
+/// `$XDG_CACHE_HOME/blackmoon/luna-decisions.jsonl`, else
+/// `$HOME/.cache/blackmoon/luna-decisions.jsonl`, else
+/// `./blackmoon/luna-decisions.jsonl`. Pure — for testing and custom bases.
+#[must_use]
+pub fn default_path_from(
+    xdg_cache_home: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    let base = xdg_cache_home
+        .or_else(|| home.map(|h| h.join(".cache")))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    base.join("blackmoon").join("luna-decisions.jsonl")
+}
+
+/// The default decision-log path, reading `$XDG_CACHE_HOME` / `$HOME` from the
+/// environment. See [`default_path_from`].
+#[must_use]
+pub fn default_path() -> std::path::PathBuf {
+    default_path_from(
+        std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from),
+        std::env::var_os("HOME").map(std::path::PathBuf::from),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_path_prefers_xdg_then_home_then_cwd() {
+        use std::path::PathBuf;
+        assert_eq!(
+            default_path_from(Some(PathBuf::from("/x")), Some(PathBuf::from("/home/u"))),
+            PathBuf::from("/x/blackmoon/luna-decisions.jsonl")
+        );
+        assert_eq!(
+            default_path_from(None, Some(PathBuf::from("/home/u"))),
+            PathBuf::from("/home/u/.cache/blackmoon/luna-decisions.jsonl")
+        );
+        assert_eq!(
+            default_path_from(None, None),
+            PathBuf::from("./blackmoon/luna-decisions.jsonl")
+        );
+    }
+}

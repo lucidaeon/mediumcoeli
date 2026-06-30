@@ -1,8 +1,9 @@
 //! Acceptance: `parse_header` against every committed `SFcht` specimen.
 //!
-//! Resolves `$ASTRO_SPECIMENS` and walks it recursively for any file whose
-//! extension is `SFcht` (case-insensitive), then asserts the format invariants
-//! documented in `sfcht.ksy`:
+//! Resolves `$ASTRO_SPECIMENS`, scopes to its `sfcht/` subdir (the specimen
+//! corpus convention — see `AGENTS.md`), and walks that recursively for any
+//! file whose extension is `SFcht` (case-insensitive), then asserts the format
+//! invariants documented in `sfcht.ksy`:
 //!
 //! - `version == 3` (observed across the entire reference corpus)
 //! - `record_count > 0` (no `SFcht` file ships with zero records)
@@ -40,8 +41,18 @@ fn parses_every_real_sfcht_header() {
         return;
     }
 
+    // Scope the walk to the `sfcht/` specimen subdir. The `$ASTRO_SPECIMENS`
+    // root also holds multi-million-file mirrors (star catalogs, SPK data);
+    // walking it whole costs ~60s of `stat()` syscalls to find 4 files. Fall
+    // back to the root if the subdir is absent (other corpus layouts).
+    let sfcht_dir = root.join("sfcht");
+    let walk_root = if sfcht_dir.is_dir() {
+        &sfcht_dir
+    } else {
+        &root
+    };
     let mut paths = Vec::new();
-    collect_sfcht_files(&root, &mut paths);
+    collect_sfcht_files(walk_root, &mut paths);
     paths.sort();
 
     let mut count = 0usize;

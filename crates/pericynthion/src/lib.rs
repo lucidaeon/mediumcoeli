@@ -101,6 +101,7 @@ mod bsc5_catalogue;
 pub mod chart;
 pub mod chebyshev;
 pub mod coords;
+pub mod datafiles;
 pub mod draconic;
 pub mod ephemeris;
 pub mod error;
@@ -119,6 +120,9 @@ pub mod spk;
 pub mod stars;
 pub mod time;
 
+pub use datafiles::{production_file_paths, provider_cached};
+pub use placements::{BodyResolveError, omniscient_body_ids, resolve_body_id};
+
 pub use provenance::{
     HORIZONS_API_URL, Provider, RootKind, fixed_star_providers, production_horizons_targets,
     providers_for_body,
@@ -130,7 +134,7 @@ pub use stars::{
 
 pub use chart::{
     Angles, ChartRequest, ComputedBody, ComputedChart, ComputedStar, CoordMode, LilithPoints, Lots,
-    ModeRequest, NodePoints, compute,
+    ModeRequest, NodePoints, NodeVariant, compute, sort_zodiacally,
 };
 pub use coords::topocentric::ObserverLocation;
 #[cfg(feature = "jzod")]

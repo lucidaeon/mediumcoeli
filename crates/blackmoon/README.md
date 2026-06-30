@@ -12,7 +12,7 @@ One CLI verb (run with no subcommand). Inputs are file paths or a web account; t
 ```text
 blackmoon input.zdb --output out.SFcht
 blackmoon a.SFcht b.zdb export.xml --output merged.SFcht
-blackmoon --from luna --luna-token $LUNA_TOKEN --output charts.SFcht
+blackmoon --from luna --luna-token $BLACKMOON_LUNA_TOKEN --output charts.SFcht
 blackmoon --from astrocom --astrocom-user me@x.com --astrocom-pass ... --output charts.SFcht
 blackmoon --from astrotheoros --astrotheoros-user me@x.com --astrotheoros-pass ... --output charts.SFcht
 blackmoon charts.SFcht --normalize
@@ -42,11 +42,25 @@ Astrologers can have their data spread out across many tools. Consolidating reco
 6. **Apply fills** — resolve house system / zodiac / locus for charts whose source never carried them (e.g. ADB→SFcht), from `--fill-house` / `--fill-zodiac` / `--fill-locus` or an interactive prompt.
 7. **Write** the merged set to the chosen sink. Web sinks carry an interactive y/N confirmation before any mutation, plus per-chart progress; unless `--no-verify` is passed, blackmoon then reads the charts back and reports a per-field transcript.
 
-Credentials come from flags or env vars (`LUNA_TOKEN`, `ASTROCOM_TOKEN`, `ASTROCOM_USER`, `ASTROCOM_PASS`, `ASTROTHEOROS_TOKEN`, `ASTROTHEOROS_USER`, `ASTROTHEOROS_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--luna-resume-from <prefix>` resumes an interrupted LUNA® fetch.
+Credentials come from flags or env vars (`BLACKMOON_LUNA_TOKEN`, `BLACKMOON_ASTROCOM_TOKEN`, `BLACKMOON_ASTROCOM_USER`, `BLACKMOON_ASTROCOM_PASS`, `BLACKMOON_ASTROTHEOROS_TOKEN`, `BLACKMOON_ASTROTHEOROS_USER`, `BLACKMOON_ASTROTHEOROS_PASS`); the help output hides their values. `--delay` rate-limits HTTP requests. `--luna-resume-from <prefix>` resumes an interrupted LUNA® fetch.
 
 Credential sources are **not** mutually exclusive. When several are available for a target (a browser cookie via `--grant-cookie-access` (powered by [`wristband`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/wristband/README.md)), a token, and/or login creds), `blackmoon` tries them in order — **cookie → token → login** — and falls through to the next when one is rejected as stale (e.g. an expired cookie falls back to your saved password). It discloses which source authenticated, naming a fall-through when one occurred.
 
-For **astro.com specifically**, the session cookie authenticates *reads only*; deleting a chart re-submits your account password. So `--clear`/`--consolidate` against astro.com requires `--astrocom-user`/`--astrocom-pass` (or `ASTROCOM_USER`/`ASTROCOM_PASS`) even when a working cookie is present — the cookie reads, the password deletes.
+For **astro.com specifically**, the session cookie authenticates *reads only*; deleting a chart re-submits your account password. So `--clear`/`--consolidate` against astro.com requires `--astrocom-user`/`--astrocom-pass` (or `BLACKMOON_ASTROCOM_USER`/`BLACKMOON_ASTROCOM_PASS`) even when a working cookie is present — the cookie reads, the password deletes.
+
+`--grant-cookie-access` is repeatable (last occurrence wins), so it can live in a shell alias as a default toggle and still be overridden on the command line.
+
+## User-Agent
+
+Every web request carries a User-Agent, and blackmoon discloses which one it sent — each web target prints a `user-agent (<kind>): <string>` line before authenticating. The disclosed string is, by construction, the exact `User-Agent` header on the wire.
+
+By default blackmoon self-reports as `Mozilla/5.0 Blackmoon/<version> Astrogram/<version>` — **even under `--grant-cookie-access`**. Granting cookie *read* access never implies User-Agent *impersonation*; the two are separate choices. Browser mimicry is opt-in via `--ua`:
+
+- `--ua browser` — send the *cookie-source browser's own* User-Agent, divined by [`wristband`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/wristband/README.md) from that browser's on-disk version, so the request matches the session the cookie came from.
+- bare `--ua` — a fixed desktop-browser string.
+- `--ua <string>` — that string verbatim.
+
+`--ua` is valid only alongside `--grant-cookie-access`.
 
 ## In-place LUNA® consolidation
 
@@ -56,7 +70,7 @@ groups** for human decision — no record is ever auto-dropped.
 ### Interactive consolidation
 
 ```
-blackmoon --target luna --consolidate --luna-token "$LUNA_TOKEN"
+blackmoon --target luna --consolidate --luna-token "$BLACKMOON_LUNA_TOKEN"
 ```
 
 The flow:

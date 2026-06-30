@@ -102,7 +102,7 @@ use pericynthion::houses::{HouseCusps, HouseSystem};
 use pericynthion::jpl::discover;
 use pericynthion::jpl::oracle;
 use pericynthion::lots::Sect;
-use pericynthion::spk::{SpkEphemeris, locate_default_bsp};
+use pericynthion::spk::SpkEphemeris;
 use pericynthion::time::calendar::{Calendar, CivilDate};
 use pericynthion::time::zone::Zone;
 use pericynthion::time::{parse_date, parse_time, parse_tz};
@@ -124,8 +124,8 @@ COORDINATE SYSTEM
 ZODIAC
   tropical     ecliptic longitude from the true vernal equinox (current)
   sidereal     tropical minus ayanamsha — 47+ calibrations (roadmap)
-  draconic     0° = Moon's North Node — use --draconic in --text mode
-  antiscia     solstice-axis / equinox-axis reflections — use --antiscia in --text mode
+  draconic     0° = Moon's North Node — use --draconic (jzod + --text)
+  antiscia     solstice-axis / equinox-axis reflections — use --antiscia (jzod + --text)
 
 CHART POINTS EMITTED
   Bodies   geocentric/topocentric: Sun, Moon, Mercury, Venus, Mars,
@@ -490,16 +490,18 @@ struct ComputeArgs {
     #[arg(long = "stars", value_delimiter = ',')]
     stars: Vec<String>,
 
-    /// Append an Antiscion / Contra-antiscion sub-table to the `--text` output.
+    /// Append Antiscion / Contra-antiscion reflections to the output — a
+    /// sub-table in `--text`, and per-body antiscion fields in the default JZOD.
     /// Each body's antiscion reflects across the Cancer/Capricorn (solstice)
     /// axis; the contra-antiscion reflects across the Aries/Libra (equinox) axis.
-    /// No-op in `--page` / `--jzod` modes.
+    /// No-op in `--page` mode.
     #[arg(long = "antiscia")]
     antiscia: bool,
 
     /// Re-project all longitudes into the draconic zodiac (0° = Moon's mean
-    /// North Node) before rendering `--text` output. The node variant is
-    /// controlled by `--nodes`. No-op in `--page` / `--jzod` modes.
+    /// North Node) before rendering. Applies to the default JZOD output (the
+    /// chart `zodiac` becomes `draconic`) and to `--text`. The node variant is
+    /// controlled by `--nodes`. No-op in `--page` mode.
     #[arg(long = "draconic")]
     draconic: bool,
 }
@@ -912,6 +914,24 @@ fn print_points_catalogue() {
     }
 }
 
+/// Maps a `BodyResolveError` from the placements library to the exact CLI
+/// error strings that starcat presents to the user.  Extracted so that unit
+/// tests can assert the byte-identical strings without exercising the full
+/// `cmd_compute` pipeline.
+fn body_resolve_cli_error(e: pericynthion::placements::BodyResolveError) -> anyhow::Error {
+    use pericynthion::placements::BodyResolveError as E;
+    match e {
+        E::Unknown(s) => anyhow::anyhow!("unknown body {s:?} (not in the placements catalog)"),
+        E::NotMinorBody(n) => {
+            anyhow::anyhow!("{n} is not an SPK minor body (computed from DE441, not --asteroids)")
+        }
+        E::NotCovered(n) => anyhow::anyhow!(
+            "{n} is not available locally — fetch it first with \
+             `starcat horizons <class>` (e.g. its category) into $STARCAT_HORIZONS_DATA"
+        ),
+    }
+}
+
 // Called once per process from `main`; taking ComputeArgs by value lets the
 // body freely consume fields (e.g. `args.bodies` via `.clone()`-then-drop)
 // without lifetime juggling. The allocation cost is zero in CLI context.
@@ -1006,30 +1026,26 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     let calendar: Calendar = calendar_arg.into();
 
     // === Open every available SPK: sb441 bundle + Horizons dir + explicit --spk ===
-    let mut spk_files: Vec<SpkEphemeris> = Vec::new();
-    if let Some(p) = args.spk.as_deref() {
-        spk_files
-            .push(SpkEphemeris::open(p).with_context(|| format!("open --spk {}", p.display()))?);
-    }
-    if let Some(bsp) = locate_default_bsp(&dir) {
-        if let Ok(s) = SpkEphemeris::open(&bsp) {
-            spk_files.push(s);
-        }
-    }
-    if let Ok(hz) = resolve_horizons_dir(None) {
-        spk_files.extend(pericynthion::spk::open_dir(&hz));
-    }
+    let horizons_dir = resolve_horizons_dir(None).ok();
+    let spk_files = pericynthion::spk::open_all_sources(
+        Some(&dir),
+        horizons_dir.as_deref(),
+        args.spk.as_deref(),
+    )
+    .context("opening SPK sources")?;
     let spk_refs: Vec<&SpkEphemeris> = spk_files.iter().collect();
     let covered = |id: i32| spk_refs.iter().any(|s| s.center_of(id).is_some());
 
     // === Asteroids: slug → NAIF id (error clearly on unknown slug) ===
     // --omniscient computes every body covered by the open SPKs.
     let asteroid_naif_ids: Vec<i32> = if args.omniscient {
-        omniscient_body_ids(covered)
+        pericynthion::placements::omniscient_body_ids(covered)
     } else {
         let mut ids = Vec::new();
         for slug in &args.asteroids {
-            ids.push(resolve_body_id(slug, covered)?);
+            let id = pericynthion::placements::resolve_body_id(slug, covered)
+                .map_err(body_resolve_cli_error)?;
+            ids.push(id);
         }
         ids
     };
@@ -1131,50 +1147,6 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Resolve a body slug (catalog name, case-insensitive) to the NAIF id that is
-/// actually available, preferring the sb441 (`2_000_000 + mpc`) id when present,
-/// else the Horizons (`20_000_000 + mpc`) id. `covered(id)` reports whether any
-/// open SPK covers `id`.
-fn resolve_body_id(slug: &str, covered: impl Fn(i32) -> bool) -> Result<i32> {
-    let placement = pericynthion::placements::find_by_slug(slug)
-        .ok_or_else(|| anyhow::anyhow!("unknown body {slug:?} (not in the placements catalog)"))?;
-    let (Some(sb441), Some(horizons)) = (placement.sb441_naif_id(), placement.horizons_naif_id())
-    else {
-        bail!(
-            "{} is not an SPK minor body (computed from DE441, not --asteroids)",
-            placement.name
-        );
-    };
-    if covered(sb441) {
-        Ok(sb441)
-    } else if covered(horizons) {
-        Ok(horizons)
-    } else {
-        bail!(
-            "{} is not available locally — fetch it first with \
-             `starcat horizons <class>` (e.g. its category) into $STARCAT_HORIZONS_DATA",
-            placement.name
-        )
-    }
-}
-
-/// Every catalog minor body whose sb441 or Horizons id is covered by the open
-/// SPKs — the set `--omniscient` computes.
-fn omniscient_body_ids(covered: impl Fn(i32) -> bool) -> Vec<i32> {
-    let mut ids = Vec::new();
-    for p in pericynthion::placements::CATALOG {
-        let (Some(sb441), Some(horizons)) = (p.sb441_naif_id(), p.horizons_naif_id()) else {
-            continue;
-        };
-        if covered(sb441) {
-            ids.push(sb441);
-        } else if covered(horizons) {
-            ids.push(horizons);
-        }
-    }
-    ids
 }
 
 /// Resolve the JPL start path from CLI args + env.
@@ -1363,28 +1335,11 @@ fn verify_present_integrity(root: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Build the production file list at runtime: the JPL subset (DE441 + n16) plus
-/// `sb441-n373.bsp`, plus each unbundled minor body's Horizons `<naif>.bsp`.
-/// JPL paths join the mirror root; Horizons paths join the Horizons dir.
 fn prod_paths(jpl_root: &std::path::Path, horizons_dir: &std::path::Path) -> Vec<String> {
-    let mut out = Vec::new();
-    // DE441 binary + sb441-n16 (existing supported subset).
-    for e in oracle::production_entries() {
-        out.push(display_verify_path(&jpl_root.join(&e.path)));
-    }
-    // sb441-n373.bsp — pulled from the full JPL manifest by name.
-    for e in oracle::entries() {
-        if e.path.ends_with("sb441-n373.bsp") {
-            out.push(display_verify_path(&jpl_root.join(&e.path)));
-        }
-    }
-    // Unbundled minor bodies → Horizons <naif>.bsp under the Horizons dir.
-    for (_name, naif) in pericynthion::production_horizons_targets() {
-        out.push(display_verify_path(
-            &horizons_dir.join(format!("{naif}.bsp")),
-        ));
-    }
-    out
+    pericynthion::production_file_paths(jpl_root, horizons_dir)
+        .iter()
+        .map(|p| display_verify_path(p))
+        .collect()
 }
 
 /// List the data files needed to package starcat's supported placements,
@@ -1399,27 +1354,6 @@ fn cmd_data_prod(args: &ProdArgs) -> Result<()> {
         println!("{line}");
     }
     Ok(())
-}
-
-/// True when a provider's file exists locally. JPL files resolve under the
-/// mirror root; Horizons files under the Horizons dir; CDS (`catalog.gz`)
-/// resolves at the workspace root (cwd) — its compiled-in status is reported
-/// separately. A `None` root means "not configured" → not cached.
-fn provider_cached(
-    p: &pericynthion::Provider,
-    jpl_root: Option<&std::path::Path>,
-    horizons_dir: Option<&std::path::Path>,
-) -> bool {
-    use pericynthion::RootKind;
-    match p.root_kind {
-        RootKind::JplMirror => jpl_root
-            .map(|r| r.join(&p.rel_path).is_file())
-            .unwrap_or(false),
-        RootKind::HorizonsDir => horizons_dir
-            .map(|d| d.join(&p.rel_path).is_file())
-            .unwrap_or(false),
-        RootKind::CdsBuild => std::path::Path::new(&p.rel_path).is_file(),
-    }
 }
 
 /// `data provenance` — read-only report. Never exits non-zero.
@@ -1445,7 +1379,7 @@ fn cmd_data_provenance(args: &ProvenanceArgs) -> Result<()> {
         }
         println!("{}  [{}]", p.name, p.category.label());
         for pr in &provs {
-            let cached = if provider_cached(pr, jr, hr) {
+            let cached = if pericynthion::provider_cached(pr, jr, hr) {
                 "cached"
             } else {
                 "absent"
@@ -1466,7 +1400,7 @@ fn cmd_data_provenance(args: &ProvenanceArgs) -> Result<()> {
         pericynthion::stars::BSC5_CATALOG.len()
     );
     for pr in pericynthion::fixed_star_providers() {
-        let cached = if provider_cached(&pr, jr, hr) {
+        let cached = if pericynthion::provider_cached(&pr, jr, hr) {
             "cached"
         } else {
             "absent"
@@ -1495,7 +1429,7 @@ fn print_provenance_json(
                     "rel_path": pr.rel_path,
                     "source_url": pr.source_url,
                     "coverage": pr.coverage,
-                    "cached": provider_cached(pr, jpl_root, horizons_dir),
+                    "cached": pericynthion::provider_cached(pr, jpl_root, horizons_dir),
                 })
             })
             .collect();
@@ -1512,7 +1446,7 @@ fn print_provenance_json(
             serde_json::json!({
                 "source_url": pr.source_url,
                 "coverage": pr.coverage,
-                "cached": provider_cached(pr, jpl_root, horizons_dir),
+                "cached": pericynthion::provider_cached(pr, jpl_root, horizons_dir),
             })
         })
         .collect();
@@ -2099,13 +2033,7 @@ fn page_mode_str(mode: &pericynthion::chart::CoordMode) -> &'static str {
     }
 }
 
-/// Collect all chart points (house cusps + bodies + angles + lots) into a
-/// flat `(label, lon_deg)` list, then sort zodiacally from `start_lon`. The
-/// resulting order goes H1 → next degree → … → wrapping back through Pisces
-/// → finishing just before H1.
-///
-/// `nodes_mode` selects which variant (mean / true) of the lunar node to place
-/// in the sorted list. Lilith is not included in page placements.
+/// Thin wrapper over `ComputedChart::sorted_placements`, mapping the CLI `NodesMode` to the library `NodeVariant`.
 #[cfg(feature = "page")]
 fn page_collect_placements(
     computed: &ComputedChart,
@@ -2113,60 +2041,11 @@ fn page_collect_placements(
     start_lon: f64,
     nodes_mode: NodesMode,
 ) -> Vec<(String, f64)> {
-    let mut v: Vec<(String, f64)> = Vec::new();
-
-    if let Some(hc) = primary_house {
-        for h in 1_u8..=12 {
-            v.push((format!("H{h}"), hc.cusp(h).to_degrees().rem_euclid(360.0)));
-        }
-    }
-    for cb in &computed.bodies {
-        v.push((cb.body.name().to_string(), cb.position.longitude_deg));
-    }
-    for ca in &computed.asteroids {
-        v.push((ca.name.to_string(), ca.position.longitude_deg));
-    }
-    if let Some(ang) = &computed.angles {
-        if let Some(d) = ang.ac_deg {
-            v.push(("Ac".into(), d));
-        }
-        if let Some(d) = ang.ds_deg {
-            v.push(("Ds".into(), d));
-        }
-        v.push(("Mc".into(), ang.mc_deg));
-        v.push(("Ic".into(), ang.ic_deg));
-        if let Some(d) = ang.vx_deg {
-            v.push(("Vx".into(), d));
-        }
-        if let Some(d) = ang.ax_deg {
-            v.push(("Ax".into(), d));
-        }
-        // Nodes: use the selected mode variant
-        if let Some(n) = &computed.nodes {
-            let (nn, sn) = match nodes_mode {
-                NodesMode::Mean => (n.mean_nn_deg, n.mean_sn_deg),
-                NodesMode::True => (n.true_nn_deg, n.true_sn_deg),
-            };
-            v.push(("Nn".into(), nn));
-            v.push(("Sn".into(), sn));
-        }
-    }
-    if let Some(l) = &computed.lots {
-        v.push(("Fortune".into(), l.fortune_deg));
-        v.push(("Spirit".into(), l.spirit_deg));
-        if let Some(d) = l.eros_deg {
-            v.push(("Eros".into(), d));
-        }
-    }
-
-    v.sort_by(|a, b| {
-        let a_rel = (a.1 - start_lon).rem_euclid(360.0);
-        let b_rel = (b.1 - start_lon).rem_euclid(360.0);
-        a_rel
-            .partial_cmp(&b_rel)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    v
+    let nv = match nodes_mode {
+        NodesMode::Mean => pericynthion::chart::NodeVariant::Mean,
+        NodesMode::True => pericynthion::chart::NodeVariant::True,
+    };
+    computed.sorted_placements(primary_house, start_lon, nv)
 }
 
 /// Minimum gap (in spaces) between the left and right strings on any
@@ -2818,28 +2697,69 @@ mod tests {
     fn resolve_body_id_prefers_available_scheme() {
         // Pretend only the Horizons (20M) Chiron is present.
         let covered = |id: i32| id == 20_002_060;
-        assert_eq!(resolve_body_id("chiron", covered).unwrap(), 20_002_060);
+        assert_eq!(
+            pericynthion::placements::resolve_body_id("chiron", covered).unwrap(),
+            20_002_060
+        );
         // Unknown slug → error mentioning the name.
-        assert!(resolve_body_id("nonsuch", |_| true).is_err());
-        // Known body but not present anywhere → error suggesting a fetch.
+        assert!(pericynthion::placements::resolve_body_id("nonsuch", |_| true).is_err());
+        // Known body but not present anywhere → error mentioning the body name.
         let none = |_id: i32| false;
-        let err = resolve_body_id("chiron", none).unwrap_err().to_string();
+        let err = pericynthion::placements::resolve_body_id("chiron", none)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("chiron") || err.contains("Chiron"));
-        assert!(err.to_lowercase().contains("horizons") || err.to_lowercase().contains("fetch"));
     }
 
     #[test]
     fn resolve_body_id_prefers_sb441_over_horizons() {
         // Both sb441 (2_002_060) and Horizons (20_002_060) covered → prefer sb441.
         let covered = |id: i32| id == 2_002_060 || id == 20_002_060;
-        assert_eq!(resolve_body_id("chiron", covered).unwrap(), 2_002_060);
+        assert_eq!(
+            pericynthion::placements::resolve_body_id("chiron", covered).unwrap(),
+            2_002_060
+        );
     }
 
     #[test]
     fn resolve_body_id_non_spk_body_errors() {
-        // Sun has no MPC number → not an SPK minor body.
-        let err = resolve_body_id("sun", |_| true).unwrap_err().to_string();
-        assert!(err.to_lowercase().contains("sun") || err.to_lowercase().contains("de441"));
+        // Sun has no MPC number → library yields NotMinorBody, which contains "sun"/"Sun".
+        let err = pericynthion::placements::resolve_body_id("sun", |_| true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.to_lowercase().contains("sun"));
+    }
+
+    #[test]
+    fn body_resolve_cli_error_strings_are_exact() {
+        use pericynthion::placements::BodyResolveError;
+
+        // Unknown variant: slug name appears quoted.
+        let msg =
+            body_resolve_cli_error(BodyResolveError::Unknown("foobar".to_string())).to_string();
+        assert_eq!(
+            msg,
+            r#"unknown body "foobar" (not in the placements catalog)"#
+        );
+
+        // NotMinorBody: body name appears, DE441 mentioned, no "de441" file reference.
+        let msg = body_resolve_cli_error(BodyResolveError::NotMinorBody("Sun")).to_string();
+        assert_eq!(
+            msg,
+            "Sun is not an SPK minor body (computed from DE441, not --asteroids)"
+        );
+
+        // NotCovered: must contain the exact fetch instructions and env var.
+        let msg = body_resolve_cli_error(BodyResolveError::NotCovered("Eris")).to_string();
+        assert_eq!(
+            msg,
+            "Eris is not available locally — fetch it first with \
+             `starcat horizons <class>` (e.g. its category) into $STARCAT_HORIZONS_DATA"
+        );
+        // Belt-and-suspenders substring assertions for the key landmarks.
+        assert!(msg.contains("fetch it first"));
+        assert!(msg.contains("starcat horizons"));
+        assert!(msg.contains("$STARCAT_HORIZONS_DATA"));
     }
 
     #[test]
@@ -2847,7 +2767,7 @@ mod tests {
         // Only Chiron's sb441 id is "covered".
         let chiron_sb441 = 2_002_060_i32;
         let covered = move |id: i32| id == chiron_sb441;
-        let ids = omniscient_body_ids(covered);
+        let ids = pericynthion::placements::omniscient_body_ids(covered);
         assert!(ids.contains(&chiron_sb441));
         // Non-covered bodies must not appear.
         assert!(!ids.contains(&2_000_001_i32)); // Ceres sb441 — not covered here
@@ -2943,9 +2863,17 @@ mod tests {
         std::fs::write(hz.join("20002060.bsp"), b"x").unwrap();
         let prov: Provider = providers_for_body("Chiron").pop().unwrap();
         assert_eq!(prov.root_kind, RootKind::HorizonsDir);
-        assert!(super::provider_cached(&prov, None, Some(hz.as_path())));
+        assert!(pericynthion::provider_cached(
+            &prov,
+            None,
+            Some(hz.as_path())
+        ));
         // Absent dir -> not cached:
-        assert!(!super::provider_cached(&prov, None, Some(tmp.path())));
+        assert!(!pericynthion::provider_cached(
+            &prov,
+            None,
+            Some(tmp.path())
+        ));
     }
 
     #[test]

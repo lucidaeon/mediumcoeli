@@ -215,6 +215,38 @@ pub fn locate_default_bsp(start: &Path) -> Option<PathBuf> {
     if bsp.is_file() { Some(bsp) } else { None }
 }
 
+/// Open every SPK a chart computation should consult, in priority order:
+/// an explicit file (error is fatal), the auto-located default sb441 bundle
+/// under `jpl_start` (best-effort — a missing/invalid bundle is skipped), and
+/// every valid `*.bsp` directly inside `horizons_dir` (best-effort).
+///
+/// `None` for any input skips that source. This is the single SPK-opening
+/// entry point a GUI or the CLI shares.
+///
+/// # Errors
+/// [`PericynthionError`] if `explicit` is `Some` and cannot be opened.
+pub fn open_all_sources(
+    jpl_start: Option<&Path>,
+    horizons_dir: Option<&Path>,
+    explicit: Option<&Path>,
+) -> Result<Vec<SpkEphemeris>, crate::error::PericynthionError> {
+    let mut spk_files: Vec<SpkEphemeris> = Vec::new();
+    if let Some(p) = explicit {
+        spk_files.push(SpkEphemeris::open(p)?);
+    }
+    if let Some(start) = jpl_start {
+        if let Some(bsp) = locate_default_bsp(start) {
+            if let Ok(s) = SpkEphemeris::open(&bsp) {
+                spk_files.push(s);
+            }
+        }
+    }
+    if let Some(hz) = horizons_dir {
+        spk_files.extend(open_dir(hz));
+    }
+    Ok(spk_files)
+}
+
 /// Locate `sb441-n373.bsp` under the JPL mirror rooted at or above `start`.
 ///
 /// `start` may be any path inside or above the mirror root. Returns the
@@ -224,6 +256,31 @@ pub fn locate_n373_bsp(start: &Path) -> Option<PathBuf> {
     let root = crate::jpl::oracle::mirror_root_from(start)?;
     let bsp = root.join(BSP_N373_MIRROR_TAIL);
     if bsp.is_file() { Some(bsp) } else { None }
+}
+
+#[cfg(test)]
+mod open_all_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn open_all_sources_empty_when_nothing_supplied() {
+        let v = open_all_sources(None, None, None).expect("empty is ok");
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn open_all_sources_empty_horizons_dir_yields_none() {
+        let tmp = tempdir::TempDir::new("spk_empty").unwrap();
+        let v = open_all_sources(None, Some(tmp.path()), None).expect("empty dir ok");
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn open_all_sources_propagates_explicit_open_error() {
+        let bogus = Path::new("/no/such/file.bsp");
+        assert!(open_all_sources(None, None, Some(bogus)).is_err());
+    }
 }
 
 #[cfg(test)]

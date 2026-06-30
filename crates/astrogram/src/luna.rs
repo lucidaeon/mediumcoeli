@@ -43,9 +43,6 @@ pub const WRITE_CAPS: CapabilitySet = READ_CAPS;
 
 /// Base URL for the LUNA® Astrology web application.
 pub const BASE_URL: &str = "https://www.lunaastrology.com";
-/// User-Agent string sent with all HTTP requests.
-pub const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
-     (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
 /// Errors specific to LUNA parsing.
 #[derive(Debug, Error)]
@@ -846,10 +843,12 @@ pub struct LunaSession {
 impl LunaSession {
     /// Build a session from the `LUNAASTROLOGY_COOKIE` env-var value.
     ///
+    /// `user_agent` is the User-Agent to send (required).
+    ///
     /// # Errors
     /// - [`LunaError::HttpClientBuild`] if the cookie header value is invalid
     ///   or the `reqwest::Client` cannot be constructed.
-    pub fn new(session_cookie: &str, delay_ms: u64) -> Result<Self, LunaError> {
+    pub fn new(session_cookie: &str, delay_ms: u64, user_agent: &str) -> Result<Self, LunaError> {
         let cookie = format!("LUNA_ASTROLOGY_APP={session_cookie}");
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -859,7 +858,7 @@ impl LunaSession {
         );
         let client = Client::builder()
             .default_headers(headers)
-            .user_agent(USER_AGENT)
+            .user_agent(user_agent)
             .build()
             .map_err(|e| LunaError::HttpClientBuild(e.to_string()))?;
         Ok(Self {
@@ -924,16 +923,22 @@ impl LunaSession {
     /// (e.g. a browser import, then `--luna-token`). Fall-through happens only on
     /// [`LunaError::is_auth_failure`].
     ///
+    /// `user_agent` is the User-Agent to send (required); forwarded to each [`Self::new`] call.
+    ///
     /// # Errors
     /// - The last auth failure if every cookie is rejected.
     /// - The first non-auth error encountered.
     /// - [`LunaError::FormTokensNotFound`] if `cookies` is empty.
-    pub fn authenticate(cookies: &[&str], delay_ms: u64) -> Result<(Self, usize), LunaError> {
+    pub fn authenticate(
+        cookies: &[&str],
+        delay_ms: u64,
+        user_agent: &str,
+    ) -> Result<(Self, usize), LunaError> {
         let attempts: Vec<_> = cookies
             .iter()
             .map(|cookie| {
                 move || -> Result<Self, LunaError> {
-                    let session = Self::new(cookie, delay_ms)?;
+                    let session = Self::new(cookie, delay_ms, user_agent)?;
                     session.probe()?;
                     Ok(session)
                 }
@@ -1201,7 +1206,7 @@ mod tests {
         // LunaSession does not implement Debug (reqwest Client), so we cannot
         // call .unwrap_err() — that would require the Ok type to be Debug.
         // Use a match instead; the panic arm avoids {:?} on the Ok variant.
-        match LunaSession::authenticate(&[], 0) {
+        match LunaSession::authenticate(&[], 0, "test/1.0") {
             Err(LunaError::FormTokensNotFound(_)) => {}
             Err(other) => panic!("expected FormTokensNotFound, got {other:?}"),
             Ok(_) => panic!("expected Err(FormTokensNotFound), got Ok"),
@@ -1218,13 +1223,19 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LUNA_TOKEN and network"]
+    fn new_takes_required_user_agent_and_builds() {
+        // UA is now required (&str), no Option/default.
+        assert!(LunaSession::new("tok", 0, "test/1.0").is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires ASTROGRAM_LUNA_TOKEN and network"]
     fn probe_live_smoke() {
-        let Ok(token) = std::env::var("LUNA_TOKEN") else {
-            eprintln!("LUNA_TOKEN unset — skipping live probe");
+        let Ok(token) = std::env::var("ASTROGRAM_LUNA_TOKEN") else {
+            eprintln!("ASTROGRAM_LUNA_TOKEN unset — skipping live probe");
             return;
         };
-        let Ok(session) = LunaSession::new(&token, 0) else {
+        let Ok(session) = LunaSession::new(&token, 0, "test/1.0") else {
             eprintln!("client build failed — skipping");
             return;
         };

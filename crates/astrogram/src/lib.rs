@@ -47,6 +47,8 @@ pub mod astrotheoros;
 pub mod capability;
 pub mod chart;
 pub mod consolidate;
+pub use format::{CapabilityRow, capability_matrix};
+
 /// Format-agnostic bytes dispatch: [`convert::read_bytes`] / [`convert::write_bytes`].
 pub mod convert;
 /// Cookie-import facade (requires the `cookie-import` Cargo feature).
@@ -64,12 +66,15 @@ pub mod format;
 pub mod jzod;
 pub mod luna;
 pub mod normalize;
+pub mod pipeline;
+pub mod provider;
 /// Raw key: value text writer (debug/inspection).
 pub mod raw;
 pub mod sfcht;
 #[cfg(test)]
 mod test_support;
 pub mod transcript;
+pub mod user_agent;
 pub mod util;
 pub mod web_auth;
 pub mod zeus;

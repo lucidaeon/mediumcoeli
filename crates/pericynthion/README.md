@@ -19,7 +19,9 @@ A layered numerical pipeline. Each module is independently testable and can be c
 7. **`lots`** — Hellenistic sect + the eight Hermetic lots.
 8. **`geo`** — ISO 6709 DD/DMS/DDM coordinate parsing.
 
-The single call most callers want: `coords::apparent::apparent_ecliptic_position`.
+Higher-level modules compose that pipeline into chart-domain APIs: **`chart`** (`compute` / `compute_with_spk` → `ComputedChart`, plus `sorted_placements` for renderers), **`placements`** (the body catalog: `CATALOG`, `find_by_slug`, `resolve_body_id`, `omniscient_body_ids`), **`spk`** (asteroid SPK ephemeris + `open_all_sources`), **`stars`** / **`bsc5_catalogue`** (baked fixed-star catalog, `galactic_center`), **`antiscia`** / **`draconic`** (pure reflection / projection), and **`datafiles`** / **`provenance`** (filesystem-aware data resolution over a pure provenance schema).
+
+The single call most callers want is `chart::compute` (or `chart::compute_with_spk` to include asteroids); `coords::apparent::apparent_ecliptic_position` is the lower-level building block underneath it.
 
 ## Why it exists
 

@@ -19,6 +19,16 @@ a CLI tool can authenticate to services those cookies already grant access to.
   are accepted in the allow-list (INV-1b). Passing `com` or `.` is a hard error.
 - **No all-cookies path.** There is no function, feature flag, or environment
   variable that bypasses the allow-list filter.
+- **User-Agent divination reads *version* metadata only.** The `user_agent`
+  module divines a browser's own User-Agent by reading that browser's on-disk
+  version file (e.g. Chromium's `Last Version`, Firefox's `compatibility.ini`,
+  Safari's app-bundle `Info.plist`) and interpolating a per-browser template,
+  reducing the result to what the browser actually sends. It touches no cookie
+  store, decrypts
+  nothing, makes no network call, and returns only a UA string. It runs under
+  the same caller consent as cookie reading (the consumer's `--grant-cookie-access`).
+  INV-5's copy-before-read applies to cookie stores; version files are not
+  locked by the browser, so they are read directly rather than copied.
 
 ## Threat model
 

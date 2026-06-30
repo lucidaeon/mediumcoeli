@@ -430,6 +430,65 @@ pub fn find_by_slug(slug: &str) -> Option<&'static Placement> {
     CATALOG.iter().find(|p| p.name.eq_ignore_ascii_case(slug))
 }
 
+/// Why a body slug could not be resolved to an available NAIF id.
+///
+/// `Display` text is tool-neutral so any frontend can show it; the `starcat`
+/// CLI re-formats `NotMinorBody`/`NotCovered` to its own wording.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BodyResolveError {
+    /// The slug is not in [`CATALOG`].
+    #[error("unknown body {0:?}")]
+    Unknown(String),
+    /// The body has no MPC number, so it has no SPK minor-body id.
+    #[error("{0} is not an SPK minor body")]
+    NotMinorBody(&'static str),
+    /// Neither the sb441 nor the Horizons id is covered by the open SPKs.
+    #[error("{0} is not available locally")]
+    NotCovered(&'static str),
+}
+
+/// Resolve a body slug to the NAIF id actually covered, preferring the sb441
+/// id (`2_000_000 + mpc`) over the Horizons id (`20_000_000 + mpc`).
+/// `covered(id)` reports whether any open SPK covers `id`.
+///
+/// # Errors
+/// [`BodyResolveError::Unknown`] if the slug is not in the catalog,
+/// [`BodyResolveError::NotMinorBody`] if it has no MPC number, or
+/// [`BodyResolveError::NotCovered`] if no open SPK covers either id.
+pub fn resolve_body_id(slug: &str, covered: impl Fn(i32) -> bool) -> Result<i32, BodyResolveError> {
+    let placement =
+        find_by_slug(slug).ok_or_else(|| BodyResolveError::Unknown(slug.to_string()))?;
+    let (Some(sb441), Some(horizons)) = (placement.sb441_naif_id(), placement.horizons_naif_id())
+    else {
+        return Err(BodyResolveError::NotMinorBody(placement.name));
+    };
+    if covered(sb441) {
+        Ok(sb441)
+    } else if covered(horizons) {
+        Ok(horizons)
+    } else {
+        Err(BodyResolveError::NotCovered(placement.name))
+    }
+}
+
+/// Every catalog minor body whose sb441 or Horizons id is covered by the open
+/// SPKs (sb441 preferred). The set `--omniscient` computes.
+#[must_use]
+pub fn omniscient_body_ids(covered: impl Fn(i32) -> bool) -> Vec<i32> {
+    let mut ids = Vec::new();
+    for p in CATALOG {
+        let (Some(sb441), Some(horizons)) = (p.sb441_naif_id(), p.horizons_naif_id()) else {
+            continue;
+        };
+        if covered(sb441) {
+            ids.push(sb441);
+        } else if covered(horizons) {
+            ids.push(horizons);
+        }
+    }
+    ids
+}
+
 /// Display name for an SPK NAIF id, resolving both the sb441 (`2_000_000 + mpc`)
 /// and Horizons (`20_000_000 + mpc`) id schemes back to a catalog name.
 #[must_use]
@@ -710,5 +769,46 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod resolve_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_prefers_sb441_then_horizons() {
+        assert_eq!(
+            resolve_body_id("Ceres", |id| id == 2_000_001),
+            Ok(2_000_001)
+        );
+        assert_eq!(
+            resolve_body_id("Ceres", |id| id == 20_000_001),
+            Ok(20_000_001)
+        );
+    }
+
+    #[test]
+    fn resolve_reports_unknown_not_minor_and_uncovered() {
+        assert_eq!(
+            resolve_body_id("Nonsuch", |_| true),
+            Err(BodyResolveError::Unknown("Nonsuch".to_string()))
+        );
+        assert_eq!(
+            resolve_body_id("Sun", |_| true),
+            Err(BodyResolveError::NotMinorBody("Sun"))
+        );
+        assert_eq!(
+            resolve_body_id("Ceres", |_| false),
+            Err(BodyResolveError::NotCovered("Ceres"))
+        );
+    }
+
+    #[test]
+    fn omniscient_includes_covered_minor_bodies() {
+        let all = omniscient_body_ids(|_| true);
+        assert!(all.contains(&2_000_001), "expected Ceres sb441 id");
+        // Mathematical points / luminaries have no MPC number → never included.
+        assert!(all.iter().all(|&id| id >= 2_000_000));
     }
 }

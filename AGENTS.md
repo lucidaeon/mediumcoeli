@@ -111,7 +111,7 @@ cargo test --release -p astrogram rsc_parses_single_entry -- --nocapture
 | `ASTRO_SPECIMENS` | blackmoon/astrogram specimen tests — path to `sfcht/`, `zdb/`, `adb/` subdirs; tests skip cleanly if unset |
 | `ASTRO_RESEARCH` | reference chart docs (`ref_*.md`); acceptance tests skip cleanly if unset |
 
-Credentials for web targets are read from env vars matching the slug (`ASTROTHEOROS_USER`, `ASTROTHEOROS_PASS`, `ASTROTHEOROS_TOKEN`, `ASTROCOM_TOKEN`, `ASTROCOM_USER`, `ASTROCOM_PASS`, `LUNA_TOKEN`).
+Credentials for web targets are read from env vars with a `BLACKMOON_` prefix (`BLACKMOON_ASTROTHEOROS_USER`, `BLACKMOON_ASTROTHEOROS_PASS`, `BLACKMOON_ASTROTHEOROS_TOKEN`, `BLACKMOON_ASTROCOM_TOKEN`, `BLACKMOON_ASTROCOM_USER`, `BLACKMOON_ASTROCOM_PASS`, `BLACKMOON_LUNA_TOKEN`).
 
 ## Workspace layout
 

@@ -622,6 +622,53 @@ pub(crate) fn locate_store_in(
     }
 }
 
+/// The on-disk file to read a browser's version from, beside the stores this
+/// module already locates. Chromium-family: `<user-data-root>/Last Version`.
+/// Firefox: `<newest-profile>/compatibility.ini`. Safari: the app bundle's
+/// `Info.plist` (macOS only; Safari is SIP-installed under `/Applications`).
+/// Returns `None` when the file does not exist.
+pub(crate) fn version_source(browser: Browser, profile: Option<&str>) -> Option<PathBuf> {
+    let roots = real_roots();
+    match browser {
+        Browser::Firefox => {
+            let dbs = find_firefox_dbs(&roots.firefox_bases);
+            // Prefer an exact profile-name match, else newest by mtime.
+            let chosen = profile
+                .and_then(|p| {
+                    dbs.iter()
+                        .find(|db| {
+                            db.parent()
+                                .and_then(|d| d.file_name())
+                                .and_then(|n| n.to_str())
+                                == Some(p)
+                        })
+                        .cloned()
+                })
+                .or_else(|| newest(dbs.clone()));
+            let dir = chosen?.parent()?.to_path_buf();
+            let ini = dir.join("compatibility.ini");
+            ini.is_file().then_some(ini)
+        }
+        Browser::Safari => {
+            // Safari is macOS-only and SIP-installed; its version lives in the
+            // app bundle's (XML) Info.plist. No version source on other OSes.
+            #[cfg(target_os = "macos")]
+            {
+                let p = PathBuf::from("/Applications/Safari.app/Contents/Info.plist");
+                p.is_file().then_some(p)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                None
+            }
+        }
+        _ => {
+            let f = chromium_browser_root(&roots, browser)?.join("Last Version");
+            f.is_file().then_some(f)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

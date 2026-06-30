@@ -4,9 +4,9 @@
 //! so `cargo test` stays green in environments without credentials.
 //!
 //! To run (tests are `#[ignore]` — opt-in only):
-//!   LUNA_TOKEN=<cookie>               cargo test --test web_integration -- --ignored luna
-//!   ASTROCOM_USER=<email> ASTROCOM_PASS=<pass>  cargo test --test web_integration -- --ignored astrocom
-//!   ASTROTHEOROS_USER=<u> ASTROTHEOROS_PASS=<p> cargo test --test web_integration -- --ignored astrotheoros
+//!   ASTROGRAM_LUNA_TOKEN=<cookie>               cargo test --test web_integration -- --ignored luna
+//!   ASTROGRAM_ASTROCOM_USER=<email> ASTROGRAM_ASTROCOM_PASS=<pass>  cargo test --test web_integration -- --ignored astrocom
+//!   ASTROGRAM_ASTROTHEOROS_USER=<u> ASTROGRAM_ASTROTHEOROS_PASS=<p> cargo test --test web_integration -- --ignored astrotheoros
 
 use astrogram::chart::{
     Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac,
@@ -186,12 +186,12 @@ fn synthetic_chart() -> Chart {
 // ── LUNA® ─────────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "live network — run with: LUNA_TOKEN=<cookie> cargo test --test web_integration -- --ignored luna"]
+#[ignore = "live network — run with: ASTROGRAM_LUNA_TOKEN=<cookie> cargo test --test web_integration -- --ignored luna"]
 fn luna_write_delete_synthetic() {
-    let cookie = match std::env::var("LUNA_TOKEN") {
+    let cookie = match std::env::var("ASTROGRAM_LUNA_TOKEN") {
         Ok(c) => c,
         Err(_) => {
-            println!("LUNA_TOKEN not set — skipping");
+            println!("ASTROGRAM_LUNA_TOKEN not set — skipping");
             return;
         }
     };
@@ -208,7 +208,8 @@ fn luna_write_delete_synthetic() {
         chart.city.as_deref().unwrap_or("")
     );
 
-    let session = astrogram::luna::LunaSession::new(&cookie, 500).expect("LunaSession::new");
+    let session =
+        astrogram::luna::LunaSession::new(&cookie, 500, "test/1.0").expect("LunaSession::new");
 
     let phenom_id = session
         .create_one(&chart)
@@ -238,19 +239,19 @@ fn luna_write_delete_synthetic() {
 // ── astro.com ─────────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "live network — run with: ASTROCOM_USER=<email> ASTROCOM_PASS=<pass> cargo test --test web_integration -- --ignored astrocom"]
+#[ignore = "live network — run with: ASTROGRAM_ASTROCOM_USER=<email> ASTROGRAM_ASTROCOM_PASS=<pass> cargo test --test web_integration -- --ignored astrocom"]
 fn astrocom_write_delete_synthetic() {
-    let user = match std::env::var("ASTROCOM_USER") {
+    let user = match std::env::var("ASTROGRAM_ASTROCOM_USER") {
         Ok(u) => u,
         Err(_) => {
-            println!("ASTROCOM_USER not set — skipping");
+            println!("ASTROGRAM_ASTROCOM_USER not set — skipping");
             return;
         }
     };
-    let pass = match std::env::var("ASTROCOM_PASS") {
+    let pass = match std::env::var("ASTROGRAM_ASTROCOM_PASS") {
         Ok(p) => p,
         Err(_) => {
-            println!("ASTROCOM_PASS not set — skipping");
+            println!("ASTROGRAM_ASTROCOM_PASS not set — skipping");
             return;
         }
     };
@@ -267,7 +268,7 @@ fn astrocom_write_delete_synthetic() {
         chart.city.as_deref().unwrap_or("")
     );
 
-    let session = astrogram::astrocom::AstrocomSession::login(&user, &pass, 500)
+    let session = astrogram::astrocom::AstrocomSession::login(&user, &pass, 500, "test/1.0")
         .expect("AstrocomSession::login");
 
     let nhor_id = session
@@ -296,19 +297,19 @@ fn astrocom_write_delete_synthetic() {
 // ── astrotheoros.com ──────────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "live network — run with: ASTROTHEOROS_USER=<u> ASTROTHEOROS_PASS=<p> cargo test --test web_integration -- --ignored astrotheoros"]
+#[ignore = "live network — run with: ASTROGRAM_ASTROTHEOROS_USER=<u> ASTROGRAM_ASTROTHEOROS_PASS=<p> cargo test --test web_integration -- --ignored astrotheoros"]
 fn astrotheoros_write_delete_synthetic() {
-    let user = match std::env::var("ASTROTHEOROS_USER") {
+    let user = match std::env::var("ASTROGRAM_ASTROTHEOROS_USER") {
         Ok(u) => u,
         Err(_) => {
-            println!("ASTROTHEOROS_USER not set — skipping");
+            println!("ASTROGRAM_ASTROTHEOROS_USER not set — skipping");
             return;
         }
     };
-    let pass = match std::env::var("ASTROTHEOROS_PASS") {
+    let pass = match std::env::var("ASTROGRAM_ASTROTHEOROS_PASS") {
         Ok(p) => p,
         Err(_) => {
-            println!("ASTROTHEOROS_PASS not set — skipping");
+            println!("ASTROGRAM_ASTROTHEOROS_PASS not set — skipping");
             return;
         }
     };
@@ -325,8 +326,9 @@ fn astrotheoros_write_delete_synthetic() {
         chart.city.as_deref().unwrap_or("")
     );
 
-    let session = astrogram::astrotheoros::AstrotheorosSession::login(&user, &pass, 500)
-        .expect("AstrotheorosSession::login");
+    let session =
+        astrogram::astrotheoros::AstrotheorosSession::login(&user, &pass, 500, "test/1.0")
+            .expect("AstrotheorosSession::login");
 
     let entry = session
         .create_one(&chart)

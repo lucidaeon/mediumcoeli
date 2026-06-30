@@ -151,6 +151,30 @@ pub struct LilithPoints {
     pub true_retrograde: bool,
 }
 
+/// Which lunar-node variant a flat placement list should carry.
+///
+/// Mirrors the mean/true distinction in [`NodePoints`] without pulling a CLI
+/// argument enum into the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeVariant {
+    /// Closed-form mean node.
+    Mean,
+    /// Osculating true node.
+    True,
+}
+
+/// Sort `(label, longitude_deg)` pairs zodiacally starting from `start_lon`,
+/// wrapping through 360°. Stable for equal relative longitudes.
+pub fn sort_zodiacally(start_lon: f64, items: &mut [(String, f64)]) {
+    items.sort_by(|a, b| {
+        let a_rel = (a.1 - start_lon).rem_euclid(360.0);
+        let b_rel = (b.1 - start_lon).rem_euclid(360.0);
+        a_rel
+            .partial_cmp(&b_rel)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+}
+
 /// Hellenistic sect and the eight Hermetic lots.
 ///
 /// `fortune_deg`, `spirit_deg`, and `exaltation_deg` are always present
@@ -306,6 +330,72 @@ pub struct ComputedChart {
     /// Tropical ecliptic positions of caller-supplied resolved stars.
     /// Empty when no stars were requested; order matches the input slice.
     pub stars: Vec<ComputedStar>,
+}
+
+impl ComputedChart {
+    /// Flatten this chart into a single zodiacally-sorted `(label, longitude)`
+    /// list: optional house cusps (`H1`..`H12`), bodies, asteroids, the four
+    /// axes plus Vx/Ax, the selected lunar-node variant (`Nn`/`Sn`), and the
+    /// always-present lots (`Fortune`/`Spirit`, plus `Eros` when available).
+    /// Lilith is intentionally excluded (matches the legacy page renderer).
+    ///
+    /// Ordering runs from `start_lon` forward through 360°. This is the data
+    /// layer every chart renderer (wheel, table, page) shares.
+    #[must_use]
+    pub fn sorted_placements(
+        &self,
+        primary_house: Option<&HouseCusps>,
+        start_lon: f64,
+        node_variant: NodeVariant,
+    ) -> Vec<(String, f64)> {
+        let mut v: Vec<(String, f64)> = Vec::new();
+
+        if let Some(hc) = primary_house {
+            for h in 1_u8..=12 {
+                v.push((format!("H{h}"), hc.cusp(h).to_degrees().rem_euclid(360.0)));
+            }
+        }
+        for cb in &self.bodies {
+            v.push((cb.body.name().to_string(), cb.position.longitude_deg));
+        }
+        for ca in &self.asteroids {
+            v.push((ca.name.to_string(), ca.position.longitude_deg));
+        }
+        if let Some(ang) = &self.angles {
+            if let Some(d) = ang.ac_deg {
+                v.push(("Ac".into(), d));
+            }
+            if let Some(d) = ang.ds_deg {
+                v.push(("Ds".into(), d));
+            }
+            v.push(("Mc".into(), ang.mc_deg));
+            v.push(("Ic".into(), ang.ic_deg));
+            if let Some(d) = ang.vx_deg {
+                v.push(("Vx".into(), d));
+            }
+            if let Some(d) = ang.ax_deg {
+                v.push(("Ax".into(), d));
+            }
+            if let Some(n) = &self.nodes {
+                let (nn, sn) = match node_variant {
+                    NodeVariant::Mean => (n.mean_nn_deg, n.mean_sn_deg),
+                    NodeVariant::True => (n.true_nn_deg, n.true_sn_deg),
+                };
+                v.push(("Nn".into(), nn));
+                v.push(("Sn".into(), sn));
+            }
+        }
+        if let Some(l) = &self.lots {
+            v.push(("Fortune".into(), l.fortune_deg));
+            v.push(("Spirit".into(), l.spirit_deg));
+            if let Some(d) = l.eros_deg {
+                v.push(("Eros".into(), d));
+            }
+        }
+
+        sort_zodiacally(start_lon, &mut v);
+        v
+    }
 }
 
 // =============================================================================
@@ -1008,5 +1098,32 @@ mod tests {
             (eros - expected).abs() < 1e-3,
             "Eros {eros:.4} expected {expected:.4}"
         );
+    }
+}
+
+#[cfg(test)]
+mod sorted_placement_tests {
+    use super::*;
+
+    #[test]
+    fn sort_zodiacally_orders_from_start_lon_wrapping() {
+        let mut items = vec![
+            ("A".to_string(), 10.0),
+            ("B".to_string(), 200.0),
+            ("C".to_string(), 100.0),
+        ];
+        // start at 90°: C(100) is +10, B(200) is +110, A(10) is +280.
+        sort_zodiacally(90.0, &mut items);
+        let labels: Vec<&str> = items.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(labels, vec!["C", "B", "A"]);
+    }
+
+    #[test]
+    fn node_variant_is_copy_and_distinct() {
+        assert_ne!(NodeVariant::Mean, NodeVariant::True);
+        let v = NodeVariant::True;
+        let copy_v = v; // must compile: NodeVariant is Copy
+        assert_eq!(v, NodeVariant::True);
+        assert_eq!(copy_v, NodeVariant::True);
     }
 }

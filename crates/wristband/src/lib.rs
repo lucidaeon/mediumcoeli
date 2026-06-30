@@ -25,6 +25,7 @@
 pub mod cookie;
 pub mod domain;
 pub mod error;
+pub mod user_agent;
 
 pub(crate) mod chromium;
 pub(crate) mod discover;

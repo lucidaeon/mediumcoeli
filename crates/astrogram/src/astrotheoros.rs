@@ -78,10 +78,6 @@ pub const BASE_URL: &str = "https://astrotheoros.com";
 /// Clerk API base URL for astrotheoros.com.
 pub const CLERK_URL: &str = "https://clerk.astrotheoros.com";
 
-/// User-Agent matching what the browser sends; required for RSC responses.
-pub const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-    AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-
 /// URL-encoded JSON describing the Next.js route tree for `/app`.
 ///
 /// Must match the server's route structure; stable unless Astrotheoros restructures.
@@ -585,9 +581,9 @@ pub struct AstrotheorosSession {
 }
 
 impl AstrotheorosSession {
-    fn build_client() -> Result<Client, AstrotheorosError> {
+    fn build_client(user_agent: &str) -> Result<Client, AstrotheorosError> {
         Client::builder()
-            .user_agent(USER_AGENT)
+            .user_agent(user_agent)
             .timeout(Duration::from_secs(60))
             .cookie_store(true)
             .build()
@@ -602,13 +598,20 @@ impl AstrotheorosSession {
     ///      extract JWT, `session_id`, `__client_uat`, and the `__client` cookie
     ///      (the last needed so the later token refresh is authenticated).
     ///
+    /// `user_agent` is the User-Agent to send (required).
+    ///
     /// # Errors
     /// - [`AstrotheorosError::HttpClientBuild`] if the reqwest client cannot be built.
     /// - [`AstrotheorosError::Http`] on any network error.
     /// - [`AstrotheorosError::ClerkIdentifyFailed`] if step 1 does not return a `sign_in_id`.
     /// - [`AstrotheorosError::ClerkAuthFailed`] if step 2 does not return a valid JWT/session.
-    pub fn login(email: &str, pass: &str, delay_ms: u64) -> Result<Self, AstrotheorosError> {
-        let client = Self::build_client()?;
+    pub fn login(
+        email: &str,
+        pass: &str,
+        delay_ms: u64,
+        user_agent: &str,
+    ) -> Result<Self, AstrotheorosError> {
+        let client = Self::build_client(user_agent)?;
 
         // Step 1: identify
         let step1_url = format!("{CLERK_URL}/v1/client/sign_ins");
@@ -674,6 +677,8 @@ impl AstrotheorosSession {
     /// Build a session from existing Clerk credentials (useful for testing or
     /// resuming a session without a fresh login).
     ///
+    /// `user_agent` is the User-Agent to send (required).
+    ///
     /// # Errors
     /// - [`AstrotheorosError::HttpClientBuild`] if the reqwest client cannot be built.
     pub fn from_jwt(
@@ -681,9 +686,10 @@ impl AstrotheorosSession {
         session_id: &str,
         client_uat: &str,
         delay_ms: u64,
+        user_agent: &str,
     ) -> Result<Self, AstrotheorosError> {
         Ok(Self {
-            client: Self::build_client()?,
+            client: Self::build_client(user_agent)?,
             jwt: RefCell::new(jwt.to_string()),
             session_id: session_id.to_string(),
             client_uat: client_uat.to_string(),
@@ -700,6 +706,8 @@ impl AstrotheorosSession {
     /// call to Clerk requires — without it `POST …/sessions/{id}/tokens`
     /// returns 401.
     ///
+    /// `user_agent` is the User-Agent to send (required).
+    ///
     /// # Errors
     /// - [`AstrotheorosError::HttpClientBuild`] if the reqwest client cannot be built.
     pub fn from_browser(
@@ -708,9 +716,10 @@ impl AstrotheorosSession {
         client_uat: &str,
         client_cookie: &str,
         delay_ms: u64,
+        user_agent: &str,
     ) -> Result<Self, AstrotheorosError> {
         Ok(Self {
-            client: Self::build_client()?,
+            client: Self::build_client(user_agent)?,
             jwt: RefCell::new(jwt.to_string()),
             session_id: session_id.to_string(),
             client_uat: client_uat.to_string(),
@@ -1034,10 +1043,16 @@ impl AstrotheorosSession {
     /// Build a session from a single credential (the offline/login half of
     /// [`Self::authenticate`], factored out for testing). Does **not** probe.
     ///
+    /// `user_agent` is the User-Agent to send (required); forwarded to each constructor.
+    ///
     /// # Errors
     /// Propagates the underlying constructor error (`from_browser`/`from_jwt`
     /// build the client offline; `login` performs the network Clerk flow).
-    fn build_one(cred: &AstrotheorosCredential, delay_ms: u64) -> Result<Self, AstrotheorosError> {
+    fn build_one(
+        cred: &AstrotheorosCredential,
+        delay_ms: u64,
+        user_agent: &str,
+    ) -> Result<Self, AstrotheorosError> {
         match cred {
             AstrotheorosCredential::Cookie {
                 jwt,
@@ -1045,16 +1060,16 @@ impl AstrotheorosSession {
                 client_uat,
                 client_cookie,
             } => match client_cookie {
-                Some(c) => Self::from_browser(jwt, session_id, client_uat, c, delay_ms),
-                None => Self::from_jwt(jwt, session_id, client_uat, delay_ms),
+                Some(c) => Self::from_browser(jwt, session_id, client_uat, c, delay_ms, user_agent),
+                None => Self::from_jwt(jwt, session_id, client_uat, delay_ms, user_agent),
             },
             AstrotheorosCredential::Token {
                 jwt,
                 session_id,
                 client_uat,
-            } => Self::from_jwt(jwt, session_id, client_uat, delay_ms),
+            } => Self::from_jwt(jwt, session_id, client_uat, delay_ms, user_agent),
             AstrotheorosCredential::Login { email, password } => {
-                Self::login(email, password, delay_ms)
+                Self::login(email, password, delay_ms, user_agent)
             }
         }
     }
@@ -1069,6 +1084,8 @@ impl AstrotheorosSession {
     /// only on [`AstrotheorosError::is_auth_failure`]; any other error stops the
     /// chain immediately.
     ///
+    /// `user_agent` is the User-Agent to send (required); forwarded to each constructor.
+    ///
     /// # Errors
     /// - The last auth failure if every credential is rejected.
     /// - The first non-auth error (network/JSON) encountered.
@@ -1076,12 +1093,13 @@ impl AstrotheorosSession {
     pub fn authenticate(
         chain: &[AstrotheorosCredential],
         delay_ms: u64,
+        user_agent: &str,
     ) -> Result<(Self, usize), AstrotheorosError> {
         let attempts: Vec<_> = chain
             .iter()
             .map(|cred| {
                 move || -> Result<Self, AstrotheorosError> {
-                    let session = Self::build_one(cred, delay_ms)?;
+                    let session = Self::build_one(cred, delay_ms, user_agent)?;
                     session.probe()?;
                     Ok(session)
                 }
@@ -1137,7 +1155,7 @@ mod settings_tests {
     fn authenticate_empty_chain_errors() {
         // unwrap_err() requires T: Debug, which AstrotheorosSession doesn't
         // implement (reqwest::blocking::Client is not Debug). Use match instead.
-        match AstrotheorosSession::authenticate(&[], 0) {
+        match AstrotheorosSession::authenticate(&[], 0, "test/1.0") {
             Err(err) => assert!(matches!(err, AstrotheorosError::ClerkAuthFailed(_))),
             Ok(_) => panic!("expected Err for empty chain"),
         }
@@ -1154,18 +1172,25 @@ mod settings_tests {
             client_uat: "1234567890".to_string(),
         };
         // build_one is the offline half of authenticate; see Step 3.
-        let session = AstrotheorosSession::build_one(&cred, 0).expect("token builds offline");
+        let session =
+            AstrotheorosSession::build_one(&cred, 0, "test/1.0").expect("token builds offline");
         assert_eq!(session.session_id, "sess_TEST123");
     }
 
     #[test]
-    #[ignore = "requires ASTROTHEOROS_USER/PASS and network"]
+    fn from_jwt_takes_required_user_agent_and_builds() {
+        // UA is now required (&str), no Option/default.
+        assert!(AstrotheorosSession::from_jwt(CHAIN_JWT, "sess_x", "uat_x", 0, "test/1.0").is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires ASTROGRAM_ASTROTHEOROS_USER/PASS and network"]
     fn authenticate_falls_through_stale_token_to_login() {
         let (Ok(email), Ok(password)) = (
-            std::env::var("ASTROTHEOROS_USER"),
-            std::env::var("ASTROTHEOROS_PASS"),
+            std::env::var("ASTROGRAM_ASTROTHEOROS_USER"),
+            std::env::var("ASTROGRAM_ASTROTHEOROS_PASS"),
         ) else {
-            eprintln!("ASTROTHEOROS_USER/PASS unset — skipping");
+            eprintln!("ASTROGRAM_ASTROTHEOROS_USER/PASS unset — skipping");
             return;
         };
         // A deliberately bogus token (stale) followed by real login creds: the
@@ -1178,7 +1203,7 @@ mod settings_tests {
             },
             AstrotheorosCredential::Login { email, password },
         ];
-        match AstrotheorosSession::authenticate(&chain, 0) {
+        match AstrotheorosSession::authenticate(&chain, 0, "test/1.0") {
             Ok((_, idx)) => assert_eq!(idx, 1, "should authenticate via login, not stale token"),
             Err(e) => {
                 eprintln!("network/login unavailable ({e}) — skipping assertion");
@@ -1243,16 +1268,16 @@ mod settings_tests {
     }
 
     #[test]
-    #[ignore = "requires ASTROTHEOROS_USER/PASS and network"]
+    #[ignore = "requires ASTROGRAM_ASTROTHEOROS_USER/PASS and network"]
     fn probe_live_smoke() {
         let (Ok(user), Ok(pass)) = (
-            std::env::var("ASTROTHEOROS_USER"),
-            std::env::var("ASTROTHEOROS_PASS"),
+            std::env::var("ASTROGRAM_ASTROTHEOROS_USER"),
+            std::env::var("ASTROGRAM_ASTROTHEOROS_PASS"),
         ) else {
-            eprintln!("ASTROTHEOROS_USER/PASS unset — skipping live probe");
+            eprintln!("ASTROGRAM_ASTROTHEOROS_USER/PASS unset — skipping live probe");
             return;
         };
-        let Ok(session) = AstrotheorosSession::login(&user, &pass, 0) else {
+        let Ok(session) = AstrotheorosSession::login(&user, &pass, 0, "test/1.0") else {
             eprintln!("login failed (offline?) — skipping");
             return;
         };
@@ -1262,7 +1287,7 @@ mod settings_tests {
     }
 
     #[test]
-    #[ignore = "requires ASTROTHEOROS_USER/PASS and network"]
+    #[ignore = "requires ASTROGRAM_ASTROTHEOROS_USER/PASS and network"]
     fn login_session_can_refresh_jwt() {
         // Regression: a login session must be able to refresh its 60 s JWT.
         // `login` captures the `__client` cookie, so the forced refresh below
@@ -1271,13 +1296,13 @@ mod settings_tests {
         // only in the cookie jar, which the refresh's explicit Cookie header
         // suppresses.
         let (Ok(user), Ok(pass)) = (
-            std::env::var("ASTROTHEOROS_USER"),
-            std::env::var("ASTROTHEOROS_PASS"),
+            std::env::var("ASTROGRAM_ASTROTHEOROS_USER"),
+            std::env::var("ASTROGRAM_ASTROTHEOROS_PASS"),
         ) else {
-            eprintln!("ASTROTHEOROS_USER/PASS unset — skipping live refresh test");
+            eprintln!("ASTROGRAM_ASTROTHEOROS_USER/PASS unset — skipping live refresh test");
             return;
         };
-        let Ok(session) = AstrotheorosSession::login(&user, &pass, 0) else {
+        let Ok(session) = AstrotheorosSession::login(&user, &pass, 0, "test/1.0") else {
             eprintln!("login failed (offline?) — skipping");
             return;
         };
@@ -1289,5 +1314,90 @@ mod settings_tests {
         session
             .refresh_jwt_if_needed()
             .expect("a login session must be able to refresh its JWT");
+    }
+}
+
+/// Wire-fidelity regression tests: prove that the User-Agent string we build is
+/// the exact `User-Agent` header a server receives. The missing link in the rest
+/// of the suite, which only covers UA *construction*. Hermetic — a one-shot
+/// loopback HTTP server captures the header; nothing leaves the host, and no
+/// network/echo capability is added to shipping code.
+#[cfg(test)]
+mod wire_ua_tests {
+    use super::*;
+
+    /// Send a real `build_client(ua)` GET to a one-shot loopback server and
+    /// return the `User-Agent` header value that server actually received.
+    fn ua_seen_on_wire(ua: &str) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            // Read until end-of-headers (a no-body GET ends with CRLFCRLF).
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                match sock.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            String::from_utf8_lossy(&buf).into_owned()
+        });
+
+        AstrotheorosSession::build_client(ua)
+            .expect("build client")
+            .get(format!("http://{addr}/"))
+            .send()
+            .expect("loopback send")
+            .error_for_status()
+            .expect("loopback 200");
+
+        let request = server.join().expect("server thread");
+        request
+            .lines()
+            .filter_map(|l| l.split_once(':'))
+            .find(|(name, _)| name.trim().eq_ignore_ascii_case("user-agent"))
+            .map(|(_, v)| v.trim().to_string())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn build_client_transmits_user_agent_verbatim() {
+        // Whatever UA we set is exactly what the wire carries — proving the
+        // string->wire link that the construction unit tests cannot.
+        let sentinel = "X-Sentinel/9.9 (wire-fidelity-probe)";
+        assert_eq!(ua_seen_on_wire(sentinel), sentinel);
+    }
+
+    #[test]
+    fn default_self_reported_ua_reaches_wire_and_is_not_a_browser() {
+        // The honest default UA round-trips intact and carries no browser
+        // markers — the regression guard for keeping cookie *read* access
+        // decoupled from UA *impersonation*. If a future change ever puts a
+        // browser UA on a default run, the negative assertions fail loudly.
+        let app = crate::user_agent::AppProduct::new("Blackmoon", "0.2.2");
+        let honest = crate::user_agent::self_reported(&app);
+
+        let seen = ua_seen_on_wire(&honest);
+        assert_eq!(seen, honest, "honest UA must reach the wire verbatim");
+        assert!(seen.starts_with("Mozilla/5.0 Blackmoon/"), "{seen}");
+        assert!(seen.contains("Astrogram/"), "{seen}");
+        for marker in ["Safari/", "Chrome/", "Firefox/", "Gecko", "AppleWebKit"] {
+            assert!(
+                !seen.contains(marker),
+                "honest default UA leaked browser marker {marker:?}: {seen}"
+            );
+        }
     }
 }

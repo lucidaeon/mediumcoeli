@@ -18,9 +18,13 @@ Modules currently shipping:
 - **`zeus`** — Zeus `.zdb` UTF-8 semicolon-delimited records.
 - **`luna`** — lunaastrology.com HTTP session: listing pagination, `cast.json` metadata, sidebar HTML parsing, form-token-aware writes.
 - **`astrocom`** — astro.com HTTP session: credential login, full CRUD against the AWD endpoint with `nhor`-keyed identity.
+- **`astrotheoros`** — astrotheoros.com HTTP session: Clerk two-step auth, Next.js RSC read parsing, full CRUD.
 - **`consolidate`** — duplicate detection (exact name + date, time within ±2h, lat/lon within 0.1°) and batch merge.
 - **`normalize`** — strips characters not representable in cp1252 and collapses whitespace, the mandatory pre-step before any `.SFcht` write.
 - **`jzod`** — JZOD writer; maps `chart::Chart` to `jzod::Chart` and delegates serialization to the [`jzod`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/README.md) crate. See [`JZOD.md`](https://github.com/lucidaeon/mediumcoeli/blob/main/crates/jzod/JZOD.md) for the format spec.
+- **`provider`** — the web-CRUD lifecycle (`WebProvider`) decoupled from terminal output behind a `ProgressSink` trait, so a GUI drives the same read → write → verify flow the CLI does.
+- **`pipeline`** — pure convert-pipeline decision helpers (field-loss summary, fill targets, readback verification rows) shared between the CLI's orchestration and any future GUI.
+- **`user_agent`** — User-Agent policy: a typed `AppProduct` the consumer **must** supply (no app-less default), the `self_reported`/`STATIC`/`UaChoice`/`resolve` selection layer, and `ua_kind_label`. The web sessions take the resolved UA as a required argument.
 
 ## Why it exists
 

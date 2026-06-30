@@ -16,6 +16,15 @@ posture: cookies are filtered by an explicit allow-list **before** decryption,
 and the library has no path that can return cookies for domains the caller did
 not name.
 
+It also exposes a small `user_agent` module that divines a browser's own
+User-Agent string — reading that browser's on-disk version metadata (e.g.
+Chromium's `Last Version` file, Firefox's `compatibility.ini`) and interpolating
+a per-browser template, falling back to a maintained pinned version when
+detection fails. This is **version detection only** — no cookie material, no
+decryption, no network — and lives under the same caller-provided consent as
+cookie reading (it is used only when the consumer has already invoked
+`--grant-cookie-access`). It never copies or opens cookie stores.
+
 ## Enshrined invariants
 
 These invariants are structural, not merely policy:

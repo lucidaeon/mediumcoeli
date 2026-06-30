@@ -1,6 +1,5 @@
 use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, EventType};
-use crate::luna::USER_AGENT;
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use std::time::Duration;
@@ -118,7 +117,7 @@ pub struct AstrocomSession {
 }
 
 impl AstrocomSession {
-    fn build_client(cid: &str) -> Result<Client, AstrocomError> {
+    fn build_client(cid: &str, user_agent: &str) -> Result<Client, AstrocomError> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             reqwest::header::COOKIE,
@@ -137,7 +136,7 @@ impl AstrocomSession {
         );
         Client::builder()
             .default_headers(headers)
-            .user_agent(USER_AGENT)
+            .user_agent(user_agent)
             .http1_only()
             .timeout(Duration::from_secs(60))
             .build()
@@ -154,12 +153,14 @@ impl AstrocomSession {
     /// account password — a cookie-import path should fall through to
     /// [`login`](Self::login) for those operations.
     ///
+    /// `user_agent` is the User-Agent to send (required).
+    ///
     /// # Errors
     /// - [`AstrocomError::HttpClientBuild`] if the `cid` value produces an invalid
     ///   cookie header or the `reqwest::Client` cannot be constructed.
-    pub fn from_cid(cid: &str, delay_ms: u64) -> Result<Self, AstrocomError> {
+    pub fn from_cid(cid: &str, delay_ms: u64, user_agent: &str) -> Result<Self, AstrocomError> {
         Ok(Self {
-            client: Self::build_client(cid)?,
+            client: Self::build_client(cid, user_agent)?,
             cid: cid.to_string(),
             delay: Duration::from_millis(delay_ms),
         })
@@ -172,6 +173,9 @@ impl AstrocomSession {
     ///   2. POST `LOGIN_POST` with credentials + temp cid.
     ///   3. Extract real cid from redirect URL (`;;cid=<value>`) or hidden field.
     ///
+    /// `user_agent` is the User-Agent to send (required); used for both the
+    /// anonymous login client and the resulting authenticated session.
+    ///
     /// # Errors
     /// - [`AstrocomError::HttpClientBuild`] if the anonymous `reqwest::Client`
     ///   cannot be constructed.
@@ -183,9 +187,14 @@ impl AstrocomSession {
     /// # Panics
     /// Panics if the CSS selector literal `input[name="cid"]` is invalid —
     /// this is a compile-time constant and cannot happen in practice.
-    pub fn login(email: &str, pass: &str, delay_ms: u64) -> Result<Self, AstrocomError> {
+    pub fn login(
+        email: &str,
+        pass: &str,
+        delay_ms: u64,
+        user_agent: &str,
+    ) -> Result<Self, AstrocomError> {
         let anon_client = Client::builder()
-            .user_agent(USER_AGENT)
+            .user_agent(user_agent)
             .http1_only()
             .timeout(Duration::from_secs(60))
             .build()
@@ -228,7 +237,7 @@ impl AstrocomSession {
                 .ok_or_else(|| AstrocomError::LoginFailed(final_url))?
         };
 
-        Self::from_cid(&cid, delay_ms)
+        Self::from_cid(&cid, delay_ms, user_agent)
     }
 
     fn get_text(&self, url: &str) -> Result<String, AstrocomError> {
@@ -272,6 +281,9 @@ impl AstrocomSession {
     /// chain (for the delete path — see [`Self::delete_charts`]). Fall-through
     /// happens only on [`AstrocomError::is_auth_failure`].
     ///
+    /// `user_agent` is the User-Agent to send (required); forwarded to each
+    /// [`Self::from_cid`] / [`Self::login`] call in the fall-through loop.
+    ///
     /// # Errors
     /// - The last auth failure if every credential is rejected.
     /// - The first non-auth error encountered.
@@ -279,6 +291,7 @@ impl AstrocomSession {
     pub fn authenticate(
         chain: &[AstrocomCredential],
         delay_ms: u64,
+        user_agent: &str,
     ) -> Result<AstrocomAuth, AstrocomError> {
         let login = Self::login_from_chain(chain);
         let attempts: Vec<_> = chain
@@ -286,9 +299,11 @@ impl AstrocomSession {
             .map(|cred| {
                 move || -> Result<Self, AstrocomError> {
                     let session = match cred {
-                        AstrocomCredential::Cookie(cid) => Self::from_cid(cid, delay_ms)?,
+                        AstrocomCredential::Cookie(cid) => {
+                            Self::from_cid(cid, delay_ms, user_agent)?
+                        }
                         AstrocomCredential::Login { email, password } => {
-                            Self::login(email, password, delay_ms)?
+                            Self::login(email, password, delay_ms, user_agent)?
                         }
                     };
                     session.probe()?;
@@ -878,7 +893,7 @@ mod tests {
 
     #[test]
     fn astrocom_authenticate_empty_chain_errors() {
-        match AstrocomSession::authenticate(&[], 0) {
+        match AstrocomSession::authenticate(&[], 0, "test/1.0") {
             Err(AstrocomError::LoginFailed(_)) => {}
             Err(e) => panic!("expected LoginFailed, got error: {e}"),
             Ok(_) => panic!("expected Err(LoginFailed), got Ok"),
@@ -905,16 +920,21 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires ASTROCOM_USER/PASS and network"]
+    fn from_cid_takes_required_user_agent_and_builds() {
+        assert!(AstrocomSession::from_cid("cid123", 0, "test/1.0").is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires ASTROGRAM_ASTROCOM_USER/PASS and network"]
     fn probe_live_smoke() {
         let (Ok(user), Ok(pass)) = (
-            std::env::var("ASTROCOM_USER"),
-            std::env::var("ASTROCOM_PASS"),
+            std::env::var("ASTROGRAM_ASTROCOM_USER"),
+            std::env::var("ASTROGRAM_ASTROCOM_PASS"),
         ) else {
-            eprintln!("ASTROCOM_USER/PASS unset — skipping live probe");
+            eprintln!("ASTROGRAM_ASTROCOM_USER/PASS unset — skipping live probe");
             return;
         };
-        let Ok(session) = AstrocomSession::login(&user, &pass, 0) else {
+        let Ok(session) = AstrocomSession::login(&user, &pass, 0, "test/1.0") else {
             eprintln!("login failed (offline?) — skipping");
             return;
         };

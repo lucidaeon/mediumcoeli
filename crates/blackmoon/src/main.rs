@@ -63,6 +63,31 @@ fn parse_browser(s: &str) -> Result<GrantArg, String> {
     }
 }
 
+/// `--ua` value: the keyword `browser` opts into mimicking the cookie-source
+/// browser; the bare flag selects the static spoof; any other string is verbatim.
+#[derive(Clone, Debug)]
+enum UaArg {
+    /// `--ua browser`: mimic the cookie-source browser's own divined UA.
+    Browser,
+    /// Bare `--ua`: use the fixed static UA.
+    Static,
+    /// `--ua <string>`: send this verbatim.
+    Custom(String),
+}
+
+/// Parse a `--ua` value. Empty (the `default_missing_value` for the bare flag)
+/// selects `Static`; the keyword `browser` selects `Browser`; any other string
+/// is `Custom`.
+fn parse_ua(s: &str) -> Result<UaArg, String> {
+    if s.is_empty() {
+        Ok(UaArg::Static)
+    } else if s.eq_ignore_ascii_case("browser") {
+        Ok(UaArg::Browser)
+    } else {
+        Ok(UaArg::Custom(s.to_string()))
+    }
+}
+
 /// Thin clap-level wrapper so clap's type system sees a single concrete type
 /// for `--grant-cookie-access[=<browser>]` rather than a doubly-nested `Option`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -100,6 +125,59 @@ fn grant_choice(flag: &Option<GrantArg>) -> GrantChoice {
     }
 }
 
+// ── capabilities flag ─────────────────────────────────────────────────────────
+
+/// `--capabilities` output format. Bare flag → text; `=json` → JSON.
+#[derive(Clone, Copy, Debug)]
+enum CapsFormat {
+    Text,
+    Json,
+}
+
+/// Parse the `--capabilities` value. Empty (the bare-flag default) → text.
+fn parse_caps_format(s: &str) -> Result<CapsFormat, String> {
+    match s {
+        "" | "text" => Ok(CapsFormat::Text),
+        "json" => Ok(CapsFormat::Json),
+        other => Err(format!(
+            "unknown capabilities format {other:?} (expected text or json)"
+        )),
+    }
+}
+
+/// Render the capability matrix as a text table or pretty JSON.
+fn render_capabilities(rows: &[astrogram::format::CapabilityRow], fmt: CapsFormat) -> String {
+    match fmt {
+        CapsFormat::Json => {
+            serde_json::to_string_pretty(rows).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+        }
+        CapsFormat::Text => {
+            let mut out = String::new();
+            out.push_str(&format!(
+                "{:<13} {:<5} {:<4} {:<5} {:<13} {}\n",
+                "slug", "kind", "read", "write", "auth", "fields dropped on write"
+            ));
+            for r in rows {
+                let dropped = if r.dropped_on_write.is_empty() {
+                    "(full fidelity)".to_string()
+                } else {
+                    r.dropped_on_write.join(", ")
+                };
+                out.push_str(&format!(
+                    "{:<13} {:<5} {:<4} {:<5} {:<13} {}\n",
+                    r.slug,
+                    r.kind,
+                    if r.can_read { "yes" } else { "no" },
+                    if r.can_write { "yes" } else { "no" },
+                    r.auth,
+                    dropped,
+                ));
+            }
+            out
+        }
+    }
+}
+
 // ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -117,7 +195,7 @@ so no duplicate records are ever added.
 Examples:
   blackmoon input.zdb --output out.SFcht
   blackmoon a.SFcht b.zdb export.xml --output merged.SFcht
-  blackmoon --from luna --luna-token $LUNA_TOKEN --output charts.SFcht
+  blackmoon --from luna --luna-token $BLACKMOON_LUNA_TOKEN --output charts.SFcht
   blackmoon --from astrotheoros --astrotheoros-user $USER --astrotheoros-pass $PASS --output charts.SFcht
   blackmoon charts.SFcht --normalize
   blackmoon *.SFcht --normalize"
@@ -153,7 +231,7 @@ struct Cli {
     normalize: bool,
 
     /// LUNA® auth token (session cookie).  Required when --from luna or --to luna.
-    #[arg(long, env = "LUNA_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_LUNA_TOKEN", hide_env_values = true)]
     luna_token: Option<String>,
 
     /// Delay between web endpoint HTTP requests in milliseconds.
@@ -167,29 +245,29 @@ struct Cli {
 
     /// astro.com auth token (the cid).  Required when --from astrocom or --to astrocom,
     /// unless --astrocom-user / --astrocom-pass are provided (login takes priority).
-    #[arg(long, env = "ASTROCOM_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_ASTROCOM_TOKEN", hide_env_values = true)]
     astrocom_token: Option<String>,
 
     /// astro.com account email.  When combined with --astrocom-pass, blackmoon logs
     /// in automatically and derives a fresh cid (no manual cookie needed).
-    #[arg(long, env = "ASTROCOM_USER", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_ASTROCOM_USER", hide_env_values = true)]
     astrocom_user: Option<String>,
 
     /// astro.com account password.  Use with --astrocom-user.
-    #[arg(long, env = "ASTROCOM_PASS", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_ASTROCOM_PASS", hide_env_values = true)]
     astrocom_pass: Option<String>,
 
     /// astrotheoros.com account email.  When combined with --astrotheoros-pass,
     /// blackmoon logs in automatically.
-    #[arg(long, env = "ASTROTHEOROS_USER", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_ASTROTHEOROS_USER", hide_env_values = true)]
     astrotheoros_user: Option<String>,
 
     /// astrotheoros.com account password.  Use with --astrotheoros-user.
-    #[arg(long, env = "ASTROTHEOROS_PASS", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_ASTROTHEOROS_PASS", hide_env_values = true)]
     astrotheoros_pass: Option<String>,
 
     /// Auth token as "jwt:session_id:client_uat" (colon-delimited). Prefer user/pass.
-    #[arg(long, env = "ASTROTHEOROS_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "BLACKMOON_ASTROTHEOROS_TOKEN", hide_env_values = true)]
     astrotheoros_token: Option<String>,
 
     /// Delete every chart on the web target after an interactive confirmation
@@ -243,7 +321,7 @@ struct Cli {
     /// When present, blackmoon reads the provider's session cookie(s) from the
     /// browser instead of requiring --{provider}-token or --{provider}-user/pass.
     #[arg(long, value_name = "BROWSER", num_args = 0..=1, default_missing_value = "all",
-          value_parser = parse_browser)]
+          value_parser = parse_browser, overrides_with = "grant_cookie_access")]
     grant_cookie_access: Option<GrantArg>,
 
     /// Browser profile name or path to use with --grant-cookie-access.
@@ -251,9 +329,25 @@ struct Cli {
     #[arg(long, value_name = "NAME", requires = "grant_cookie_access")]
     cookies_profile: Option<String>,
 
+    /// User-Agent control (requires --grant-cookie-access). `--ua browser`
+    /// mimics the cookie-source browser's own UA; bare `--ua` uses a fixed
+    /// static spoof; `--ua <string>` sends that string verbatim. Without --ua, a
+    /// granted run sends blackmoon's honest self-reported UA — no browser
+    /// impersonation by default.
+    #[arg(long, value_name = "STRING", num_args = 0..=1, default_missing_value = "",
+          value_parser = parse_ua, requires = "grant_cookie_access", overrides_with = "ua")]
+    ua: Option<UaArg>,
+
     /// Print a shell completion script to stdout.
     #[arg(long = "generate-completion", value_name = "SHELL", num_args = 0..=1, default_missing_value = "auto", hide = true)]
     generate_completion: Option<String>,
+
+    /// Print the format-support matrix (which formats blackmoon reads/writes,
+    /// with what auth, and which chart fields survive a write) and exit.
+    /// Bare --capabilities prints a table; --capabilities=json prints JSON.
+    #[arg(long, value_name = "FORMAT", num_args = 0..=1, default_missing_value = "",
+          value_parser = parse_caps_format)]
+    capabilities: Option<CapsFormat>,
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -278,6 +372,14 @@ fn main() -> Result<()> {
             &mut Cli::command(),
             "blackmoon",
             &mut std::io::stdout(),
+        );
+        return Ok(());
+    }
+
+    if let Some(fmt) = cli.capabilities {
+        print!(
+            "{}",
+            render_capabilities(&astrogram::format::capability_matrix(), fmt)
         );
         return Ok(());
     }
@@ -358,16 +460,11 @@ fn apply_fills(
     sink: Format,
 ) -> Result<()> {
     use astrogram::capability::ChartField;
-
-    enum Fill {
-        House(astrogram::chart::HouseSystem),
-        Zodiac(astrogram::chart::Zodiac),
-        Locus(astrogram::chart::CoordinateSystem),
-    }
+    use astrogram::pipeline::{FillValue, apply_fill_value, fill_targets};
 
     for &field in fills {
-        let resolved = match field {
-            ChartField::HouseSystem => Fill::House(resolve_fill(
+        let value = match field {
+            ChartField::HouseSystem => FillValue::House(resolve_fill(
                 "house system",
                 "house",
                 cli.fill_house.as_deref(),
@@ -378,7 +475,7 @@ fn apply_fills(
                 },
                 sink,
             )?),
-            ChartField::Zodiac => Fill::Zodiac(resolve_fill(
+            ChartField::Zodiac => FillValue::Zodiac(resolve_fill(
                 "zodiac",
                 "zodiac",
                 cli.fill_zodiac.as_deref(),
@@ -389,7 +486,7 @@ fn apply_fills(
                 },
                 sink,
             )?),
-            ChartField::CoordinateSystem => Fill::Locus(resolve_fill(
+            ChartField::CoordinateSystem => FillValue::Coord(resolve_fill(
                 "locus",
                 "locus",
                 cli.fill_locus.as_deref(),
@@ -403,17 +500,8 @@ fn apply_fills(
             )?),
             _ => continue, // only NON_OMITTABLE fields ever appear in `fills`
         };
-        for c in merged.iter_mut() {
-            let src = source_of.get(&providers::key(c)).copied().unwrap_or(sink);
-            if src.read_caps().preserves(field) {
-                continue; // this chart's source carried a real value — keep it
-            }
-            match resolved {
-                Fill::House(v) => c.house_system = v,
-                Fill::Zodiac(v) => c.zodiac = v,
-                Fill::Locus(v) => c.coordinate_system = v,
-            }
-        }
+        let targets = fill_targets(merged, field, source_of, sink);
+        apply_fill_value(merged, value, &targets);
     }
     Ok(())
 }
@@ -504,6 +592,43 @@ fn announce_source(kinds: &[SourceKind], used: usize) {
     }
 }
 
+/// True when the credential chain has a browser cookie as its sole source —
+/// a stale cookie then has no token/login to fall back to.
+fn only_cookie_source(kinds: &[SourceKind]) -> bool {
+    kinds.len() == 1 && kinds[0] == SourceKind::Cookie
+}
+
+/// Map the clap `--ua` flag to the frontend-neutral [`astrogram::user_agent::UaIntent`]. The *policy*
+/// (which UA to send, and the opt-in impersonation default) lives in
+/// [`astrogram::user_agent::choose`] so a GUI shares it verbatim — this is only
+/// the CLI's flag→intent translation.
+fn ua_intent(ua: &Option<UaArg>) -> astrogram::user_agent::UaIntent {
+    use astrogram::user_agent::UaIntent;
+    match ua {
+        None => UaIntent::Default,
+        Some(UaArg::Browser) => UaIntent::MimicBrowser,
+        Some(UaArg::Static) => UaIntent::Static,
+        Some(UaArg::Custom(s)) => UaIntent::Custom(s.clone()),
+    }
+}
+
+/// Resolve the [`astrogram::user_agent::UaChoice`] for this run. `grant` is whether
+/// `--grant-cookie-access` is active; `cookie_ua` is the divined browser UA when
+/// a cookie was actually used. Thin wrapper that maps the flag and defers the
+/// policy to the shared [`astrogram::user_agent::choose`].
+fn select_ua_choice(
+    grant: bool,
+    ua: &Option<UaArg>,
+    cookie_ua: Option<String>,
+) -> astrogram::user_agent::UaChoice {
+    astrogram::user_agent::choose(grant, ua_intent(ua), cookie_ua)
+}
+
+/// blackmoon's product identity for the self-reported UA.
+fn blackmoon_app_product() -> astrogram::user_agent::AppProduct {
+    astrogram::user_agent::AppProduct::new("Blackmoon", env!("CARGO_PKG_VERSION"))
+}
+
 fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
     use astrogram::cookie_import;
 
@@ -519,6 +644,7 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
             let mut kinds: Vec<SourceKind> = Vec::new();
             let mut chain: Vec<AstrotheorosCredential> = Vec::new();
             let mut disclosure: Option<CookieDisclosure> = None;
+            let mut cookie_ua: Option<String> = None;
 
             if want_cookie {
                 match cookie_import::import_credential(
@@ -533,6 +659,7 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                                 found_in: out.found_in.clone(),
                                 winner: store_label(out.browser, &out.profile),
                             });
+                            cookie_ua = out.cookie_ua.clone();
                             kinds.push(SourceKind::Cookie);
                             chain.push(c);
                         }
@@ -563,10 +690,10 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                     });
                 }
                 (Some(_), None) => bail!(
-                    "--astrotheoros-pass (or ASTROTHEOROS_PASS) required with --astrotheoros-user"
+                    "--astrotheoros-pass (or BLACKMOON_ASTROTHEOROS_PASS) required with --astrotheoros-user"
                 ),
                 (None, Some(_)) => bail!(
-                    "--astrotheoros-user (or ASTROTHEOROS_USER) required with --astrotheoros-pass"
+                    "--astrotheoros-user (or BLACKMOON_ASTROTHEOROS_USER) required with --astrotheoros-pass"
                 ),
                 (None, None) => {}
             }
@@ -576,10 +703,22 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                      --astrotheoros-token, or --astrotheoros-user/--pass"
                 );
             }
+            if only_cookie_source(&kinds) {
+                eprintln!(
+                    "note: browser cookie is the only astrotheoros.com credential — \
+                     if it is stale there is no fallback; set BLACKMOON_ASTROTHEOROS_USER/BLACKMOON_ASTROTHEOROS_PASS \
+                     (or --astrotheoros-token) to enable login fallback"
+                );
+            }
             if let Some(d) = &disclosure {
                 d.print(cli.verbose);
             }
-            let (session, used) = AstrotheorosSession::authenticate(&chain, cli.delay)
+            let choice = select_ua_choice(want_cookie, &cli.ua, cookie_ua);
+            let ua_label = astrogram::user_agent::ua_kind_label(&choice);
+            let app = blackmoon_app_product();
+            let ua = astrogram::user_agent::resolve(choice, &app);
+            println!("user-agent ({ua_label}): {ua}");
+            let (session, used) = AstrotheorosSession::authenticate(&chain, cli.delay, &ua)
                 .context("astrotheoros.com authentication failed for every source")?;
             announce_source(&kinds, used);
             Ok(WebProvider::Astrotheoros {
@@ -592,6 +731,7 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
             let mut kinds: Vec<SourceKind> = Vec::new();
             let mut chain: Vec<AstrocomCredential> = Vec::new();
             let mut disclosure: Option<CookieDisclosure> = None;
+            let mut cookie_ua: Option<String> = None;
 
             if want_cookie {
                 match cookie_import::import_credential(
@@ -606,6 +746,7 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                                 found_in: out.found_in.clone(),
                                 winner: store_label(out.browser, &out.profile),
                             });
+                            cookie_ua = out.cookie_ua.clone();
                             kinds.push(SourceKind::Cookie);
                             chain.push(c);
                         }
@@ -628,10 +769,14 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                     });
                 }
                 (Some(_), None) => {
-                    bail!("--astrocom-pass (or ASTROCOM_PASS) required with --astrocom-user")
+                    bail!(
+                        "--astrocom-pass (or BLACKMOON_ASTROCOM_PASS) required with --astrocom-user"
+                    )
                 }
                 (None, Some(_)) => {
-                    bail!("--astrocom-user (or ASTROCOM_USER) required with --astrocom-pass")
+                    bail!(
+                        "--astrocom-user (or BLACKMOON_ASTROCOM_USER) required with --astrocom-pass"
+                    )
                 }
                 (None, None) => {}
             }
@@ -644,7 +789,12 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
             if let Some(d) = &disclosure {
                 d.print(cli.verbose);
             }
-            let auth = AstrocomSession::authenticate(&chain, cli.delay)
+            let choice = select_ua_choice(want_cookie, &cli.ua, cookie_ua);
+            let ua_label = astrogram::user_agent::ua_kind_label(&choice);
+            let app = blackmoon_app_product();
+            let ua = astrogram::user_agent::resolve(choice, &app);
+            println!("user-agent ({ua_label}): {ua}");
+            let auth = AstrocomSession::authenticate(&chain, cli.delay, &ua)
                 .context("astro.com authentication failed for every source")?;
             announce_source(&kinds, auth.source);
             Ok(WebProvider::Astrocom {
@@ -658,6 +808,7 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
             let mut kinds: Vec<SourceKind> = Vec::new();
             let mut cookies: Vec<String> = Vec::new();
             let mut disclosure: Option<CookieDisclosure> = None;
+            let mut cookie_ua: Option<String> = None;
 
             if want_cookie {
                 match cookie_import::import_credential(
@@ -672,6 +823,7 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                                 found_in: out.found_in.clone(),
                                 winner: store_label(out.browser, &out.profile),
                             });
+                            cookie_ua = out.cookie_ua.clone();
                             kinds.push(SourceKind::Cookie);
                             cookies.push(tok);
                         }
@@ -690,7 +842,12 @@ fn resolve_provider(target: Target, cli: &Cli) -> Result<WebProvider> {
                 d.print(cli.verbose);
             }
             let refs: Vec<&str> = cookies.iter().map(String::as_str).collect();
-            let (session, used) = LunaSession::authenticate(&refs, cli.delay)
+            let choice = select_ua_choice(want_cookie, &cli.ua, cookie_ua);
+            let ua_label = astrogram::user_agent::ua_kind_label(&choice);
+            let app = blackmoon_app_product();
+            let ua = astrogram::user_agent::resolve(choice, &app);
+            println!("user-agent ({ua_label}): {ua}");
+            let (session, used) = LunaSession::authenticate(&refs, cli.delay, &ua)
                 .context("LUNA authentication failed for every source")?;
             announce_source(&kinds, used);
             Ok(WebProvider::Luna {
@@ -728,6 +885,7 @@ fn oxford_join(items: &[&str]) -> String {
 }
 
 fn cmd_convert(cli: &Cli) -> Result<()> {
+    let sink = crate::providers::CliSink;
     let from = cli.from.or(cli.target);
     let to = cli.to.or(cli.target);
 
@@ -822,7 +980,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
     let mut existing: Vec<astrogram::chart::Chart> = Vec::new();
     if let Some(p) = &mut out_provider {
         if from != Some(out_target) {
-            existing = p.read_existing()?;
+            existing = p.read_existing(&sink)?;
         }
     } else if let Some(p) = out_path {
         if p.exists() {
@@ -851,7 +1009,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
     let mut batches: Vec<Vec<astrogram::chart::Chart>> = vec![existing];
 
     if let Some(p) = &mut in_provider {
-        let charts = p.read_input()?;
+        let charts = p.read_input(&sink)?;
         for chart in &charts {
             source_of
                 .entry(providers::key(chart))
@@ -862,7 +1020,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
         // normalize-in-place for web: source == sink, use out_provider for reading.
         // (is_web_target guard ensures out_provider is Some — file-to-file same-target
         // is a degenerate case that falls through to the file-inputs else branch.)
-        let charts = out_provider.as_mut().unwrap().read_input()?;
+        let charts = out_provider.as_mut().unwrap().read_input(&sink)?;
         for chart in &charts {
             source_of.entry(providers::key(chart)).or_insert(out_target);
         }
@@ -992,7 +1150,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
                     verified += 1;
                 }
             };
-            p.write_charts(&merged, &mut on_landed)?
+            p.write_charts(&merged, &sink, &mut on_landed)?
         };
 
         if inline {
@@ -1062,7 +1220,8 @@ fn cmd_normalize_inplace(inputs: &[PathBuf]) -> Result<()> {
 // ── clear ─────────────────────────────────────────────────────────────────────
 
 fn cmd_clear(provider: WebProvider) -> Result<()> {
-    let (charts, ids) = provider.fetch_all_with_ids()?;
+    let sink = crate::providers::CliSink;
+    let (charts, ids) = provider.fetch_all_with_ids(&sink)?;
     if charts.is_empty() {
         println!("no charts found — nothing to delete.");
         return Ok(());
@@ -1101,17 +1260,18 @@ fn cmd_clear(provider: WebProvider) -> Result<()> {
 
 fn cmd_consolidate(provider: WebProvider, cli: &Cli) -> Result<()> {
     use astrogram::consolidate::group_candidates;
-    use astrogram::decision_log::{Choice, DecisionLog};
+    use astrogram::decision_log::{self, Choice, DecisionLog};
 
+    let sink = crate::providers::CliSink;
     let log_path = cli
         .decision_log
         .clone()
-        .unwrap_or_else(default_decision_log_path);
+        .unwrap_or_else(decision_log::default_path);
 
     println!("Decision log: {}", log_path.display());
 
     let (charts, ids) = provider
-        .fetch_all_with_ids()
+        .fetch_all_with_ids(&sink)
         .with_context(|| format!("fetching charts from {}", provider.site_display()))?;
     println!("Fetched {} charts.", charts.len());
 
@@ -1202,14 +1362,6 @@ fn cmd_consolidate(provider: WebProvider, cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-fn default_decision_log_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    base.join("blackmoon").join("luna-decisions.jsonl")
-}
-
 // ── target I/O ────────────────────────────────────────────────────────────────
 
 fn read_file_target(path: &Path, target: Target) -> Result<Vec<astrogram::chart::Chart>> {
@@ -1256,17 +1408,17 @@ fn write_file_target(
         Target::Astrotheoros => bail!("use --to astrotheoros for writing to astrotheoros.com"),
         _ => {}
     }
-    // For SFcht, read the existing file header description so it is preserved.
-    let existing_desc = if target == Target::Sfcht && path != Path::new("-") {
-        std::fs::read(path)
-            .ok()
-            .and_then(|b| astrogram::sfcht::parse_file(&b).ok())
-            .map(|(hdr, _)| hdr.description)
+    let out = if target == Target::Sfcht {
+        let existing = if path != Path::new("-") {
+            std::fs::read(path).ok()
+        } else {
+            None
+        };
+        astrogram::sfcht::write_file_preserving(existing.as_deref(), charts)
+            .map_err(|e| anyhow::anyhow!("{e}"))?
     } else {
-        None
+        astrogram::convert::write_bytes(target, charts, None).map_err(|e| anyhow::anyhow!("{e}"))?
     };
-    let out = astrogram::convert::write_bytes(target, charts, existing_desc.as_deref())
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
     write_bytes_to(path, &out)
 }
 
@@ -1343,37 +1495,30 @@ fn verify_and_report(
         );
     }
     let global = provider.fetch_global_settings()?;
-    let (landed_all, _ids) = provider.fetch_all_with_ids()?;
-    let pairing = astrogram::transcript::pair_landed(written, &landed_all);
+    let sink = crate::providers::CliSink;
+    let (landed_all, _ids) = provider.fetch_all_with_ids(&sink)?;
+    let rows =
+        astrogram::pipeline::verify_rows(written, &landed_all, write_results, global.as_ref());
+
     let total_new = write_results.iter().filter(|r| r.is_some()).count();
     let w = total_new.to_string().len();
     let mut new_idx = 0usize;
     let mut verified = 0;
-    for ((src, maybe_idx), status) in written.iter().zip(pairing).zip(write_results.iter()) {
-        // Header line: numbered + status for newly-written charts, bare name otherwise.
-        let header = match status {
+    for row in &rows {
+        let header = match &row.write_status {
             Some(s) => {
                 new_idx += 1;
-                format!("[{new_idx:0>w$}/{total_new}] {}  {s}", src.name)
+                format!("[{new_idx:0>w$}/{total_new}] {}  {s}", row.name)
             }
-            None => src.name.clone(),
+            None => row.name.clone(),
         };
-        match maybe_idx {
-            None => println!("{header}\n  not found on readback — skipped"),
-            Some(i) => {
-                let mut landed = landed_all[i].clone();
-                let notes: &[(astrogram::capability::ChartField, &'static str)] =
-                    if let Some(g) = &global {
-                        landed.house_system = g.house_system;
-                        landed.zodiac = g.zodiac;
-                        landed.coordinate_system = g.coordinate_system;
-                        &g.field_notes
-                    } else {
-                        &[]
-                    };
-                let mappings = astrogram::transcript::diff(src, &landed, notes);
+        match &row.outcome {
+            astrogram::pipeline::LandedOutcome::NotFound => {
+                println!("{header}\n  not found on readback — skipped");
+            }
+            astrogram::pipeline::LandedOutcome::Diffed(mappings) => {
                 println!("{header}");
-                print_transcript(&mappings);
+                print_transcript(mappings);
                 verified += 1;
             }
         }
@@ -1396,34 +1541,16 @@ fn report_drops(
     sink: Format,
     to_stdout: bool,
 ) -> usize {
-    use astrogram::capability::lost_fields;
-    let mut affected: Vec<(&str, Vec<&'static str>)> = Vec::new();
-    for chart in merged {
-        let source = source_of
-            .get(&providers::key(chart))
-            .copied()
-            .unwrap_or(sink);
-        let lost = lost_fields(chart, source, sink);
-        if !lost.is_empty() {
-            affected.push((
-                chart.name.as_str(),
-                lost.iter().map(|f| f.label()).collect(),
-            ));
-        }
-    }
-    if !affected.is_empty() && !to_stdout {
+    let summary = astrogram::pipeline::drop_summary(merged, source_of, sink);
+    if summary.affected > 0 && !to_stdout {
         let sink_name = sink.spec().slug;
-        let all_lost: std::collections::BTreeSet<&str> = affected
-            .iter()
-            .flat_map(|(_, fs)| fs.iter().copied())
-            .collect();
-        let lost_list = all_lost.into_iter().collect::<Vec<_>>().join(", ");
+        let lost_list = summary.fields.join(", ");
         println!(
             "{sink_name} does not store: {lost_list}. ({} chart(s) affected)",
-            affected.len()
+            summary.affected
         );
     }
-    affected.len()
+    summary.affected
 }
 
 #[cfg(test)]
@@ -1551,6 +1678,105 @@ mod cookie_import_tests {
             GrantChoice::One(Browser::Chrome)
         );
     }
+
+    #[test]
+    fn repeated_bare_grant_flag_is_allowed_last_wins() {
+        // Simulates `--grant-cookie-access` baked into a shell alias, then
+        // the bare flag passed again on the command line.
+        let cli = Cli::parse_from([
+            "blackmoon",
+            "--grant-cookie-access",
+            "--grant-cookie-access",
+        ]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::AllStores
+        );
+    }
+
+    #[test]
+    fn alias_default_then_explicit_browser_last_wins() {
+        // Alias provides bare `--grant-cookie-access`; user overrides with a browser.
+        let cli = Cli::parse_from([
+            "blackmoon",
+            "--grant-cookie-access",
+            "--grant-cookie-access=firefox",
+        ]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::One(Browser::Firefox)
+        );
+    }
+
+    #[test]
+    fn explicit_browser_then_alias_default_last_wins() {
+        // Reverse order: explicit browser first, bare flag last → bare wins.
+        let cli = Cli::parse_from([
+            "blackmoon",
+            "--grant-cookie-access=firefox",
+            "--grant-cookie-access",
+        ]);
+        assert_eq!(
+            grant_choice(&cli.grant_cookie_access),
+            GrantChoice::AllStores
+        );
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn credential_env_vars_use_blackmoon_prefix() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let env_of = |id: &str| -> Option<String> {
+            cmd.get_arguments()
+                .find(|a| a.get_id() == id)
+                .and_then(|a| a.get_env())
+                .map(|e| e.to_string_lossy().into_owned())
+        };
+        assert_eq!(
+            env_of("astrotheoros_user").as_deref(),
+            Some("BLACKMOON_ASTROTHEOROS_USER")
+        );
+        assert_eq!(
+            env_of("astrotheoros_pass").as_deref(),
+            Some("BLACKMOON_ASTROTHEOROS_PASS")
+        );
+        assert_eq!(
+            env_of("astrotheoros_token").as_deref(),
+            Some("BLACKMOON_ASTROTHEOROS_TOKEN")
+        );
+        assert_eq!(
+            env_of("astrocom_user").as_deref(),
+            Some("BLACKMOON_ASTROCOM_USER")
+        );
+        assert_eq!(
+            env_of("astrocom_pass").as_deref(),
+            Some("BLACKMOON_ASTROCOM_PASS")
+        );
+        assert_eq!(
+            env_of("astrocom_token").as_deref(),
+            Some("BLACKMOON_ASTROCOM_TOKEN")
+        );
+        assert_eq!(
+            env_of("luna_token").as_deref(),
+            Some("BLACKMOON_LUNA_TOKEN")
+        );
+    }
+
+    #[test]
+    fn cookie_only_chain_is_flagged() {
+        assert!(only_cookie_source(&[SourceKind::Cookie]));
+        assert!(!only_cookie_source(&[
+            SourceKind::Cookie,
+            SourceKind::Login
+        ]));
+        assert!(!only_cookie_source(&[SourceKind::Login]));
+        assert!(!only_cookie_source(&[]));
+    }
 }
 
 #[cfg(test)]
@@ -1571,13 +1797,13 @@ mod provider_tests {
     fn clear_cred_env() -> std::sync::MutexGuard<'static, ()> {
         let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for var in &[
-            "LUNA_TOKEN",
-            "ASTROCOM_TOKEN",
-            "ASTROCOM_USER",
-            "ASTROCOM_PASS",
-            "ASTROTHEOROS_TOKEN",
-            "ASTROTHEOROS_USER",
-            "ASTROTHEOROS_PASS",
+            "BLACKMOON_LUNA_TOKEN",
+            "BLACKMOON_ASTROCOM_TOKEN",
+            "BLACKMOON_ASTROCOM_USER",
+            "BLACKMOON_ASTROCOM_PASS",
+            "BLACKMOON_ASTROTHEOROS_TOKEN",
+            "BLACKMOON_ASTROTHEOROS_USER",
+            "BLACKMOON_ASTROTHEOROS_PASS",
         ] {
             // SAFETY: ENV_LOCK serializes all env reads and writes within this
             // module's tests.  No concurrent thread mutates or reads these vars
@@ -1771,7 +1997,8 @@ mod naming_contract {
     }
 
     /// Every credential flag/env in blackmoon's CLI must derive from the library
-    /// registry slug, per the format's auth.
+    /// registry slug, per the format's auth.  Env names carry the `BLACKMOON_`
+    /// prefix so they cannot collide with bare library-level vars.
     #[test]
     fn credential_surface_matches_auth() {
         let longs = long_flags();
@@ -1784,9 +2011,9 @@ mod naming_contract {
                 format!("{}-token", s.slug),
             ];
             let cred_envs = [
-                format!("{upper}_USER"),
-                format!("{upper}_PASS"),
-                format!("{upper}_TOKEN"),
+                format!("BLACKMOON_{upper}_USER"),
+                format!("BLACKMOON_{upper}_PASS"),
+                format!("BLACKMOON_{upper}_TOKEN"),
             ];
             match s.auth {
                 Auth::None => {
@@ -1837,6 +2064,89 @@ mod naming_contract {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod ua_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn ua_bare_parses_static_with_string_parses_custom() {
+        let bare = Cli::parse_from(["blackmoon", "--grant-cookie-access", "--ua"]);
+        assert!(matches!(bare.ua, Some(UaArg::Static)));
+        let custom = Cli::parse_from(["blackmoon", "--grant-cookie-access", "--ua=Custom/1.0"]);
+        assert!(matches!(custom.ua, Some(UaArg::Custom(ref s)) if s == "Custom/1.0"));
+    }
+
+    #[test]
+    fn ua_browser_keyword_parses_browser_case_insensitively() {
+        for kw in ["browser", "Browser", "BROWSER"] {
+            let cli =
+                Cli::parse_from(["blackmoon", "--grant-cookie-access", &format!("--ua={kw}")]);
+            assert!(matches!(cli.ua, Some(UaArg::Browser)), "{kw}");
+        }
+    }
+
+    #[test]
+    fn ua_requires_grant_cookie_access() {
+        // --ua without --grant-cookie-access is rejected by clap.
+        let res = Cli::try_parse_from(["blackmoon", "--ua=Custom/1.0"]);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn select_ua_choice_precedence() {
+        use astrogram::user_agent::UaChoice;
+        // No grant -> SelfReported regardless.
+        assert!(matches!(
+            select_ua_choice(false, &None, None),
+            UaChoice::SelfReported
+        ));
+        // Grant, no --ua -> SelfReported even when a cookie authenticated the
+        // session. Browser impersonation is opt-in; cookie *read* access never
+        // implies UA *impersonation*.
+        assert!(matches!(
+            select_ua_choice(true, &None, Some("UA".into())),
+            UaChoice::SelfReported
+        ));
+        // Grant, --ua browser, cookie present -> Cookie (explicit mimic).
+        assert!(matches!(
+            select_ua_choice(true, &Some(UaArg::Browser), Some("UA".into())),
+            UaChoice::Cookie(ref s) if s == "UA"
+        ));
+        // Grant, --ua browser, but no cookie was used -> honest fallback.
+        assert!(matches!(
+            select_ua_choice(true, &Some(UaArg::Browser), None),
+            UaChoice::SelfReported
+        ));
+        // Grant, bare --ua -> Static.
+        assert!(matches!(
+            select_ua_choice(true, &Some(UaArg::Static), Some("UA".into())),
+            UaChoice::Static
+        ));
+        // Grant, custom --ua -> Custom.
+        assert!(matches!(
+            select_ua_choice(true, &Some(UaArg::Custom("X".into())), Some("UA".into())),
+            UaChoice::Custom(ref s) if s == "X"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod app_product_tests {
+    use super::*;
+
+    #[test]
+    fn blackmoon_app_product_is_major_minor() {
+        assert_eq!(
+            blackmoon_app_product().to_string(),
+            format!(
+                "Blackmoon/{}",
+                astrogram::user_agent::major_minor(env!("CARGO_PKG_VERSION"))
+            )
+        );
     }
 }
 
@@ -1972,5 +2282,26 @@ mod convert_tests {
         ];
         let s = transcript_summary(&m);
         assert_eq!(s, "1 preserved, 1 transformed, 1 dropped, 0 filled");
+    }
+
+    #[test]
+    fn capabilities_flag_parses_text_and_json() {
+        let bare = Cli::parse_from(["blackmoon", "--capabilities"]);
+        assert!(matches!(bare.capabilities, Some(CapsFormat::Text)));
+        let json = Cli::parse_from(["blackmoon", "--capabilities=json"]);
+        assert!(matches!(json.capabilities, Some(CapsFormat::Json)));
+        let off = Cli::parse_from(["blackmoon", "x.SFcht"]);
+        assert!(off.capabilities.is_none());
+    }
+
+    #[test]
+    fn render_capabilities_text_and_json_contain_sfcht() {
+        let rows = astrogram::format::capability_matrix();
+        let text = render_capabilities(&rows, CapsFormat::Text);
+        assert!(text.contains("sfcht"));
+        let json = render_capabilities(&rows, CapsFormat::Json);
+        // Valid JSON that round-trips and mentions a known slug.
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+        assert!(v.to_string().contains("sfcht"));
     }
 }

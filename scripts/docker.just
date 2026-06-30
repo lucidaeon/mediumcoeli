@@ -63,13 +63,17 @@ release +TAGS:
 	# Optional native-amd64 remote builder (vs. slow / OOM-prone QEMU emulation).
 	builder_args=()
 	if [[ -n "${DOCKER_AMD64_HOST:-}" ]]; then
-	    if ! docker buildx inspect multiarch &>/dev/null; then
-	        docker buildx create --name multiarch --driver docker-container \
+	    # Builder identity derives from the host var, so changing DOCKER_AMD64_HOST
+	    # always selects a fresh builder: a stale builder pinned to an old host
+	    # never shadows the var, and is never inspected (no hang on a dead node).
+	    builder="multiarch-$(printf '%s' "${DOCKER_AMD64_HOST}" | tr -c 'a-zA-Z0-9' '-')"
+	    if ! docker buildx inspect "${builder}" &>/dev/null; then
+	        docker buildx create --name "${builder}" --driver docker-container \
 	            --platform linux/arm64
-	        docker buildx create --append --name multiarch \
+	        docker buildx create --append --name "${builder}" \
 	            --platform linux/amd64 "${DOCKER_AMD64_HOST}"
 	    fi
-	    builder_args=(--builder multiarch)
+	    builder_args=(--builder "${builder}")
 	fi
 	# Parse the crate/x.y.z arguments into a crate -> version map.
 	declare -A ver=()
@@ -113,13 +117,17 @@ _buildx EXTRA TAG CRATE:
 	# Optional native-amd64 remote builder (vs. slow / OOM-prone QEMU emulation).
 	builder_args=()
 	if [[ -n "${DOCKER_AMD64_HOST:-}" ]]; then
-	    if ! docker buildx inspect multiarch &>/dev/null; then
-	        docker buildx create --name multiarch --driver docker-container \
+	    # Builder identity derives from the host var, so changing DOCKER_AMD64_HOST
+	    # always selects a fresh builder: a stale builder pinned to an old host
+	    # never shadows the var, and is never inspected (no hang on a dead node).
+	    builder="multiarch-$(printf '%s' "${DOCKER_AMD64_HOST}" | tr -c 'a-zA-Z0-9' '-')"
+	    if ! docker buildx inspect "${builder}" &>/dev/null; then
+	        docker buildx create --name "${builder}" --driver docker-container \
 	            --platform linux/arm64
-	        docker buildx create --append --name multiarch \
+	        docker buildx create --append --name "${builder}" \
 	            --platform linux/amd64 "${DOCKER_AMD64_HOST}"
 	    fi
-	    builder_args=(--builder multiarch)
+	    builder_args=(--builder "${builder}")
 	fi
 	# Resolve the image set: one CRATE, or auto-discover every Dockerfile.
 	if [[ -n "{{CRATE}}" ]]; then
@@ -135,3 +143,19 @@ _buildx EXTRA TAG CRATE:
 	    docker buildx build "${builder_args[@]}" --platform {{platforms}} \
 	        "${tag_flags[@]}" {{EXTRA}} {{ if no_cache == 'true' { '--no-cache' } else { '' } }} -f "scripts/Dockerfile.$crate" .
 	done
+
+# Reads instance files directly, so it never hangs on a builder with a dead node.
+# Remove stray multiarch-* buildx builders left behind when DOCKER_AMD64_HOST changes.
+prune-builders:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	dir="$HOME/.docker/buildx/instances"
+	[[ -d "$dir" ]] || { echo "no buildx instances to prune"; exit 0; }
+	found=0
+	for f in "$dir"/multiarch-*; do
+	    [[ -e "$f" ]] || continue
+	    found=1; b="$(basename "$f")"
+	    echo "removing stale builder $b"
+	    timeout 15 docker buildx rm -f "$b" 2>/dev/null || rm -f "$f"
+	done
+	[[ "$found" == 1 ]] || echo "no multiarch-* builders found"

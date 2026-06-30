@@ -6,7 +6,7 @@
 //! capabilities live beside each writer (see each format module's
 //! `READ_CAPS`/`WRITE_CAPS`).
 
-use crate::capability::CapabilitySet;
+use crate::capability::{CapabilitySet, ChartField};
 use std::path::Path;
 
 /// A chart data format.
@@ -72,6 +72,67 @@ pub struct FormatSpec {
     pub read_caps: CapabilitySet,
     /// Fields persisted when writing.
     pub write_caps: CapabilitySet,
+}
+
+/// One row of the format-support matrix — the data behind
+/// `blackmoon --capabilities`. Derived from [`FORMATS`]; never authored
+/// separately, so it cannot drift from the registry.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CapabilityRow {
+    /// Format slug (e.g. `"sfcht"`).
+    pub slug: &'static str,
+    /// `"file"` or `"web"`.
+    pub kind: &'static str,
+    /// Credential shape: `"none"`, `"token"`, or `"login|token"`.
+    pub auth: &'static str,
+    /// Whether the library can read this format.
+    pub can_read: bool,
+    /// Whether the library can write this format.
+    pub can_write: bool,
+    /// Human labels of the chart fields PRESERVED on write (sorted).
+    pub preserved_on_write: Vec<&'static str>,
+    /// Human labels of the chart fields DROPPED on write (sorted).
+    pub dropped_on_write: Vec<&'static str>,
+}
+
+/// Build the format-support matrix from [`FORMATS`] — one [`CapabilityRow`] per
+/// registry entry, in registry order. The single source of truth for "what does
+/// this library read/write, and what survives a write".
+#[must_use]
+pub fn capability_matrix() -> Vec<CapabilityRow> {
+    FORMATS
+        .iter()
+        .map(|spec| {
+            let mut preserved: Vec<&'static str> = ChartField::ALL
+                .iter()
+                .filter(|&&f| spec.write_caps.preserves(f))
+                .map(|f| f.label())
+                .collect();
+            let mut dropped: Vec<&'static str> = ChartField::ALL
+                .iter()
+                .filter(|&&f| !spec.write_caps.preserves(f))
+                .map(|f| f.label())
+                .collect();
+            preserved.sort_unstable();
+            dropped.sort_unstable();
+            CapabilityRow {
+                slug: spec.slug,
+                kind: match spec.kind {
+                    Kind::File => "file",
+                    Kind::Web => "web",
+                },
+                auth: match spec.auth {
+                    Auth::None => "none",
+                    Auth::Token => "token",
+                    Auth::LoginOrToken => "login|token",
+                },
+                can_read: spec.can_read,
+                can_write: spec.can_write,
+                preserved_on_write: preserved,
+                dropped_on_write: dropped,
+            }
+        })
+        .collect()
 }
 
 /// The format registry — one row per [`Format`].
@@ -309,5 +370,35 @@ mod tests {
             // touch a field to ensure the vocab type is wired
             let _ = s.read_caps.preserves(ChartField::Region);
         }
+    }
+
+    #[test]
+    fn capability_matrix_has_a_row_per_format() {
+        let rows = capability_matrix();
+        assert_eq!(rows.len(), FORMATS.len());
+        assert_eq!(rows.len(), 9, "expected 9 registry formats");
+    }
+
+    #[test]
+    fn capability_matrix_reports_direction_auth_and_loss() {
+        let rows = capability_matrix();
+        let sfcht = rows.iter().find(|r| r.slug == "sfcht").expect("sfcht row");
+        assert!(sfcht.can_read && sfcht.can_write);
+        assert_eq!(sfcht.kind, "file");
+        assert_eq!(sfcht.auth, "none");
+        assert!(sfcht.dropped_on_write.is_empty(), "sfcht is full-fidelity");
+
+        let aaf = rows.iter().find(|r| r.slug == "aaf").expect("aaf row");
+        assert!(aaf.can_read && !aaf.can_write, "aaf is read-only");
+
+        let astrocom = rows
+            .iter()
+            .find(|r| r.slug == "astrocom")
+            .expect("astrocom row");
+        assert_eq!(astrocom.kind, "web");
+        assert_eq!(astrocom.auth, "login|token");
+        // astro.com cannot persist these per-chart:
+        assert!(astrocom.dropped_on_write.contains(&"house system"));
+        assert!(astrocom.dropped_on_write.contains(&"zodiac"));
     }
 }

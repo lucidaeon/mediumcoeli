@@ -5,7 +5,106 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/d28d3efee3375bc13bf43a270ee0f93c26518012...main), [astrogram/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.3.0), [jzod/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.5.0), [pericynthion/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.7.0), [starcat/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.6.0), 2026.06.25
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/3e1b1e8a6538875769995b4b83565afe9db324b1...main), [astrogram/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.4.0), [blackmoon/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.3.0), [jzod/0.5.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.5.1), [pericynthion/0.8.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.8.0), [starcat/0.6.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.6.1), [wristband/0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.0), 2026.06.29
+
+This cycle centres on two efforts: a **consent-gated User-Agent system** — a web
+request can present the cookie-source browser's real UA, but only on explicit
+opt-in — and a **CLI→library extraction** that lifts the convert pipeline, the
+web-provider layer, and the placement helpers out of the CLIs into the libraries
+so a future GUI shares them rather than reimplementing them.
+
+### Added — `wristband`
+
+- **`user_agent` module** — divines a browser's own User-Agent with no network
+  and no cookie access, reading on-disk version metadata (Chromium `Last
+  Version`, Firefox `compatibility.ini`, Safari app-bundle `Info.plist`) and
+  interpolating a per-browser template, then reducing the result to what the
+  browser actually sends. Separates the **Chromium engine** version
+  (`Chrome/<major>.0.0.0`) from a derivative's **product** version:
+  Chrome/Chromium/Brave/Edge derive the engine from disk, while Vivaldi/Opera/
+  Whale fall back to a maintained pin; Firefox reports `<major>.<minor>` with its
+  own dotted macOS token. Reads version metadata only — no cookie store is
+  opened, decrypted, or copied.
+
+### Added — `astrogram`
+
+- **`user_agent` module** — the UA-selection policy in one place: `UaChoice`, a
+  frontend-neutral `UaIntent` + `choose(grant, intent, cookie_ua)` (granting
+  cookie access never implies impersonation; browser mimicry is opt-in),
+  `resolve`, `ua_kind_label`, the fixed `STATIC` spoof, and a **required** typed
+  `AppProduct` for the self-reported UA.
+- **`provider` module** — `WebProvider` unifying Luna / Astrocom / Astrotheoros
+  behind one interface (`read_existing`, `read_input`, `write_charts`,
+  `fetch_all_with_ids`, `delete_one`, `fetch_global_settings`), plus
+  `key`/`DatetimeKey`, `GlobalRender`, a `ProgressSink` output trait, and
+  `ProviderError`.
+- **`pipeline` module** — the convert engine as pure, structured-return
+  functions: `drop_summary`, `fill_targets` + `apply_fill_value`, and
+  `verify_rows`/`VerifyRow`.
+- **`format::capability_matrix()` + `CapabilityRow`** (registry-derived support
+  matrix) and a canonical **`ChartField::ALL`** guarded by a compile-time
+  exhaustiveness test.
+- **`decision_log::default_path`** (XDG) and **`sfcht::write_file_preserving`**.
+- Per-session injectable User-Agent on Luna / Astrocom / Astrotheoros; the
+  cookie-source browser UA is divined into `CredentialOutcome.cookie_ua`.
+
+### Changed — `astrogram`
+
+- Web sessions take a **required** User-Agent — the `Option`/default and the
+  stale per-module spoof constants are gone.
+- Live-test credentials are namespaced **`ASTROGRAM_*`**, decoupled from
+  blackmoon's runtime `BLACKMOON_*`.
+
+### Fixed — `astrogram`
+
+- `cookie_ua` is divined from the **winning** cookie store's profile, not the
+  allow-list filter.
+- The SFcht acceptance walk is scoped to the `sfcht/` subdir (≈62 s → <1 ms).
+
+### Added — `pericynthion`
+
+- **`ComputedChart::sorted_placements` + `NodeVariant`** — the chart-render
+  primitive: one zodiacally-sorted list of cusps/bodies/angles/nodes/lots.
+- **`placements::resolve_body_id` + `omniscient_body_ids`** — sb441-preferred
+  NAIF id resolution plus the covered-body set.
+- **`spk::open_all_sources`** — union of explicit SPK + auto sb441 + Horizons dir.
+- **`datafiles` module** — `provider_cached` + `production_file_paths`
+  (disk-presence join over `Provider`).
+
+### Added — `blackmoon`
+
+- **`--capabilities[=text|json]`** — the format-support matrix (read/write
+  direction, auth shape, per-field write loss), rendered from
+  `astrogram::format::capability_matrix`.
+- **`--ua`** (requires `--grant-cookie-access`): `--ua browser` mimics the
+  cookie-source browser, bare `--ua` is a fixed static spoof, `--ua <string>` is
+  verbatim. Every web target prints a `user-agent (<kind>): <string>` disclosure
+  line before authenticating.
+
+### Changed — `blackmoon`
+
+- **Browser impersonation is opt-in.** A granted run with no `--ua` sends the
+  self-reported UA (`Mozilla/5.0 Blackmoon/<v> Astrogram/<v>`) — granting
+  cookie *read* access no longer implies UA *impersonation*.
+- Consumes `astrogram::provider` behind a thin `CliSink`; `report_drops`,
+  `apply_fills`, `verify_and_report`, `write_file_target`, and the decision-log
+  path now delegate to the libraries — the CLI is a thin wrapper.
+- Credential env vars renamed to the **`BLACKMOON_`** prefix;
+  `--grant-cookie-access` is repeatable (last-wins).
+
+### Changed — `starcat`
+
+- Delegates to the new pericynthion primitives (`sorted_placements`,
+  `resolve_body_id`/`omniscient_body_ids`, `open_all_sources`, `datafiles`) —
+  behaviour-preserving.
+- Corrected the `--draconic` / `--antiscia` help: both apply to the **default
+  JZOD** output (not only `--text`); the only no-op mode is `--page`.
+
+### Changed — `jzod`
+
+- `JZOD.md` spec-doc tidy.
+
+## [3e1b1e8](https://github.com/lucidaeon/mediumcoeli/compare/d28d3efee3375bc13bf43a270ee0f93c26518012...3e1b1e8a6538875769995b4b83565afe9db324b1), [astrogram/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.3.0), [jzod/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.5.0), [pericynthion/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.7.0), [starcat/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.6.0), 2026.06.25
 
 ### Added — `pericynthion`
 

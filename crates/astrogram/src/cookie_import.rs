@@ -78,6 +78,8 @@ pub struct CredentialOutcome {
     pub domain: String,
     /// Every store that held a usable session: `(browser, profile, freshness)`.
     pub found_in: Vec<(Browser, String, i64)>,
+    /// Divined User-Agent of the browser the winning cookie came from.
+    pub cookie_ua: Option<String>,
 }
 
 /// Read the freshest provider credential from the browser store(s).
@@ -128,13 +130,22 @@ pub fn import_credential(
     }
 
     match best {
-        Some((_, browser, winning_profile, credential)) => Ok(CredentialOutcome {
-            credential,
-            browser,
-            profile: winning_profile,
-            domain,
-            found_in,
-        }),
+        Some((_, browser, winning_profile, credential)) => {
+            // Divine the UA from the WINNING store's profile (the freshest cookie's
+            // profile), not the request-level `--cookies-profile` filter (often None).
+            let cookie_ua = Some(wristband::user_agent::divine(
+                browser,
+                Some(winning_profile.as_str()),
+            ));
+            Ok(CredentialOutcome {
+                credential,
+                browser,
+                profile: winning_profile,
+                domain,
+                found_in,
+                cookie_ua,
+            })
+        }
         None => Err(last_err.unwrap_or_else(|| {
             ChartError::Parse(
                 "no usable credential found in any installed browser/profile".to_owned(),
@@ -486,6 +497,26 @@ mod tests {
             Err(e) => panic!("expected UnsupportedDirection, got {e:?}"),
             Ok(_) => panic!("expected Err for non-web format"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // cookie_ua field — structural + divine-shape
+    // -----------------------------------------------------------------------
+
+    /// Compile-time proof that `CredentialOutcome` exposes `cookie_ua`.
+    /// (Fails to compile if the field is renamed or removed.)
+    #[allow(dead_code)]
+    fn _has_cookie_ua(o: &CredentialOutcome) -> Option<&String> {
+        o.cookie_ua.as_ref()
+    }
+
+    #[test]
+    fn outcome_carries_cookie_ua_field() {
+        // Structural: a CredentialOutcome exposes cookie_ua and a divined UA is
+        // a Mozilla/5.0 string. (Field-presence + shape; import_credential itself
+        // is environment-gated and covered by existing wristband-backed tests.)
+        let ua = wristband::user_agent::divine(wristband::Browser::Chrome, None);
+        assert!(ua.starts_with("Mozilla/5.0"));
     }
 
     // -----------------------------------------------------------------------
