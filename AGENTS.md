@@ -121,7 +121,7 @@ Credentials for web targets are read from env vars with a `BLACKMOON_` prefix (`
 | `starcat` | CLI — ephemeris computation and table presentation |
 | `astrogram` | Chart format conversion library |
 | `blackmoon` | CLI — reads any format, merges, writes any format; wraps `astrogram` |
-| `jzod` | JZOD v0.0.0 typed model — single source of truth for the chart interchange format; `astrogram` and `starcat` build and serialize through it |
+| `jzod` | JZOD v0.0.0 typed model — single source of truth for the chart interchange format; `astrogram` and `starcat` build and serialize through it; also carries the canonical ayanamsha slug, alias, and default-frame table (`jzod::ayanamsha`) |
 | `wristband` | Consent-gated, domain-scoped reader for the user's own browser session cookies; structural no-harvester posture — see `crates/wristband/SECURITY.md` |
 
 # astrogram architecture

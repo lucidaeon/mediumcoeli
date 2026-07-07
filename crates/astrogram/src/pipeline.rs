@@ -58,6 +58,65 @@ pub enum FillValue {
     Coord(CoordinateSystem),
 }
 
+/// Everything a front-end needs to resolve a fill for one settings field:
+/// display label, flag/parameter suffix, suggested default, and the parser
+/// producing the typed [`FillValue`].
+pub struct FillSpec {
+    /// The field this spec resolves.
+    pub field: crate::capability::ChartField,
+    /// Human label — matches [`crate::capability::ChartField::label`].
+    pub label: &'static str,
+    /// CLI flag / GUI parameter suffix (e.g. `"house"` for `--fill-house`).
+    pub flag_suffix: &'static str,
+    /// Suggested default slug offered when the user gives no value.
+    pub default_slug: &'static str,
+    /// Parse a slug into the typed fill value; `None` = unknown slug.
+    pub parse: fn(&str) -> Option<FillValue>,
+}
+
+fn parse_fill_house(s: &str) -> Option<FillValue> {
+    HouseSystem::from_str_slug(s).map(FillValue::House)
+}
+fn parse_fill_zodiac(s: &str) -> Option<FillValue> {
+    Zodiac::from_str_slug(s).map(FillValue::Zodiac)
+}
+fn parse_fill_coord(s: &str) -> Option<FillValue> {
+    CoordinateSystem::from_str_slug(s).map(FillValue::Coord)
+}
+
+/// The fill spec table — one entry per [`crate::capability::NON_OMITTABLE`] field.
+/// Every `NON_OMITTABLE` member must have a corresponding entry here; the
+/// `fill_specs_cover_every_non_omittable_field` pin test enforces this.
+pub const FILL_SPECS: &[FillSpec] = &[
+    FillSpec {
+        field: crate::capability::ChartField::HouseSystem,
+        label: "house system",
+        flag_suffix: "house",
+        default_slug: "placidus",
+        parse: parse_fill_house,
+    },
+    FillSpec {
+        field: crate::capability::ChartField::Zodiac,
+        label: "zodiac",
+        flag_suffix: "zodiac",
+        default_slug: "tropical",
+        parse: parse_fill_zodiac,
+    },
+    FillSpec {
+        field: crate::capability::ChartField::CoordinateSystem,
+        label: "coordinate system",
+        flag_suffix: "locus",
+        default_slug: "geocentric",
+        parse: parse_fill_coord,
+    },
+];
+
+/// Spec for one field; `None` when the field is not fillable.
+#[must_use]
+pub fn fill_spec(field: crate::capability::ChartField) -> Option<&'static FillSpec> {
+    FILL_SPECS.iter().find(|s| s.field == field)
+}
+
 /// Indices of charts in `merged` whose source (per `source_of`, default `sink`)
 /// did NOT preserve `field` — i.e. the charts that need a fill for it.
 #[must_use]
@@ -126,9 +185,7 @@ pub fn verify_rows(
             Some(i) => {
                 let mut landed = landed_all[i].clone();
                 let notes: &[(ChartField, &'static str)] = if let Some(g) = global {
-                    landed.house_system = g.house_system;
-                    landed.zodiac = g.zodiac;
-                    landed.coordinate_system = g.coordinate_system;
+                    g.apply_to(&mut landed);
                     &g.field_notes
                 } else {
                     &[]
@@ -148,6 +205,63 @@ pub fn verify_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pin: every `NON_OMITTABLE` field has a [`FillSpec`], every `FILL_SPECS` entry's
+    /// field is in `NON_OMITTABLE`, each spec's label matches [`ChartField::label()`],
+    /// and each `parse(default_slug)` returns the expected [`FillValue`] variant.
+    /// Adding a fourth `NON_OMITTABLE` field without a `FILL_SPECS` entry fails here.
+    #[test]
+    fn fill_specs_cover_every_non_omittable_field() {
+        use crate::capability::{ChartField, NON_OMITTABLE};
+
+        // Every NON_OMITTABLE field must have a fill spec.
+        for &field in NON_OMITTABLE {
+            let spec = fill_spec(field).unwrap_or_else(|| {
+                panic!("{field:?} is NON_OMITTABLE but has no FillSpec in FILL_SPECS")
+            });
+            assert_eq!(
+                spec.label,
+                field.label(),
+                "FillSpec label for {field:?} must match ChartField::label()",
+            );
+            let parsed = (spec.parse)(spec.default_slug).unwrap_or_else(|| {
+                panic!(
+                    "FillSpec::parse({field:?}) returned None for default_slug {:?}",
+                    spec.default_slug
+                )
+            });
+            // Each variant must match its field.
+            match (field, parsed) {
+                (ChartField::HouseSystem, FillValue::House(_))
+                | (ChartField::Zodiac, FillValue::Zodiac(_))
+                | (ChartField::CoordinateSystem, FillValue::Coord(_)) => {}
+                (f, v) => panic!(
+                    "parse({f:?}.default_slug) returned wrong FillValue variant: {:?}",
+                    match v {
+                        FillValue::House(_) => "House",
+                        FillValue::Zodiac(_) => "Zodiac",
+                        FillValue::Coord(_) => "Coord",
+                    }
+                ),
+            }
+        }
+
+        // Every FILL_SPECS entry's field must be in NON_OMITTABLE.
+        for spec in FILL_SPECS {
+            assert!(
+                NON_OMITTABLE.contains(&spec.field),
+                "FILL_SPECS has an entry for {:?} which is not in NON_OMITTABLE",
+                spec.field
+            );
+        }
+
+        // Counts must agree — no extras, no gaps.
+        assert_eq!(
+            FILL_SPECS.len(),
+            NON_OMITTABLE.len(),
+            "FILL_SPECS and NON_OMITTABLE must have the same number of entries"
+        );
+    }
 
     #[test]
     fn fill_targets_selects_charts_whose_source_lacked_field() {

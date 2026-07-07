@@ -7,7 +7,7 @@ A command-line astrology data manager — reads any supported target, writes any
 
 ## What it does
 
-One CLI verb (run with no subcommand). Inputs are file paths or a web account; the output is another file or another web account. Target type is detected from the file extension (`.SFcht`, `.zdb`, `.xml`) or specified explicitly with `--from` / `--to` / `--target`.
+One CLI verb (run with no subcommand). Inputs are file paths or a web account; the output is another file or another web account. Target type is detected from the file extension (`.SFcht`, `.zdb`, `.xml`, `.aaf`, `.jhd`) or specified explicitly with `--from` / `--to` / `--target`.
 
 ```text
 blackmoon input.zdb --output out.SFcht
@@ -20,7 +20,7 @@ blackmoon charts.SFcht --normalize
 
 Targets currently wired up:
 
-- **File:** Solar Fire `.SFcht` binary (cp1252), Zeus `.zdb` semicolon-text, Astrodatabank `.xml`.
+- **File:** Solar Fire `.SFcht` binary (cp1252), Zeus `.zdb` semicolon-text, Astrodatabank `.xml`, Astrolog AAF `.aaf` (read-only), Jagannatha Hora `.jhd` (read-only).
 - **Web (authenticated):** lunaastrology.com (`--from/--to luna`), astro.com (`--from/--to astrocom`), astrotheoros.com (`--from/--to astrotheoros`) — full CRUD. `--clear` deletes every chart on a web target (after a y/N gate); `--consolidate` dedupes a web target in place.
 
 `--normalize` strips non-cp1252 characters and collapses whitespace; with no `--output`, it edits each input file in place. `--output now.SFcht` substitutes a UTC timestamp.

@@ -16,6 +16,9 @@ use crate::chart::{Chart, CoordinateSystem, EventType, Zodiac};
 
 pub use crate::capability::CapabilitySet as Caps;
 
+/// Fields recovered when reading JZOD (none — read is not implemented).
+pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[]);
+
 /// Fields the JZOD writer preserves.
 pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[
     ChartField::SecondaryName,
@@ -25,9 +28,6 @@ pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[
     ChartField::CoordinateSystem,
     ChartField::EventType,
 ]);
-
-/// Fields recovered when reading JZOD (none — read is not implemented).
-pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[]);
 
 /// Serialize `charts` as a JZOD v0.0.0 JSON document.
 ///
@@ -128,29 +128,47 @@ fn chart_to_jzod(c: &Chart, calculated_at: &str) -> jzod::Chart {
 fn zodiac_to_jzod(z: Zodiac) -> jzod::Zodiac {
     match z {
         Zodiac::Tropical => jzod::Zodiac::Tropical,
-        Zodiac::Draconic => jzod::Zodiac::Draconic,
-        Zodiac::FaganAllen => sidereal("fagan_allen"),
-        Zodiac::Lahiri => sidereal("lahiri"),
-        Zodiac::DeLuce => sidereal("de_luce"),
-        Zodiac::Raman => sidereal("raman"),
-        Zodiac::UshaShashi => sidereal("usha_shashi"),
-        Zodiac::Krishnamurti => sidereal("krishnamurti"),
-        Zodiac::DjwhalKhul => sidereal("djwhal_khul"),
-        Zodiac::Svp => sidereal("svp"),
-        Zodiac::SriYukteswar => sidereal("sri_yukteswar"),
-        Zodiac::JnBhasin => sidereal("jn_bhasin"),
-        Zodiac::LarryEly => sidereal("larry_ely"),
-        Zodiac::TakraI => sidereal("takra_i"),
-        Zodiac::TakraII => sidereal("takra_ii"),
-        Zodiac::SundaraRajan => sidereal("sundara_rajan"),
-        Zodiac::ShillPond => sidereal("shill_pond"),
-        Zodiac::Other(_) => jzod::Zodiac::Sidereal { ayanamsha: None },
+        Zodiac::Draconic => jzod::Zodiac::Draconic { node: None },
+        Zodiac::FaganAllen => sidereal_from_canon("fagan_allen"),
+        Zodiac::Lahiri => sidereal_from_canon("lahiri"),
+        Zodiac::DeLuce => sidereal_from_canon("de_luce"),
+        Zodiac::Raman => sidereal_from_canon("raman"),
+        Zodiac::UshaShashi => sidereal_from_canon("usha_shashi"),
+        Zodiac::Krishnamurti => sidereal_from_canon("krishnamurti"),
+        Zodiac::DjwhalKhul => sidereal_from_canon("djwhal_khul"),
+        Zodiac::Svp => sidereal_from_canon("svp"),
+        Zodiac::SriYukteswar => sidereal_from_canon("sri_yukteswar"),
+        Zodiac::JnBhasin => sidereal_from_canon("jn_bhasin"),
+        Zodiac::LarryEly => sidereal_from_canon("larry_ely"),
+        Zodiac::TakraI => sidereal_from_canon("takra_i"),
+        Zodiac::TakraII => sidereal_from_canon("takra_ii"),
+        Zodiac::SundaraRajan => sidereal_from_canon("sundara_rajan"),
+        Zodiac::ShillPond => sidereal_from_canon("shill_pond"),
+        // Solar Fire records the raw id; preserve it textually so consumers get
+        // a visible failure rather than silent tropical when they encounter an
+        // unknown ayanamsha.
+        Zodiac::Other(n) => jzod::Zodiac::Sidereal {
+            ayanamsha: Some(format!("other_{n}")),
+            frame: None,
+        },
     }
 }
 
-fn sidereal(ayanamsha: &str) -> jzod::Zodiac {
+/// Map a raw ayanamsha slug (or known alias) to a [`jzod::Zodiac::Sidereal`]
+/// value whose canonical slug and `default_frame` come from the JZOD canonical
+/// authority table ([`jzod::ayanamsha`]).
+///
+/// # Panics
+///
+/// Panics if `raw_slug` is neither a canonical slug nor a known alias.  This
+/// indicates a mis-wiring between `astrogram::chart::Zodiac` variants and the
+/// canon table, which the coupling test catches at test time.
+fn sidereal_from_canon(raw_slug: &str) -> jzod::Zodiac {
+    let info = jzod::ayanamsha::resolve(raw_slug)
+        .unwrap_or_else(|| panic!("ayanamsha slug not in canonical table: {raw_slug}"));
     jzod::Zodiac::Sidereal {
-        ayanamsha: Some(ayanamsha.to_string()),
+        ayanamsha: Some(info.slug.to_string()),
+        frame: info.default_frame,
     }
 }
 
@@ -270,5 +288,113 @@ mod tests {
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");
         assert_eq!(z["ayanamsha"], "lahiri");
+    }
+
+    #[test]
+    fn lahiri_emits_canonical_slug_and_true_frame() {
+        let mut c = anna_freud();
+        c.zodiac = Zodiac::Lahiri;
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let z = &v["charts"][0]["zodiac"];
+        assert_eq!(z["name"], "sidereal");
+        assert_eq!(z["ayanamsha"], "lahiri");
+        assert_eq!(z["frame"], "true");
+    }
+
+    #[test]
+    fn fagan_allen_emits_canonical_slug_and_mean_frame() {
+        let mut c = anna_freud();
+        c.zodiac = Zodiac::FaganAllen;
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let z = &v["charts"][0]["zodiac"];
+        assert_eq!(z["name"], "sidereal");
+        assert_eq!(z["ayanamsha"], "fagan_bradley");
+        assert_eq!(z["frame"], "mean");
+    }
+
+    #[test]
+    fn raman_emits_canonical_slug_and_mean_frame() {
+        let mut c = anna_freud();
+        c.zodiac = Zodiac::Raman;
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let z = &v["charts"][0]["zodiac"];
+        assert_eq!(z["name"], "sidereal");
+        assert_eq!(z["ayanamsha"], "raman");
+        assert_eq!(z["frame"], "mean");
+    }
+
+    #[test]
+    fn de_luce_emits_canonical_slug_and_no_frame() {
+        let mut c = anna_freud();
+        c.zodiac = Zodiac::DeLuce;
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let z = &v["charts"][0]["zodiac"];
+        assert_eq!(z["name"], "sidereal");
+        assert_eq!(z["ayanamsha"], "de_luce");
+        assert!(
+            z.get("frame").is_none() || z["frame"].is_null(),
+            "frame must be absent for de_luce"
+        );
+    }
+
+    #[test]
+    fn other_zodiac_preserves_raw_id_and_no_frame() {
+        let mut c = anna_freud();
+        c.zodiac = Zodiac::Other(53);
+        let out = write_file(&[c]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let z = &v["charts"][0]["zodiac"];
+        assert_eq!(z["name"], "sidereal");
+        assert_eq!(z["ayanamsha"], "other_53");
+        assert!(
+            z.get("frame").is_none() || z["frame"].is_null(),
+            "frame must be absent for Other"
+        );
+    }
+
+    /// Coupling test: every named sidereal `chart::Zodiac` variant emits a slug
+    /// that resolves in the JZOD canonical ayanamsha table.  A new astrogram
+    /// variant or a canon edit that breaks alignment fails here before it can
+    /// reach production.
+    #[test]
+    fn all_named_sidereal_variants_emit_resolvable_slug() {
+        use Zodiac::{
+            DeLuce, DjwhalKhul, FaganAllen, JnBhasin, Krishnamurti, Lahiri, LarryEly, Raman,
+            ShillPond, SriYukteswar, SundaraRajan, Svp, TakraI, TakraII, UshaShashi,
+        };
+        let named_sidereal = [
+            FaganAllen,
+            Lahiri,
+            DeLuce,
+            Raman,
+            UshaShashi,
+            Krishnamurti,
+            DjwhalKhul,
+            Svp,
+            SriYukteswar,
+            JnBhasin,
+            LarryEly,
+            TakraI,
+            TakraII,
+            SundaraRajan,
+            ShillPond,
+        ];
+        for variant in named_sidereal {
+            let jzod_zodiac = zodiac_to_jzod(variant);
+            let slug = match &jzod_zodiac {
+                jzod::Zodiac::Sidereal {
+                    ayanamsha: Some(s), ..
+                } => s.clone(),
+                other => panic!("expected Sidereal with ayanamsha for {variant:?}, got {other:?}"),
+            };
+            assert!(
+                jzod::ayanamsha::resolve(&slug).is_some(),
+                "emitted slug '{slug}' for {variant:?} does not resolve in the canonical table"
+            );
+        }
     }
 }

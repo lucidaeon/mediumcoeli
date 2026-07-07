@@ -822,6 +822,112 @@ fn json_bodies_have_speed_and_retrograde() {
 }
 
 // =============================================================================
+// Sidereal zodiac: --zodiac sidereal --ayanamsha lahiri rotates placements
+// =============================================================================
+//
+// Runs the same chart tropically and sidereally (Lahiri), then asserts the
+// JZOD zodiac block, that every body is shifted by one constant offset (the
+// ayanamsha, ~23.2° in 1955), and that house cusps stay tropical (unchanged
+// between the two runs). The shift is derived from the data itself, so the
+// test needs no library access.
+#[test]
+fn sidereal_zodiac_rotates_bodies_via_cli() {
+    let Some(jpl) = jpl_data_dir() else {
+        eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
+        return;
+    };
+
+    let run = |extra: &[&str]| -> serde_json::Value {
+        let mut argv: Vec<String> = [
+            "compute",
+            "--date",
+            "1955-11-12",
+            "--time",
+            "22:04:00",
+            "--calendar",
+            "gregorian",
+            "--tz=-08:00",
+            "--lat",
+            "34.138889",
+            "--lon=-118.3525",
+            "--json",
+            "--jpl-data",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        argv.push(jpl.clone());
+        argv.extend(extra.iter().map(|s| (*s).to_string()));
+        let output = Command::new(STARCAT_BIN)
+            .args(&argv)
+            .output()
+            .expect("failed to launch starcat binary");
+        assert!(
+            output.status.success(),
+            "starcat failed (args {argv:?}):\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_str(&String::from_utf8(output.stdout).expect("utf-8"))
+            .expect("must parse as JSON")
+    };
+
+    let trop = run(&[]);
+    let sid = run(&["--zodiac", "sidereal", "--ayanamsha", "lahiri"]);
+
+    let trop_chart = &trop["charts"][0];
+    let sid_chart = &sid["charts"][0];
+
+    // Zodiac block carries the sidereal frame + ayanamsha slug.
+    assert_eq!(trop_chart["zodiac"]["name"], "tropical");
+    assert_eq!(sid_chart["zodiac"]["name"], "sidereal");
+    assert_eq!(sid_chart["zodiac"]["ayanamsha"], "lahiri");
+    assert_eq!(sid_chart["zodiac"]["frame"], "true"); // Lahiri's intrinsic default
+
+    let trop_bodies = trop_chart["placements"]["bodies"].as_array().unwrap();
+    let sid_bodies = sid_chart["placements"]["bodies"].as_array().unwrap();
+    assert_eq!(trop_bodies.len(), sid_bodies.len());
+
+    // Derive the ayanamsha shift from the Sun, sanity-check its magnitude, then
+    // require every other body share the same constant shift.
+    let sun_t = trop_bodies[0]["ecliptic_longitude"].as_f64().unwrap();
+    let sun_s = sid_bodies[0]["ecliptic_longitude"].as_f64().unwrap();
+    let k = (sun_t - sun_s).rem_euclid(360.0);
+    assert!(
+        (23.0..24.0).contains(&k),
+        "1955 Lahiri ayanamsha should be ~23.2°, derived {k:.4}°"
+    );
+    for (t, s) in trop_bodies.iter().zip(sid_bodies) {
+        assert_eq!(t["id"], s["id"]);
+        let tl = t["ecliptic_longitude"].as_f64().unwrap();
+        let sl = s["ecliptic_longitude"].as_f64().unwrap();
+        let expected = (tl - k).rem_euclid(360.0);
+        let d = (sl - expected).abs();
+        let d = d.min(360.0 - d);
+        assert!(
+            d < 1e-4,
+            "{:?}: sidereal {sl:.6}° vs expected {expected:.6}° (Δ {d:.6}°)",
+            s["id"]
+        );
+    }
+
+    // House cusps must remain tropical (house assignment is shift-invariant):
+    // identical between the two runs.
+    for h in 1..=12_usize {
+        let key = h.to_string();
+        let trop_h = trop_chart["houses"]["placidus"][&key]["longitude"]
+            .as_f64()
+            .unwrap();
+        let sid_h = sid_chart["houses"]["placidus"][&key]["longitude"]
+            .as_f64()
+            .unwrap();
+        assert!(
+            (trop_h - sid_h).abs() < 1e-6,
+            "H{h} cusp must stay tropical: tropical {trop_h:.6}° vs sidereal {sid_h:.6}°"
+        );
+    }
+}
+
+// =============================================================================
 // Heliocentric: daily_speed must use heliocentric positions
 // =============================================================================
 //

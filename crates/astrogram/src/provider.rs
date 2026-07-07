@@ -51,6 +51,20 @@ pub struct GlobalRender {
     pub field_notes: Vec<(ChartField, &'static str)>,
 }
 
+impl GlobalRender {
+    /// Fold these account-wide settings into `chart` (web providers store house
+    /// system / zodiac / coordinate system per account, not per chart).
+    ///
+    /// This method must be extended whenever [`crate::capability::NON_OMITTABLE`]
+    /// gains a new field; the `apply_to_sets_every_non_omittable_field` pin test
+    /// enforces that all three current fields are assigned.
+    pub fn apply_to(&self, chart: &mut Chart) {
+        chart.house_system = self.house_system;
+        chart.zodiac = self.zodiac;
+        chart.coordinate_system = self.coordinate_system;
+    }
+}
+
 /// Progress/disclosure sink for provider operations. Every method has a no-op
 /// default, so a GUI can ignore progress entirely and the CLI overrides only
 /// what it prints. All methods take `&self` so they thread into the session
@@ -569,6 +583,47 @@ mod tests {
         s.write_progress(1, 2, "n");
         s.write_error("e");
         s.note("z");
+    }
+
+    /// Pin: `apply_to` must assign every `NON_OMITTABLE` field. If a fourth field
+    /// is added to `NON_OMITTABLE` without updating `apply_to`, this test fails.
+    #[test]
+    fn apply_to_sets_every_non_omittable_field() {
+        use crate::capability::NON_OMITTABLE;
+        use crate::chart::{CoordinateSystem, HouseSystem, Zodiac};
+
+        let mut chart = crate::test_support::fully_populated();
+        // Start with values distinct from what GlobalRender will apply.
+        chart.house_system = HouseSystem::Placidus;
+        chart.zodiac = Zodiac::Tropical;
+        chart.coordinate_system = CoordinateSystem::Geocentric;
+
+        let global = GlobalRender {
+            house_system: HouseSystem::Koch,
+            zodiac: Zodiac::Lahiri,
+            coordinate_system: CoordinateSystem::Heliocentric,
+            field_notes: vec![],
+        };
+        global.apply_to(&mut chart);
+
+        // Verify every NON_OMITTABLE field changed.
+        assert_eq!(
+            chart.house_system,
+            HouseSystem::Koch,
+            "apply_to must set house_system"
+        );
+        assert_eq!(chart.zodiac, Zodiac::Lahiri, "apply_to must set zodiac");
+        assert_eq!(
+            chart.coordinate_system,
+            CoordinateSystem::Heliocentric,
+            "apply_to must set coordinate_system"
+        );
+        // Belt: count matches so a new NON_OMITTABLE field fails here.
+        assert_eq!(
+            NON_OMITTABLE.len(),
+            3,
+            "NON_OMITTABLE gained a field — extend GlobalRender::apply_to and this test"
+        );
     }
 
     #[test]

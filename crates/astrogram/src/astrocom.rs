@@ -1,8 +1,16 @@
+//! astro.com HTTP session management.
+//!
+//! Read flow: authenticate via `cid` cookie or email/password login, then fetch a
+//! full AAF export from the account data endpoint and parse it through the AAF
+//! reader. Write flow: POST the chart form to the account data endpoint using the
+//! `ssx`/`btyp` fields, then extract the `nhor` ID from the redirect response.
+
 use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, EventType};
 use reqwest::blocking::Client;
 use scraper::{Html, Selector};
 use std::time::Duration;
+use thiserror::Error;
 
 /// Fields recovered when reading an astro.com account chart.
 ///
@@ -29,7 +37,7 @@ pub const LOGIN_POST: &str = "https://www.astro.com/cgi/scus.cgi";
 pub const AWD_URL: &str = "https://www.astro.com/cgi/awd.cgi";
 
 /// Errors specific to astro.com HTTP sessions.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum AstrocomError {
     /// An HTTP request failed.
     #[error("HTTP: {0}")]
@@ -52,9 +60,9 @@ pub enum AstrocomError {
     /// Deletion verification failed — some nhor IDs still present.
     #[error("delete failed — nhor IDs still present: {0:?}")]
     DeleteVerifyFailed(Vec<u32>),
-    /// AAF parse error.
-    #[error("AAF parse error: {0}")]
-    AafParse(String),
+    /// The AAF bulk export could not be parsed.
+    #[error("AAF export did not parse")]
+    AafParse(#[from] crate::aaf::AafError),
 }
 
 /// A single astro.com credential source for the fall-through chain.
@@ -364,8 +372,7 @@ impl AstrocomSession {
 
         let aaf_html = self.get_text(&format!("{AWD_URL}?lang=e&act=aaf"))?;
         let aaf_text = extract_aaf(&aaf_html).ok_or(AstrocomError::AafNotFound)?;
-        let charts = crate::aaf::parse_file(&aaf_text)
-            .map_err(|e| AstrocomError::AafParse(e.to_string()))?;
+        let charts = crate::aaf::parse_file(&aaf_text)?;
 
         let (charts_out, nhor_ids_out) = charts
             .into_iter()
@@ -888,7 +895,12 @@ mod tests {
         // Not credential problems:
         assert!(!AstrocomError::NhorNotFound.is_auth_failure());
         assert!(!AstrocomError::DeleteVerifyFailed(vec![1]).is_auth_failure());
-        assert!(!AstrocomError::AafParse("bad".into()).is_auth_failure());
+        assert!(
+            !AstrocomError::AafParse(crate::aaf::AafError::MissingB {
+                context: "bad".into()
+            })
+            .is_auth_failure()
+        );
     }
 
     #[test]
@@ -922,6 +934,23 @@ mod tests {
     #[test]
     fn from_cid_takes_required_user_agent_and_builds() {
         assert!(AstrocomSession::from_cid("cid123", 0, "test/1.0").is_ok());
+    }
+
+    #[test]
+    fn aaf_parse_error_carries_structured_source() {
+        use std::error::Error;
+        let aaf_err = crate::aaf::AafError::MissingB {
+            context: "truncated input".into(),
+        };
+        let ac_err = AstrocomError::AafParse(aaf_err);
+        // Display must be the variant-level message only (no inner detail).
+        assert_eq!(ac_err.to_string(), "AAF export did not parse");
+        // source() must return Some so callers can inspect the inner AafError.
+        let src = ac_err.source();
+        assert!(
+            src.is_some(),
+            "AafParse must carry the AafError as source()"
+        );
     }
 
     #[test]

@@ -122,10 +122,15 @@ COORDINATE SYSTEM
   heliocentric    Sun-centred; add --helio
 
 ZODIAC
-  tropical     ecliptic longitude from the true vernal equinox (current)
-  sidereal     tropical minus ayanamsha — 47+ calibrations (roadmap)
-  draconic     0° = Moon's North Node — use --draconic (jzod + --text)
+  tropical     ecliptic longitude from the true vernal equinox (default)
+  sidereal     tropical minus ayanamsha — use --zodiac sidereal
+               [--ayanamsha <slug>] (default lahiri; also fagan_bradley, raman)
+               [--ayanamsha-frame <mean|true>] (overrides the ayanamsha's intrinsic default)
+  draconic     0° = Moon's North Node — use --draconic or --zodiac draconic
   antiscia     solstice-axis / equinox-axis reflections — use --antiscia (jzod + --text)
+
+  Sidereal rotates placements (bodies, angles, nodes, Lilith, lots, stars);
+  house cusps remain in tropical longitudes (house assignment is unchanged).
 
 CHART POINTS EMITTED
   Bodies   geocentric/topocentric: Sun, Moon, Mercury, Venus, Mars,
@@ -136,7 +141,8 @@ CHART POINTS EMITTED
            Lil, Pri (Black Moon Lilith / Priapus; geo/topo only — see --lilith)
   Lots     Fortune, Spirit, Exaltation (need ASC + Sun + Moon),
            Eros (+Venus), Necessity (+Mercury), Courage (+Mars),
-           Victory (+Jupiter), Nemesis (+Saturn), Sect; geo/topo only
+           Victory (+Jupiter), Nemesis (+Saturn); geo/topo only
+  Sect     Diurnal / Nocturnal chart attribute (emitted as chart.sect).
   Houses   Whole Sign, Equal-from-ASC, Placidus, Regiomontanus, Porphyry,
            Alcabitius, Morinus (need lat + lon; geo/topo only)
   Derived  Antiscion / Contra-antiscion: solstice/equinox-axis reflections
@@ -504,6 +510,24 @@ struct ComputeArgs {
     /// controlled by `--nodes`. No-op in `--page` mode.
     #[arg(long = "draconic")]
     draconic: bool,
+
+    /// Zodiac frame. Default `tropical`. `sidereal` subtracts the chosen
+    /// ayanamsha (see `--ayanamsha`); `draconic` is equivalent to `--draconic`.
+    /// Sidereal rotates placements (bodies, angles, nodes, Lilith, lots, stars)
+    /// but leaves house cusps in tropical longitudes.
+    #[arg(long = "zodiac", value_enum, default_value_t = ZodiacArg::Tropical)]
+    zodiac: ZodiacArg,
+
+    /// Ayanamsha slug for `--zodiac sidereal` (default `lahiri`; also
+    /// `fagan_bradley`, `raman`). Ignored unless `--zodiac sidereal`.
+    #[arg(long = "ayanamsha")]
+    ayanamsha: Option<String>,
+
+    /// Ayanāṃśa reduction frame for `--zodiac sidereal`. Absent = the chosen
+    /// ayanāṃśa's intrinsic default (Lahiri true; Fagan-Bradley and Raman mean). Override
+    /// for research: `mean` = precession only, `true` = precession + nutation.
+    #[arg(long = "ayanamsha-frame", value_enum)]
+    ayanamsha_frame: Option<FrameArg>,
 }
 
 /// Output format for sexagesimal coordinates.
@@ -588,6 +612,27 @@ enum LilithMode {
     Mean,
     /// Osculating apogee from the Moon's state vector.
     #[value(alias = "apparent", alias = "osculating")]
+    True,
+}
+
+/// Zodiac frame selector for `--zodiac`. Thin clap shim resolved into a
+/// `jzod::Zodiac` by [`resolve_zodiac`].
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum ZodiacArg {
+    /// Tropical (vernal-equinox-anchored). Default.
+    Tropical,
+    /// Sidereal (fixed-star-anchored); subtracts an ayanamsha.
+    Sidereal,
+    /// Draconic (North-Node-anchored); equivalent to `--draconic`.
+    Draconic,
+}
+
+/// `--ayanamsha-frame` selector. Absent = the ayanāṃśa's intrinsic default_frame.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameArg {
+    /// Precession only.
+    Mean,
+    /// Precession plus nutation.
     True,
 }
 
@@ -1085,6 +1130,45 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             .with_context(|| "chart computation failed")?;
 
     // === Output ===
+    // Resolve the zodiac frame once (validates --ayanamsha), shared by every
+    // renderer. --draconic and --zodiac draconic are equivalent.
+    let resolved_zodiac = resolve_zodiac(&args)?;
+    let want_draconic = matches!(resolved_zodiac, jzod::Zodiac::Draconic { .. });
+    let zodiac_label = zodiac_display(&resolved_zodiac);
+
+    // For a sidereal frame, pre-rotate the chart for the text/page renderers
+    // (placements rotated; house cusps left tropical). Tropical and draconic
+    // render `computed` directly — draconic projects internally in print_text.
+    // Pair the ayanamsha row with its resolved frame so the text/page renderer
+    // can pass both to `project_chart`.
+    let sidereal_ayanamsha: Option<(
+        pericynthion::sidereal::Ayanamsha,
+        pericynthion::sidereal::AyanamshaFrame,
+    )> = match &resolved_zodiac {
+        jzod::Zodiac::Sidereal { ayanamsha, frame } => {
+            let slug = ayanamsha
+                .as_deref()
+                .unwrap_or(pericynthion::sidereal::DEFAULT_AYANAMSHA_SLUG);
+            let jzod_frame = *frame;
+            pericynthion::sidereal::AyanamshaRegistry::with_builtins()
+                .get(slug)
+                .copied()
+                .map(|a| {
+                    let peri_frame = match jzod_frame {
+                        Some(f) => pericynthion::sidereal::AyanamshaFrame::from(f),
+                        // frame not specified: use the ayanamsha's intrinsic default_frame
+                        None => a.default_frame,
+                    };
+                    (a, peri_frame)
+                })
+        }
+        _ => None,
+    };
+    let projected = sidereal_ayanamsha
+        .as_ref()
+        .map(|(a, frame)| pericynthion::sidereal::project_chart(&computed, a, *frame));
+    let render_chart: &ComputedChart = projected.as_ref().unwrap_or(&computed);
+
     if is_jzod {
         let birth = pericynthion::jzod::ChartBirth {
             year,
@@ -1096,9 +1180,11 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             lat: obs_lat,
             lon: obs_lon,
         };
-        // Derive the draconic node longitude from the selected node mode, when
-        // --draconic is requested. None → tropical output.
-        let draconic_node: Option<f64> = if args.draconic {
+        // Draconic node longitude (mean/true per --nodes), when draconic applies.
+        // If want_draconic and nodes are None, to_jzod_chart will error
+        // (DraconicNodeUnavailable); otherwise None means no draconic projection.
+        // Sidereal rotation happens inside to_jzod_chart from `resolved_zodiac`.
+        let draconic_node: Option<f64> = if want_draconic {
             match (args.nodes, &computed.nodes) {
                 (NodesMode::Mean, Some(n)) => Some(n.mean_nn_deg),
                 (NodesMode::True, Some(n)) => Some(n.true_nn_deg),
@@ -1111,9 +1197,10 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             &computed,
             &birth,
             uuid::Uuid::new_v4().to_string(),
+            resolved_zodiac,
             draconic_node,
             args.antiscia,
-        );
+        )?;
         println!(
             "{}",
             jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart]))
@@ -1133,16 +1220,17 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
                     args.houses
                 );
             }
-            print_page(&args, &computed, fmt);
+            print_page(&args, render_chart, fmt, &zodiac_label);
         }
     } else {
         print_text(
-            &computed,
+            render_chart,
             fmt,
             args.nodes,
             args.lilith,
             args.antiscia,
-            args.draconic,
+            want_draconic,
+            &zodiac_label,
         );
     }
 
@@ -1658,6 +1746,85 @@ fn antiscia_rows(points: &[(&str, f64)]) -> Vec<(String, f64, f64)> {
         .collect()
 }
 
+/// Resolve the concrete [`pericynthion::sidereal::AyanamshaFrame`] from the
+/// CLI override (`--ayanamsha-frame`) or the ayanāṃśa row's intrinsic default.
+fn resolve_frame(
+    args: &ComputeArgs,
+    ay: &pericynthion::sidereal::Ayanamsha,
+) -> pericynthion::sidereal::AyanamshaFrame {
+    args.ayanamsha_frame
+        .map(|f| match f {
+            FrameArg::Mean => pericynthion::sidereal::AyanamshaFrame::Mean,
+            FrameArg::True => pericynthion::sidereal::AyanamshaFrame::True,
+        })
+        .unwrap_or(ay.default_frame)
+}
+
+/// Resolve the requested zodiac frame into a [`jzod::Zodiac`], validating the
+/// ayanamsha slug against the built-in registry.
+///
+/// `--draconic` and `--zodiac draconic` both yield `Draconic`; an explicit
+/// `--zodiac sidereal` takes precedence over `--draconic`. For sidereal the
+/// ayanamsha defaults to `lahiri`; an unknown slug is an error listing the
+/// known slugs.
+fn resolve_zodiac(args: &ComputeArgs) -> Result<jzod::Zodiac> {
+    if matches!(args.zodiac, ZodiacArg::Sidereal) {
+        let slug = args
+            .ayanamsha
+            .as_deref()
+            .unwrap_or(pericynthion::sidereal::DEFAULT_AYANAMSHA_SLUG);
+        let registry = pericynthion::sidereal::AyanamshaRegistry::with_builtins();
+        let ay = registry.get(slug).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown ayanamsha '{slug}'; known slugs: {}",
+                registry.slugs().join(", ")
+            )
+        })?;
+        let frame = resolve_frame(args, ay);
+        let jzod_frame = jzod::SiderealFrame::from(frame);
+        return Ok(jzod::Zodiac::Sidereal {
+            ayanamsha: Some(slug.to_string()),
+            frame: Some(jzod_frame),
+        });
+    }
+    if matches!(args.zodiac, ZodiacArg::Draconic) || args.draconic {
+        // Record the node choice as metadata. Note: this field is purely metadata —
+        // the actual draconic projection is steered by `draconic_node: Option<f64>`
+        // computed independently from `args.nodes` in `cmd_compute`. Changing `node`
+        // here does NOT change projection behavior.
+        let node = match args.nodes {
+            NodesMode::Mean => jzod::DraconicNode::Mean,
+            NodesMode::True => jzod::DraconicNode::True,
+        };
+        return Ok(jzod::Zodiac::Draconic { node: Some(node) });
+    }
+    Ok(jzod::Zodiac::Tropical)
+}
+
+/// Human-readable zodiac label for the text/page banner, e.g.
+/// `"sidereal (lahiri, true)"`. `"tropical"` for the default (the renderers
+/// omit the zodiac line entirely in that case to preserve historical output).
+/// When `frame` is `None`, the frame is omitted from the label rather than
+/// inventing a default.
+fn zodiac_display(zodiac: &jzod::Zodiac) -> String {
+    match zodiac {
+        jzod::Zodiac::Tropical => "tropical".to_string(),
+        jzod::Zodiac::Draconic { .. } => "draconic".to_string(),
+        jzod::Zodiac::Sidereal { ayanamsha, frame } => {
+            let frame_str = frame.map(|f| match f {
+                jzod::SiderealFrame::Mean => "mean",
+                jzod::SiderealFrame::True => "true",
+            });
+            match (ayanamsha.as_deref(), frame_str) {
+                (Some(slug), Some(f)) => format!("sidereal ({slug}, {f})"),
+                (Some(slug), None) => format!("sidereal ({slug})"),
+                (None, Some(f)) => format!("sidereal ({f})"),
+                (None, None) => "sidereal".to_string(),
+            }
+        }
+    }
+}
+
 fn print_text(
     computed: &ComputedChart,
     fmt: CoordFormat,
@@ -1665,6 +1832,7 @@ fn print_text(
     lilith_mode: LilithMode,
     show_antiscia: bool,
     show_draconic: bool,
+    zodiac_label: &str,
 ) {
     println!("JD UT  : {:.6}", computed.jd_ut);
     println!("JD TT  : {:.6}", computed.jd_tt);
@@ -1698,8 +1866,11 @@ fn print_text(
         None
     };
 
-    if drac.is_some() {
-        println!("Zodiac : draconic");
+    // Print the zodiac frame unless it is the (default) tropical, which has
+    // historically printed no zodiac line. `computed` is already sidereal-rotated
+    // by the caller when `zodiac_label` names a sidereal frame.
+    if zodiac_label != "tropical" {
+        println!("Zodiac : {zodiac_label}");
     }
 
     println!();
@@ -2068,7 +2239,7 @@ fn banner_row(inside_width: usize, left: &str, right: &str) -> String {
 }
 
 #[cfg(feature = "page")]
-fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
+fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat, zodiac_label: &str) {
     use tabled::{
         builder::Builder,
         settings::{
@@ -2127,7 +2298,16 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     };
     let jd_ut_str = format!("JD UT {:.4}", computed.jd_ut);
     let mode_str = page_mode_str(&computed.mode);
-    let zodiac_str = "Tropical"; // only mode shipped
+    // Title-case the zodiac label for the banner (e.g. "Tropical",
+    // "Sidereal (lahiri)", "Draconic"). `computed` is already sidereal-rotated
+    // by the caller when the label names a sidereal frame.
+    let zodiac_str = {
+        let mut chars = zodiac_label.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    };
     let primary_house_arg = args
         .houses
         .as_ref()
@@ -2278,7 +2458,7 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat) {
     let banner_rows: Vec<(&str, &str)> = vec![
         (date_time_str.as_str(), coords_str.as_str()),
         (calendar_str, mode_str),
-        (zodiac_str, house_str),
+        (zodiac_str.as_str(), house_str),
     ];
     let banner_max_content = banner_rows
         .iter()
@@ -2571,6 +2751,180 @@ mod tests {
             }
             _ => panic!("expected Data command"),
         }
+    }
+
+    /// Helper: parse a `compute` command line into its `ComputeArgs`.
+    fn compute_args(extra: &[&str]) -> ComputeArgs {
+        let mut argv = vec![
+            "starcat",
+            "compute",
+            "--date",
+            "2000-01-01",
+            "--time",
+            "12:00",
+            "--tz",
+            "+00:00",
+        ];
+        argv.extend_from_slice(extra);
+        match Cli::try_parse_from(argv).expect("args parse").command {
+            Command::Compute(a) => a,
+            _ => panic!("expected Compute"),
+        }
+    }
+
+    #[test]
+    fn zodiac_defaults_to_tropical() {
+        let z = resolve_zodiac(&compute_args(&[])).expect("tropical");
+        assert_eq!(z, jzod::Zodiac::Tropical);
+    }
+
+    #[test]
+    fn sidereal_defaults_to_lahiri() {
+        let z = resolve_zodiac(&compute_args(&["--zodiac", "sidereal"])).expect("lahiri default");
+        assert_eq!(
+            z,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: Some(jzod::SiderealFrame::True),
+            }
+        );
+    }
+
+    #[test]
+    fn sidereal_honours_explicit_ayanamsha() {
+        let z = resolve_zodiac(&compute_args(&[
+            "--zodiac",
+            "sidereal",
+            "--ayanamsha",
+            "fagan_bradley",
+        ]))
+        .expect("fagan_bradley resolves");
+        assert_eq!(
+            z,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("fagan_bradley".to_string()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_ayanamsha_errors() {
+        let err = resolve_zodiac(&compute_args(&[
+            "--zodiac",
+            "sidereal",
+            "--ayanamsha",
+            "bogus",
+        ]))
+        .expect_err("unknown ayanamsha must error");
+        let msg = err.to_string();
+        assert!(msg.contains("bogus"), "error must name the bad slug: {msg}");
+        assert!(
+            msg.contains("lahiri") && msg.contains("fagan_bradley") && msg.contains("raman"),
+            "error must list valid slugs: {msg}"
+        );
+    }
+
+    #[test]
+    fn zodiac_draconic_equivalent_to_draconic_flag() {
+        let via_flag = resolve_zodiac(&compute_args(&["--draconic"])).expect("draconic flag");
+        let via_zodiac =
+            resolve_zodiac(&compute_args(&["--zodiac", "draconic"])).expect("zodiac draconic");
+        // Default --nodes is true (osculating) → node recorded as True.
+        assert_eq!(
+            via_flag,
+            jzod::Zodiac::Draconic {
+                node: Some(jzod::DraconicNode::True)
+            }
+        );
+        assert_eq!(
+            via_zodiac,
+            jzod::Zodiac::Draconic {
+                node: Some(jzod::DraconicNode::True)
+            }
+        );
+    }
+
+    #[test]
+    fn draconic_node_records_nodes_choice() {
+        // Default --nodes is true → node: Some(True)
+        let z_true = resolve_zodiac(&compute_args(&["--draconic"])).expect("draconic default");
+        assert_eq!(
+            z_true,
+            jzod::Zodiac::Draconic {
+                node: Some(jzod::DraconicNode::True)
+            }
+        );
+        // Explicit --nodes mean → node: Some(Mean)
+        let z_mean = resolve_zodiac(&compute_args(&["--draconic", "--nodes", "mean"]))
+            .expect("draconic mean");
+        assert_eq!(
+            z_mean,
+            jzod::Zodiac::Draconic {
+                node: Some(jzod::DraconicNode::Mean)
+            }
+        );
+    }
+
+    #[test]
+    fn zodiac_display_sidereal_none_frame_omits_frame() {
+        // frame: None must NOT print "true" — it omits the frame entirely.
+        let z = jzod::Zodiac::Sidereal {
+            ayanamsha: Some("lahiri".to_string()),
+            frame: None,
+        };
+        assert_eq!(zodiac_display(&z), "sidereal (lahiri)");
+        // No ayanamsha, no frame → just "sidereal".
+        let z2 = jzod::Zodiac::Sidereal {
+            ayanamsha: None,
+            frame: None,
+        };
+        assert_eq!(zodiac_display(&z2), "sidereal");
+    }
+
+    #[test]
+    fn sidereal_default_frame_is_intrinsic() {
+        // lahiri defaults to true; fagan_bradley to mean — no --ayanamsha-frame given.
+        let z = resolve_zodiac(&compute_args(&["--zodiac", "sidereal"])).unwrap();
+        assert_eq!(
+            z,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".into()),
+                frame: Some(jzod::SiderealFrame::True),
+            }
+        );
+        let z2 = resolve_zodiac(&compute_args(&[
+            "--zodiac",
+            "sidereal",
+            "--ayanamsha",
+            "fagan_bradley",
+        ]))
+        .unwrap();
+        assert_eq!(
+            z2,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("fagan_bradley".into()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            }
+        );
+    }
+
+    #[test]
+    fn ayanamsha_frame_override_forces_mean() {
+        let z = resolve_zodiac(&compute_args(&[
+            "--zodiac",
+            "sidereal",
+            "--ayanamsha-frame",
+            "mean",
+        ]))
+        .unwrap();
+        assert_eq!(
+            z,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".into()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            }
+        );
     }
 
     #[test]

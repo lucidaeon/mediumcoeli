@@ -324,7 +324,7 @@ Follows the Astro-Databank system. Encodes both data source and confidence level
 
 | field | values | notes |
 |---|---|---|
-| `zodiac` | object | `name` field is required. `"tropical"` — anchored to the vernal equinox. `"sidereal"` — adds `ayanamsha` field. `"draconic"` — anchored to the North Node. Additional names to be specified. |
+| `zodiac` | object | `name` field is required. `"tropical"` — anchored to the vernal equinox. `"sidereal"` — adds an optional `ayanamsha` slug and an optional `frame` (`"mean"` \| `"true"`, mean = precession only, true = precession + nutation; absent = unrecorded, consult canonical ayanamsha defaults). `"draconic"` — anchored to the North Node; adds an optional `node` field (`"mean"` \| `"true"`; absent = unrecorded). Additional names to be specified. |
 | `coordinate_system` | `"geocentric"`, `"topocentric"`, `"heliocentric"` | `"topocentric"` = parallax-corrected for observer's surface location; affects Moon by up to ~1°. |
 | `sect` | `"diurnal"`, `"nocturnal"`, `"unknown"` | Sun above the horizon = diurnal. Use `"unknown"` when the birth time is unknown (`datetime.unknown` is `true`), since sect cannot be trusted from a placeholder time-of-day. **Omit the field entirely for heliocentric charts** — sect is geocentric by definition (Sun relative to the local horizon) and has no meaning without an Ascendant. |
 
@@ -694,6 +694,31 @@ The `views` array holds display-only wrappers for biwheels, triwheels, and quadw
 ### Sign Slugs
 `aries`, `taurus`, `gemini`, `cancer`, `leo`, `virgo`, `libra`, `scorpio`, `sagittarius`, `capricorn`, `aquarius`, `pisces`
 
+### Canonical Ayanamsha Slugs
+
+The following slugs are valid values for the `ayanamsha` field on a `"sidereal"` zodiac object. The canonical slug authority is `jzod::ayanamsha::AYANAMSHAS`.
+
+<!-- Pinned by test `slug_table_matches_ayanamshas` in crates/jzod/src/ayanamsha.rs -->
+| slug | aliases | canonical default frame | notes |
+|---|---|---|---|
+| `fagan_bradley` | `fagan_allen` | `mean` | Garth Allen was Donald Bradley's pen name — same ayanamsha, two names. |
+| `lahiri` | — | `true` | Chitrapaksha. Indian Astronomical Ephemeris; JHora defaults to true. |
+| `de_luce` | — | — | — |
+| `raman` | — | `mean` | B.V. Raman, *Hindu Predictive Astrology* (1992). Formula-defined: (year − 397) × 50⅓″. |
+| `usha_shashi` | — | — | — |
+| `krishnamurti` | — | — | — |
+| `djwhal_khul` | — | — | — |
+| `svp` | — | — | — |
+| `sri_yukteswar` | — | — | — |
+| `jn_bhasin` | — | — | — |
+| `larry_ely` | — | — | — |
+| `takra_i` | — | — | — |
+| `takra_ii` | — | — | — |
+| `sundara_rajan` | — | — | — |
+| `shill_pond` | — | — | — |
+
+A `"frame"` absent on a `"sidereal"` zodiac object means the frame is unrecorded. A consumer needing a concrete frame should consult the canonical default for the ayanamsha (above); if `None`, the consumer SHOULD refuse rather than guess.
+
 ---
 
 ## Minimally Calculated Radix
@@ -745,6 +770,8 @@ A JZOD-compliant implementation:
 
 | Date | OQ | Decision | Rationale |
 |---|---|---|---|
+| 2026-07-05 | — | `Zodiac::Sidereal.frame` made optional; `Zodiac::Draconic` gains `node: Option<DraconicNode>`; canonical ayanamsha slug table added to jzod crate | Unrecorded frame is preferable to a hardcoded default that silently misrepresents the calculation; draconic charts must declare which node was used for projection |
+| 2026-07-03 | — | `Zodiac::Sidereal` gains a required `frame` field: `"mean"` (precession only) or `"true"` (precession + nutation in longitude) | Without a recorded frame, two calculations using identical ayanamsha names can differ by ~17″ at J2000 depending on whether nutation was applied; recording `frame` makes sidereal output reproducible |
 | 2026-06-19 | — | `sect` is three-state: `"diurnal"` / `"nocturnal"` / `"unknown"` (unknown when `datetime.unknown`); the field is omitted entirely for heliocentric charts | Sect is geocentric (Sun vs. local horizon) and needs an Ascendant, so it is meaningless heliocentrically — absence is honest. A placeholder time-of-day must not masquerade as a real day/night determination, so `"unknown"` is distinct from a computed value. |
 | 2026-06-14 | OQ-4 | `zodiac` is an object `{ "name": "tropical" }`; sidereal adds `ayanamsha`; draconic stubbed | Bare string discriminator with structurally distinct peers is a breaking change on extension; object is self-protecting |
 | 2026-06-14 | OQ-3 | Nested chart array is named `nested` | Short; works as a query noun (`chart.nested[]`); no redundancy with element type |
@@ -1179,10 +1206,10 @@ Applies to: `north_node`, `south_node`, `black_moon_lilith`, `priapus`.
 | `name` | additional fields | notes |
 |---|---|---|
 | `"tropical"` | — | Anchored to the vernal equinox. Default. |
-| `"sidereal"` | `ayanamsha` | Offset from tropical. Ayanamsha registry TBD — see seed prompt for TOML registry approach. |
-| `"draconic"` | — | Anchored to the North Node. |
+| `"sidereal"` | `ayanamsha`, `frame` | Offset from tropical. `ayanamsha`: optional slug (see Canonical Ayanamsha Slugs below). `frame`: optional `"mean"` \| `"true"`; absent = unrecorded. |
+| `"draconic"` | `node` | Anchored to the North Node. `node`: optional `"mean"` \| `"true"`; absent = unrecorded. |
 
-Additional sidereal variants (Lahiri, Fagan-Bradley, Krishnamurti, Vettius Valens, etc.) are expressed via the `ayanamsha` field on a `"sidereal"` zodiac object, not as distinct `name` values. The ayanamsha value space is left open pending a registry definition.
+Additional sidereal variants (Lahiri, Fagan-Bradley, Krishnamurti, Vettius Valens, etc.) are expressed via the `ayanamsha` field on a `"sidereal"` zodiac object, not as distinct `name` values. The ayanamsha value space is defined by the Canonical Ayanamsha Slugs table in this document; `jzod::ayanamsha` is the canonical slug authority and alias resolver — see [Canonical Ayanamsha Slugs](#canonical-ayanamsha-slugs).
 
 ---
 

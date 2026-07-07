@@ -77,9 +77,23 @@
 //! (parallax-corrected), and
 //! [`coords::apparent::heliocentric_ecliptic_position`].
 //!
+//! ## Sidereal zodiac
+//!
+//! Behind the `sidereal` feature, [`sidereal`] adds a sidereal-longitude engine:
+//! [`sidereal::sidereal_longitude`] subtracts an **ayanamsha** (the
+//! equinox-to-fixed-zero gap) from a tropical longitude, where the ayanamsha at
+//! computation supports two frames (see [`sidereal::AyanamshaFrame`]): **mean**
+//! (precession only) and **true** (precession plus nutation in longitude, Δψ);
+//! the frame is chosen per-ayanāṃśa or overridden by the caller. Two precession
+//! models are supported: IAU 2006 epoch-anchor (Lahiri, Fagan-Bradley) and a
+//! fixed-annual-rate formula (Raman). Ayanamsha definitions live in a compiled-in
+//! catalog ([`sidereal::AyanamshaRegistry`]) with built-ins
+//! (`lahiri`, `fagan_bradley`, `raman`) sourced from primary authorities.
+//! [`sidereal::project_chart`] rotates a whole [`chart::ComputedChart`] into
+//! the sidereal frame (house cusps stay tropical — assignment is shift-invariant).
+//!
 //! ## v1 non-goals (still deferred)
 //!
-//! - Sidereal zodiacs / ayanāṃśas (Lahiri, Fagan-Bradley, …)
 //! - Dwarf planets and minor bodies beyond the five shipped asteroids (Chiron, Eris, …)
 //! - Wider Hellenistic lot catalog beyond the Hermetic eight
 //! - Natural / Interpolated Black Moon Lilith
@@ -116,6 +130,8 @@ pub mod lots;
 pub mod manifest;
 pub mod placements;
 pub mod provenance;
+#[cfg(feature = "sidereal")]
+pub mod sidereal;
 pub mod spk;
 pub mod stars;
 pub mod time;

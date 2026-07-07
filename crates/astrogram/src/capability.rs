@@ -263,6 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn jhd_source_into_sfcht_fills_the_three_settings_via_the_general_boundary() {
+        // JHD reads only Region; SFcht writes all three NON_OMITTABLE settings, so
+        // the caps-derived gap is exactly HouseSystem, Zodiac, CoordinateSystem —
+        // no JHD-specific or trio-specific fill code involved.
+        // NOTE: if a fourth NON_OMITTABLE field is ever added, blackmoon's
+        // `apply_fills` match must gain an arm for it; this test guards the set.
+        assert_eq!(
+            fill_fields(crate::format::Format::Jhd, crate::format::Format::Sfcht),
+            vec![
+                ChartField::HouseSystem,
+                ChartField::Zodiac,
+                ChartField::CoordinateSystem,
+            ]
+        );
+    }
+
+    /// Pin: a fully-populated chart must report every [`ChartField::ALL`] member.
+    /// If `populated_lossy_fields` fails to count a field that `fully_populated`
+    /// provides, or if a new [`ChartField`] is added without updating either
+    /// `fully_populated` or `populated_lossy_fields`, this test fails.
+    #[test]
+    fn populated_lossy_fields_covers_all_chart_fields_for_fully_populated() {
+        let chart = crate::test_support::fully_populated();
+        let fields = populated_lossy_fields(&chart);
+        for &f in ChartField::ALL {
+            assert!(
+                fields.contains(&f),
+                "populated_lossy_fields missing {f:?} for a fully-populated chart",
+            );
+        }
+    }
+
+    #[test]
     fn all_fields_lists_every_variant_once() {
         // Compile-time guard: adding a ChartField variant breaks this match,
         // forcing it into ALL. (The match arms below must enumerate every variant.)

@@ -20,6 +20,8 @@ pub enum Format {
     Adb,
     /// AAF (Astrolog Ascii Format) — read-only.
     Aaf,
+    /// Jagannatha Hora `.jhd` — read-only.
+    Jhd,
     /// lunaastrology.com account.
     Luna,
     /// astro.com account.
@@ -180,6 +182,17 @@ pub const FORMATS: &[FormatSpec] = &[
         can_write: false,
         read_caps: crate::aaf::READ_CAPS,
         write_caps: crate::aaf::WRITE_CAPS,
+    },
+    FormatSpec {
+        format: Format::Jhd,
+        slug: "jhd",
+        kind: Kind::File,
+        auth: Auth::None,
+        extensions: &["jhd"],
+        can_read: true,
+        can_write: false,
+        read_caps: crate::jhd::READ_CAPS,
+        write_caps: crate::jhd::WRITE_CAPS,
     },
     FormatSpec {
         format: Format::Luna,
@@ -353,6 +366,18 @@ mod tests {
             Format::from_path(std::path::Path::new("x.aaf")),
             Some(Format::Aaf)
         );
+        assert_eq!(
+            Format::from_path(std::path::Path::new("x.jhd")),
+            Some(Format::Jhd)
+        );
+        assert_eq!(
+            Format::from_path(std::path::Path::new("x.json")),
+            Some(Format::Json)
+        );
+        assert_eq!(
+            Format::from_path(std::path::Path::new("x.raw")),
+            Some(Format::Raw)
+        );
         assert_eq!(Format::from_path(std::path::Path::new("x.txt")), None);
     }
 
@@ -367,16 +392,33 @@ mod tests {
                     s.slug
                 );
             }
+            if !s.can_read {
+                assert!(
+                    s.read_caps.fields().is_empty(),
+                    "{} is write-only but has read_caps",
+                    s.slug
+                );
+            }
             // touch a field to ensure the vocab type is wired
             let _ = s.read_caps.preserves(ChartField::Region);
         }
     }
 
     #[test]
+    fn jhd_registered_and_maps_from_slug_and_path() {
+        assert_eq!(Format::from_slug("jhd"), Some(Format::Jhd));
+        assert_eq!(
+            Format::from_path(std::path::Path::new("x.jhd")),
+            Some(Format::Jhd)
+        );
+        let spec = Format::Jhd.spec();
+        assert!(spec.can_read && !spec.can_write);
+    }
+
+    #[test]
     fn capability_matrix_has_a_row_per_format() {
         let rows = capability_matrix();
         assert_eq!(rows.len(), FORMATS.len());
-        assert_eq!(rows.len(), 9, "expected 9 registry formats");
     }
 
     #[test]

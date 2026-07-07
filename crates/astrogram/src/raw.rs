@@ -7,6 +7,9 @@
 use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Zodiac};
 
+/// Fields recovered when reading raw (none — read is not implemented).
+pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[]);
+
 /// Fields the raw writer emits (all non-trivial per-chart fields).
 pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[
     ChartField::SecondaryName,
@@ -19,9 +22,6 @@ pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[
     ChartField::Notes,
     ChartField::EventType,
 ]);
-
-/// Fields recovered when reading raw (none — read is not implemented).
-pub const READ_CAPS: CapabilitySet = CapabilitySet::new(&[]);
 
 /// Serialize `charts` as a raw key: value text document.
 ///

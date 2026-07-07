@@ -141,7 +141,9 @@
       "required": ["name"],
       "properties": {
         "name": { "type": "string", "enum": ["tropical","sidereal","draconic"] },
-        "ayanamsha": { "type": "string" }
+        "ayanamsha": { "type": "string" },
+        "frame": { "type": "string", "enum": ["mean","true"] },
+        "node":  { "type": "string", "enum": ["mean","true"], "description": "draconic node choice; absent = unrecorded" }
       }
     },
     "Ephemeris": {

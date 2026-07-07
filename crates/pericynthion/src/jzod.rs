@@ -23,13 +23,16 @@
 //! ```
 //!
 //! ```rust,ignore
-//! let chart = pericynthion::jzod::to_jzod_chart(&computed, &birth, uid, None, false);
+//! let chart = pericynthion::jzod::to_jzod_chart(
+//!     &computed, &birth, uid, jzod::Zodiac::Tropical, None, false,
+//! )?;
 //! println!("{}", jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart])));
 //! ```
 
 use crate::body::Body;
 use crate::chart::ComputedChart;
 use crate::coords::phase::LunarPhaseName as P;
+use crate::error::PericynthionError;
 use crate::houses::{HouseCusps, HouseSystem};
 use crate::lots::Sect;
 use std::collections::BTreeMap;
@@ -157,20 +160,30 @@ pub fn house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
 /// - `birth` — civil date/time and location fields that accompany the chart.
 /// - `uid` — a pre-generated unique identifier (e.g. `uuid::Uuid::new_v4().to_string()`).
 ///   Passed in by the caller so that `pericynthion` does not depend on `uuid`.
-/// - `draconic_node` — when `Some(node_lon_deg)`, every placement longitude is
-///   projected into the draconic zodiac via
-///   [`crate::draconic::draconic_longitude`] and `chart.zodiac` is set to
-///   [`jzod::Zodiac::Draconic`]. When `None`, tropical longitudes are emitted
-///   and `chart.zodiac` is [`jzod::Zodiac::Tropical`].
+/// - `zodiac` — the zodiac frame to emit, and the authoritative value of
+///   `chart.zodiac`. It also selects how each placement longitude is projected:
+///   - [`jzod::Zodiac::Tropical`] — longitudes emitted unchanged.
+///   - [`jzod::Zodiac::Draconic`] — longitudes projected via
+///     [`crate::draconic::draconic_longitude`] using `draconic_node` (see below).
+///   - [`jzod::Zodiac::Sidereal`] — longitudes rotated via
+///     [`crate::sidereal::sidereal_longitude`] using the ayanamsha named in the
+///     variant (defaulting to [`crate::sidereal::DEFAULT_AYANAMSHA_SLUG`]),
+///     resolved against [`crate::sidereal::AyanamshaRegistry::with_builtins`].
+///     An unrecognized slug returns
+///     [`crate::error::PericynthionError::UnknownAyanamshaSlug`].
+/// - `draconic_node` — the North-Node longitude consumed only when `zodiac` is
+///   [`jzod::Zodiac::Draconic`]. `None` in Draconic mode is a hard error
+///   ([`crate::error::PericynthionError::DraconicNodeUnavailable`]); ignored
+///   for every other zodiac.
 /// - `emit_antiscia` — when `true`, the `antiscion` and `contra_antiscion`
 ///   optional fields on [`jzod::placement::Body`] and [`jzod::placement::Angle`]
 ///   are populated from [`crate::antiscia::antiscion`] /
 ///   [`crate::antiscia::contra_antiscion`] applied to the *emitted* longitude
-///   (after any draconic projection). When `false`, both fields are `None`.
+///   (after any draconic or sidereal projection). When `false`, both fields are `None`.
 ///
 /// # Mapping notes
 ///
-/// - **Zodiac**: `Tropical` when `draconic_node` is `None`; `Draconic` otherwise.
+/// - **Zodiac**: emitted verbatim from the `zodiac` argument.
 /// - **Bodies**: speed and retrograde are read from `computed.bodies[i]`; no
 ///   recomputation is performed.
 /// - **Nodes / Lilith**: both mean and true variants are read from
@@ -180,15 +193,25 @@ pub fn house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
 ///   all other systems use [`jzod::HouseCusp::from_longitude`].
 /// - **`calculated_at`**: current wall-clock time via
 ///   [`jzod::time::calculated_at_now`].
-#[must_use]
+///
+/// # Errors
+///
+/// Returns [`PericynthionError::UnknownAyanamshaSlug`] when `zodiac` is
+/// [`jzod::Zodiac::Sidereal`] and the ayanamsha slug it names is not present
+/// in [`crate::sidereal::AyanamshaRegistry::with_builtins`].
+///
+/// Returns [`PericynthionError::DraconicNodeUnavailable`] when `zodiac` is
+/// [`jzod::Zodiac::Draconic`] and `draconic_node` is `None` — emitting
+/// tropical longitudes stamped draconic would silently mislabel the chart.
 #[allow(clippy::too_many_lines)]
 pub fn to_jzod_chart(
     computed: &ComputedChart,
     birth: &ChartBirth,
     uid: String,
+    zodiac: jzod::Zodiac,
     draconic_node: Option<f64>,
     emit_antiscia: bool,
-) -> jzod::Chart {
+) -> Result<jzod::Chart, PericynthionError> {
     // ── Coordinate system ────────────────────────────────────────────────────
     let coord_system = match &computed.mode {
         crate::chart::CoordMode::Geocentric => jzod::CoordinateSystem::Geocentric,
@@ -196,21 +219,58 @@ pub fn to_jzod_chart(
         crate::chart::CoordMode::Heliocentric => jzod::CoordinateSystem::Heliocentric,
     };
 
-    // ── Zodiac ───────────────────────────────────────────────────────────────
-    // Draconic when a node longitude is supplied; tropical otherwise.
-    let zodiac = if draconic_node.is_some() {
-        jzod::Zodiac::Draconic
-    } else {
-        jzod::Zodiac::Tropical
-    };
+    // ── Sidereal ayanamsha resolution ────────────────────────────────────────
+    // Resolved once up front when a sidereal zodiac is requested. An unknown
+    // slug is a hard error — the chart would be mislabeled if projection
+    // silently fell back to tropical.
+    // The frame (Mean/True) is captured alongside the ayanamsha so that the
+    // projection closure can pass it to `sidereal_longitude`.
+    let sidereal: Option<(crate::sidereal::Ayanamsha, crate::sidereal::AyanamshaFrame)> =
+        match &zodiac {
+            jzod::Zodiac::Sidereal { ayanamsha, frame } => {
+                let slug = ayanamsha
+                    .as_deref()
+                    .unwrap_or(crate::sidereal::DEFAULT_AYANAMSHA_SLUG);
+                let registry = crate::sidereal::AyanamshaRegistry::with_builtins();
+                if let Some(a) = registry.get(slug).copied() {
+                    let resolved_frame = match frame {
+                        Some(f) => crate::sidereal::AyanamshaFrame::from(*f),
+                        // frame not specified: use the ayanamsha's intrinsic default_frame
+                        None => a.default_frame,
+                    };
+                    Some((a, resolved_frame))
+                } else {
+                    let known = registry.slugs().join(", ");
+                    return Err(PericynthionError::UnknownAyanamshaSlug {
+                        slug: slug.to_string(),
+                        known,
+                    });
+                }
+            }
+            _ => None,
+        };
+
+    // ── Draconic node guard ──────────────────────────────────────────────────
+    // A draconic chart without a node longitude would emit tropical longitudes
+    // stamped draconic — the same silent-mislabel class as the unknown-ayanamsha
+    // case above. Fail fast before any chart is built.
+    if matches!(zodiac, jzod::Zodiac::Draconic { .. }) && draconic_node.is_none() {
+        return Err(PericynthionError::DraconicNodeUnavailable);
+    }
 
     // ── Longitude projection ─────────────────────────────────────────────────
-    // When draconic_node is Some, every emitted longitude is shifted through
-    // draconic_longitude before conversion to a zodiacal Position.
+    // Every emitted longitude is shifted through the projection selected by the
+    // chosen zodiac before conversion to a zodiacal Position. The decision is
+    // driven by the resolved companions (so the closure does not borrow
+    // `zodiac`, leaving it free to move into the emitted chart): a resolved
+    // sidereal ayanamsha takes precedence, then a draconic node, else identity.
     let project_lon = |tropical_lon: f64| -> f64 {
-        match draconic_node {
-            Some(node) => crate::draconic::draconic_longitude(tropical_lon, node),
-            None => tropical_lon,
+        if let Some((a, frame)) = &sidereal {
+            crate::sidereal::sidereal_longitude(tropical_lon, computed.jd_tt, a, *frame)
+        } else if let Some(node) = draconic_node {
+            crate::draconic::draconic_longitude(tropical_lon, node)
+        } else {
+            tropical_lon
         }
     };
 
@@ -502,7 +562,7 @@ pub fn to_jzod_chart(
     });
 
     // ── Assemble the chart ───────────────────────────────────────────────────
-    jzod::Chart {
+    Ok(jzod::Chart {
         uid,
         chart_type: jzod::ChartType::Radix,
         name: None,
@@ -547,7 +607,7 @@ pub fn to_jzod_chart(
         lunar_phase,
         tithi,
         nested: vec![],
-    }
+    })
 }
 
 // =============================================================================
@@ -599,7 +659,15 @@ mod jzod_tests {
             lat: None,
             lon: None,
         };
-        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        )
+        .unwrap();
         let t = chart
             .tithi
             .expect("tithi must be Some when computed.tithi is set");
@@ -662,13 +730,15 @@ mod jzod_tests {
             &computed,
             &birth,
             "test-uid".to_string(),
+            jzod::Zodiac::Draconic { node: None },
             Some(node_lon),
             false,
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             chart.zodiac,
-            jzod::Zodiac::Draconic,
+            jzod::Zodiac::Draconic { node: None },
             "zodiac must be Draconic when node is supplied"
         );
         let sun_body = chart
@@ -682,6 +752,169 @@ mod jzod_tests {
             "Sun draconic longitude must equal draconic_longitude({sun_lon}, {node_lon}) = {expected_drac}, got {}",
             sun_body.position.ecliptic_longitude.0
         );
+    }
+
+    /// Build a single-body (Sun at `sun_lon`) geocentric `ComputedChart` at
+    /// J2000 for the zodiac-projection tests below.
+    fn sun_only_computed(sun_lon: f64) -> crate::chart::ComputedChart {
+        use crate::body::Body;
+        use crate::chart::{ComputedBody, ComputedChart, CoordMode};
+        use crate::coords::apparent::EclipticPosition;
+        ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![ComputedBody {
+                body: Body::Sun,
+                position: EclipticPosition {
+                    longitude_deg: sun_lon,
+                    latitude_deg: 0.0,
+                    distance_au: 1.0,
+                },
+                daily_speed_deg: 1.0,
+                retrograde: false,
+            }],
+            asteroids: vec![],
+            angles: None,
+            nodes: None,
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+        }
+    }
+
+    fn j2000_birth() -> super::ChartBirth {
+        super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        }
+    }
+
+    /// A tropical request emits `Zodiac::Tropical` and leaves body longitudes
+    /// exactly as computed.
+    #[test]
+    fn tropical_zodiac_emitted_unchanged() {
+        let sun_lon = 120.0_f64;
+        let computed = sun_only_computed(sun_lon);
+        let chart = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(chart.zodiac, jzod::Zodiac::Tropical);
+        let sun = chart
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .expect("Sun must be in placements");
+        assert!((sun.position.ecliptic_longitude.0 - sun_lon).abs() < 1e-9);
+    }
+
+    /// A sidereal request carries the ayanamsha slug on `chart.zodiac` and
+    /// rotates every body longitude through `sidereal_longitude`.
+    #[test]
+    fn sidereal_zodiac_rotates_bodies() {
+        let sun_lon = 120.0_f64;
+        let computed = sun_only_computed(sun_lon);
+        let registry = crate::sidereal::AyanamshaRegistry::with_builtins();
+        let lahiri = registry.get("lahiri").expect("lahiri built-in");
+        let expected = crate::sidereal::sidereal_longitude(
+            sun_lon,
+            computed.jd_tt,
+            lahiri,
+            crate::sidereal::AyanamshaFrame::Mean,
+        );
+
+        let chart = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            },
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            chart.zodiac,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            }
+        );
+        let sun = chart
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .expect("Sun must be in placements");
+        assert!(
+            (sun.position.ecliptic_longitude.0 - expected).abs() < 1e-9,
+            "Sun sidereal longitude must equal sidereal_longitude({sun_lon}, jd, lahiri) = {expected}, got {}",
+            sun.position.ecliptic_longitude.0
+        );
+    }
+
+    /// A sidereal request with `frame: True` rotates bodies through
+    /// `sidereal_longitude(..., AyanamshaFrame::True)` and emits the frame
+    /// verbatim on `chart.zodiac`.
+    #[test]
+    fn sidereal_true_frame_rotates_and_is_emitted() {
+        let sun_lon = 120.0_f64;
+        let computed = sun_only_computed(sun_lon);
+        let registry = crate::sidereal::AyanamshaRegistry::with_builtins();
+        let lahiri = registry.get("lahiri").unwrap();
+        let expected = crate::sidereal::sidereal_longitude(
+            sun_lon,
+            computed.jd_tt,
+            lahiri,
+            crate::sidereal::AyanamshaFrame::True,
+        );
+        let chart = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: Some(jzod::SiderealFrame::True),
+            },
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            chart.zodiac,
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: Some(jzod::SiderealFrame::True),
+            }
+        );
+        let sun = chart
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .unwrap();
+        assert!((sun.position.ecliptic_longitude.0 - expected).abs() < 1e-9);
     }
 
     /// When `emit_antiscia` is `true`, each body must carry `antiscion` and
@@ -733,7 +966,15 @@ mod jzod_tests {
             lat: None,
             lon: None,
         };
-        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, true);
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            true,
+        )
+        .unwrap();
 
         let sun = chart
             .placements
@@ -874,9 +1115,11 @@ mod jzod_tests {
             &computed,
             &birth,
             "test-uid".to_string(),
+            jzod::Zodiac::Draconic { node: None },
             Some(node_lon),
             false,
-        );
+        )
+        .unwrap();
 
         // NorthNodeMean must be projected, not tropical.
         let nn = chart
@@ -946,18 +1189,162 @@ mod jzod_tests {
         };
 
         // Twilight chart: nocturnal sect + twilight flag both pass through.
-        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(chart.sect, Some(jzod::Sect::Nocturnal));
         assert_eq!(chart.interp_sect_twilight, Some(true));
 
         // Also verify Some(false) and None pass through correctly.
         computed.interp_sect_twilight = Some(false);
-        let chart2 = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        let chart2 = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(chart2.interp_sect_twilight, Some(false));
 
         computed.interp_sect_twilight = None;
-        let chart3 = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        let chart3 = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(chart3.interp_sect_twilight, None);
+    }
+
+    /// An unknown ayanamsha slug must be a hard error, not a silent
+    /// fallback to tropical.
+    #[test]
+    fn unknown_ayanamsha_slug_errors() {
+        let computed = sun_only_computed(120.0);
+        let result = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("nope".to_string()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            },
+            None,
+            false,
+        );
+        let err = result.expect_err("expected error for unknown slug");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nope"),
+            "error message should name the offending slug; got: {msg}"
+        );
+    }
+
+    /// `Zodiac::Draconic { node: None }` + `draconic_node: None` must be a hard
+    /// error — the chart would carry tropical longitudes stamped draconic otherwise.
+    /// The error message must mention both "draconic" and "node".
+    #[test]
+    fn draconic_without_node_longitude_is_hard_error() {
+        let computed = sun_only_computed(120.0);
+        let result = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Draconic { node: None },
+            None, // no node longitude available
+            false,
+        );
+        let err = result.expect_err("expected DraconicNodeUnavailable error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("draconic"),
+            "error message must contain 'draconic'; got: {msg}"
+        );
+        assert!(
+            msg.contains("node"),
+            "error message must contain 'node'; got: {msg}"
+        );
+    }
+
+    /// `Zodiac::Draconic { node: Some(DraconicNode::Mean) }` + `draconic_node: None`
+    /// must also be a hard error — the `node` field on the zodiac variant records
+    /// which node type the caller *intended* but does not substitute for the missing
+    /// longitude.
+    #[test]
+    fn draconic_with_node_metadata_but_no_longitude_is_hard_error() {
+        let computed = sun_only_computed(120.0);
+        let result = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Draconic {
+                node: Some(jzod::DraconicNode::Mean),
+            },
+            None, // still no node longitude
+            false,
+        );
+        let err = result.expect_err("expected DraconicNodeUnavailable error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("draconic"),
+            "error message must contain 'draconic'; got: {msg}"
+        );
+        assert!(
+            msg.contains("node"),
+            "error message must contain 'node'; got: {msg}"
+        );
+    }
+
+    /// Tropical chart with `draconic_node: None` must remain `Ok` — the guard
+    /// must not fire for non-draconic zodiacs.
+    #[test]
+    fn tropical_with_no_draconic_node_is_ok() {
+        let computed = sun_only_computed(120.0);
+        let result = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        );
+        assert!(
+            result.is_ok(),
+            "tropical zodiac with draconic_node:None must not error"
+        );
+    }
+
+    /// Sidereal chart with `draconic_node: None` must remain `Ok` — the guard
+    /// must not fire for sidereal zodiacs.
+    #[test]
+    fn sidereal_with_no_draconic_node_is_ok() {
+        let computed = sun_only_computed(120.0);
+        let result = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "test-uid".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: None,
+            },
+            None,
+            false,
+        );
+        assert!(
+            result.is_ok(),
+            "sidereal zodiac with draconic_node:None must not error"
+        );
     }
 
     #[test]
@@ -1079,7 +1466,15 @@ mod jzod_tests {
             lat: None,
             lon: None,
         };
-        let chart = super::to_jzod_chart(&computed, &birth, "test-uid".to_string(), None, false);
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+        )
+        .unwrap();
 
         // All 5 asteroids must appear in the JZOD placements with nonzero daily_speed.
         let expected: &[(jzod::BodyId, &str)] = &[
@@ -1106,5 +1501,106 @@ mod jzod_tests {
                 body.id, body.daily_speed.0, body.retrograde
             );
         }
+    }
+
+    /// `frame: None` for lahiri resolves to `True` (its intrinsic default),
+    /// so the projected body longitudes must match `frame: Some(True)`.
+    #[test]
+    fn sidereal_none_frame_resolves_through_ayanamsha_default_lahiri() {
+        let sun_lon = 120.0_f64;
+        let computed = sun_only_computed(sun_lon);
+        let chart_none = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "uid-none".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: None,
+            },
+            None,
+            false,
+        )
+        .unwrap();
+        let chart_true = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "uid-true".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".to_string()),
+                frame: Some(jzod::SiderealFrame::True),
+            },
+            None,
+            false,
+        )
+        .unwrap();
+        let sun_none = chart_none
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .unwrap();
+        let sun_true = chart_true
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .unwrap();
+        assert!(
+            (sun_none.position.ecliptic_longitude.0 - sun_true.position.ecliptic_longitude.0).abs()
+                < 1e-12,
+            "lahiri frame:None must project identically to frame:Some(True), got None={}, True={}",
+            sun_none.position.ecliptic_longitude.0,
+            sun_true.position.ecliptic_longitude.0
+        );
+    }
+
+    /// `frame: None` for `fagan_bradley` resolves to `Mean` (its intrinsic default).
+    #[test]
+    fn sidereal_none_frame_resolves_through_ayanamsha_default_fagan_bradley() {
+        let sun_lon = 120.0_f64;
+        let computed = sun_only_computed(sun_lon);
+        let chart_none = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "uid-none".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("fagan_bradley".to_string()),
+                frame: None,
+            },
+            None,
+            false,
+        )
+        .unwrap();
+        let chart_mean = super::to_jzod_chart(
+            &computed,
+            &j2000_birth(),
+            "uid-mean".to_string(),
+            jzod::Zodiac::Sidereal {
+                ayanamsha: Some("fagan_bradley".to_string()),
+                frame: Some(jzod::SiderealFrame::Mean),
+            },
+            None,
+            false,
+        )
+        .unwrap();
+        let sun_none = chart_none
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .unwrap();
+        let sun_mean = chart_mean
+            .placements
+            .bodies
+            .iter()
+            .find(|b| b.id == jzod::BodyId::Sun)
+            .unwrap();
+        assert!(
+            (sun_none.position.ecliptic_longitude.0 - sun_mean.position.ecliptic_longitude.0).abs()
+                < 1e-12,
+            "fagan_bradley frame:None must project identically to frame:Some(Mean), got None={}, Mean={}",
+            sun_none.position.ecliptic_longitude.0,
+            sun_mean.position.ecliptic_longitude.0
+        );
     }
 }

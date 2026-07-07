@@ -27,6 +27,23 @@ pub enum PericynthionError {
         /// Underlying OS error.
         source: std::io::Error,
     },
+
+    /// An ayanamsha slug passed to `to_jzod_chart` was not found in the
+    /// built-in registry.
+    #[error("unknown ayanamsha slug '{slug}'; known: {known}")]
+    UnknownAyanamshaSlug {
+        /// The slug that was not recognized.
+        slug: String,
+        /// Comma-separated list of known slugs from the registry.
+        known: String,
+    },
+
+    /// A draconic chart was requested but no lunar-node longitude was available
+    /// to rotate by (node ephemeris missing).
+    #[error(
+        "draconic zodiac requested but no lunar-node longitude is available (node ephemeris missing)"
+    )]
+    DraconicNodeUnavailable,
 }
 
 /// Failures that can occur while parsing a JPL DE-series ASCII header.

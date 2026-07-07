@@ -8,6 +8,7 @@ Astrology software written in Rust.
     - Solar Fire `.SFcht` files
     - Astrodatabank XML
     - Astrolog AAF
+    - Jagannatha Hora `.jhd` (read-only)
     - Zeus
 
   - Web platforms

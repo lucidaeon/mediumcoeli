@@ -27,7 +27,7 @@ pub enum ParseError {
 
 /// Errors that can arise when constructing canonical chart values.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Debug, Error)]
 pub enum ChartError {
     #[error("longitude {0} out of range -180..=180")]
     LongitudeOutOfRange(f64),
@@ -42,6 +42,15 @@ pub enum ChartError {
     #[error("invalid UTF-8: {0}")]
     Utf8(#[from] std::str::Utf8Error),
     /// A parse-level error reported by a format parser.
-    #[error("parse error: {0}")]
+    #[error("{0}")]
     Parse(String),
+    /// Filesystem access failed (reading a chart file or scanning a directory).
+    #[error("I/O error on {path:?}: {source}")]
+    Io {
+        /// The path whose access failed.
+        path: std::path::PathBuf,
+        /// The underlying OS error.
+        #[source]
+        source: std::io::Error,
+    },
 }

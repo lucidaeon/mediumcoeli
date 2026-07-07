@@ -1,6 +1,6 @@
 [package]
 name = "astrogram"
-version = "0.4.0"
+version = "0.5.0"
 description = "Astrology data-format conversion library"
 keywords = ["astrology", "chart", "natal", "sfcht"]
 categories = ["data-structures", "date-and-time", "encoding", "parser-implementations"]
@@ -39,3 +39,5 @@ reqwest = { workspace = true }
 [dev-dependencies]
 # Enable Cookie::for_test in cookie_import unit tests
 wristband = { workspace = true, features = ["test-support"] }
+# Temporary directory for tests that need to write and read back real files
+tempdir = "0.3"

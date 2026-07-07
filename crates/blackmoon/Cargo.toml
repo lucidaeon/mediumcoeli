@@ -1,6 +1,6 @@
 [package]
 name = "blackmoon"
-version = "0.3.0"
+version = "0.4.0"
 description = "Astrology software liberty and mobility: Command-line astrology data-format converter built on astrogram"
 keywords = ["astrology", "chart", "natal", "sfcht"]
 categories = ["command-line-utilities", "encoding"]
@@ -26,3 +26,6 @@ anyhow.workspace = true
 reqwest.workspace = true
 scraper.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tempdir = "0.3"

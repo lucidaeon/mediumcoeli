@@ -187,13 +187,16 @@ fn render_capabilities(rows: &[astrogram::format::CapabilityRow], fmt: CapsForma
     long_about = "\
 Reads one or more source targets (files or web endpoints), merges and deduplicates,
 then writes to an output target.  Target type is detected from the file
-extension (.SFcht, .zdb, .xml) or specified with --from / --to.
+extension (.SFcht, .zdb, .xml, .aaf, .jhd) or specified with --from / --to.
 
 Each write is preceded by a read of the output target (if it already exists)
 so no duplicate records are ever added.
 
+A folder path reads every chart file inside it (and its subfolders).
+
 Examples:
   blackmoon input.zdb --output out.SFcht
+  blackmoon \"path/to/your/charts-folder\" --output \"path/to/your/collection.SFcht\"
   blackmoon a.SFcht b.zdb export.xml --output merged.SFcht
   blackmoon --from luna --luna-token $BLACKMOON_LUNA_TOKEN --output charts.SFcht
   blackmoon --from astrotheoros --astrotheoros-user $USER --astrotheoros-pass $PASS --output charts.SFcht
@@ -201,7 +204,8 @@ Examples:
   blackmoon *.SFcht --normalize"
 )]
 struct Cli {
-    /// Input files (.SFcht, .zdb, .xml).  Omit when --from a web endpoint.
+    /// Input files (.SFcht, .zdb, .xml, .aaf, .jhd), or directories containing them.
+    /// Omit when --from a web endpoint.
     inputs: Vec<PathBuf>,
 
     /// Output file.  Target detected from extension; overridden by --to.
@@ -452,6 +456,9 @@ fn resolve_fill<T>(
 /// chart's source lacked. Values are resolved once per field (flag → TTY
 /// prompt → error) and applied only to charts whose source did NOT carry the
 /// field, to avoid overwriting genuine values from SFcht sources.
+///
+/// The fill policy table (label, flag suffix, default, parser) lives in
+/// [`astrogram::pipeline::FILL_SPECS`]; this function keeps only terminal I/O.
 fn apply_fills(
     merged: &mut [astrogram::chart::Chart],
     fills: &[astrogram::capability::ChartField],
@@ -459,47 +466,39 @@ fn apply_fills(
     cli: &Cli,
     sink: Format,
 ) -> Result<()> {
-    use astrogram::capability::ChartField;
-    use astrogram::pipeline::{FillValue, apply_fill_value, fill_targets};
+    use astrogram::pipeline::{apply_fill_value, fill_spec, fill_targets};
+
+    // CLI flag lookup by suffix — the flag surface is CLI-owned.
+    let flag_for = |suffix: &str| -> Option<&str> {
+        match suffix {
+            "house" => cli.fill_house.as_deref(),
+            "zodiac" => cli.fill_zodiac.as_deref(),
+            "locus" => cli.fill_locus.as_deref(),
+            // Must track `astrogram::pipeline::FILL_SPECS` suffixes: a new FillSpec
+            // whose suffix is not listed here silently falls back to the TTY prompt
+            // instead of reading its CLI flag.
+            _ => None,
+        }
+    };
 
     for &field in fills {
-        let value = match field {
-            ChartField::HouseSystem => FillValue::House(resolve_fill(
-                "house system",
-                "house",
-                cli.fill_house.as_deref(),
-                "placidus",
-                |s| {
-                    astrogram::chart::HouseSystem::from_str_slug(s)
-                        .ok_or_else(|| anyhow::anyhow!("unknown house system '{s}'"))
-                },
-                sink,
-            )?),
-            ChartField::Zodiac => FillValue::Zodiac(resolve_fill(
-                "zodiac",
-                "zodiac",
-                cli.fill_zodiac.as_deref(),
-                "tropical",
-                |s| {
-                    astrogram::chart::Zodiac::from_str_slug(s)
-                        .ok_or_else(|| anyhow::anyhow!("unknown zodiac '{s}'"))
-                },
-                sink,
-            )?),
-            ChartField::CoordinateSystem => FillValue::Coord(resolve_fill(
-                "locus",
-                "locus",
-                cli.fill_locus.as_deref(),
-                "geocentric",
-                |s| {
-                    astrogram::chart::CoordinateSystem::from_str_slug(s).ok_or_else(|| {
-                        anyhow::anyhow!("unknown locus '{s}' (expected geocentric|heliocentric)")
-                    })
-                },
-                sink,
-            )?),
-            _ => continue, // only NON_OMITTABLE fields ever appear in `fills`
+        let Some(spec) = fill_spec(field) else {
+            // Unreachable as long as the pin test in pipeline.rs passes:
+            // every NON_OMITTABLE field must have a FillSpec in FILL_SPECS.
+            bail!(
+                "no fill spec for {:?} — add it to FILL_SPECS in astrogram/src/pipeline.rs",
+                field
+            );
         };
+        let flag_val = flag_for(spec.flag_suffix);
+        let value = resolve_fill(
+            spec.label,
+            spec.flag_suffix,
+            flag_val,
+            spec.default_slug,
+            |s| (spec.parse)(s).ok_or_else(|| anyhow::anyhow!("unknown {} '{s}'", spec.label)),
+            sink,
+        )?;
         let targets = fill_targets(merged, field, source_of, sink);
         apply_fill_value(merged, value, &targets);
     }
@@ -510,6 +509,23 @@ fn apply_fills(
 
 fn is_web_target(t: Target) -> bool {
     matches!(t.spec().kind, Kind::Web)
+}
+
+/// Drop from `files` any entry that is the same file as `output` (the resolved
+/// `--output` path), compared by canonical path so relative/absolute/symlink
+/// forms all match. A `None` output, or an output that does not exist yet,
+/// excludes nothing.
+fn without_output_file(files: Vec<PathBuf>, output: Option<&Path>) -> Vec<PathBuf> {
+    let Some(output) = output else {
+        return files;
+    };
+    let Ok(canonical_output) = std::fs::canonicalize(output) else {
+        return files; // not written yet (or unresolvable) — nothing to exclude
+    };
+    files
+        .into_iter()
+        .filter(|f| !std::fs::canonicalize(f).is_ok_and(|c| c == canonical_output))
+        .collect()
 }
 
 /// Which kind of credential occupies a chain position — drives the disclosure
@@ -1031,7 +1047,53 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
                 "at least one input file is required (or use --from / --target luna / --target astro)"
             );
         }
+        // Expand any directory input into the chart files under it (recursive,
+        // in-process — no shell glob). `--from` narrows a directory to one format.
+        let mut expanded: Vec<std::path::PathBuf> = Vec::new();
+        let mut from_dir: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        let output_to_exclude: Option<&std::path::Path> = if is_web_target(out_target) || to_stdout
+        {
+            None
+        } else {
+            resolved_output.as_deref()
+        };
         for path in &cli.inputs {
+            if path.is_dir() {
+                let astrogram::convert::DirScan {
+                    files: scanned_files,
+                    skipped,
+                } = astrogram::convert::chart_files_under(path, cli.from)
+                    .with_context(|| format!("scanning directory {}", path.display()))?;
+                let scanned_count = scanned_files.len();
+                let files = without_output_file(scanned_files, output_to_exclude);
+                if files.is_empty() {
+                    bail!("no chart files found under {}", path.display());
+                }
+                if !to_stdout {
+                    let files_word = if files.len() == 1 { "file" } else { "files" };
+                    let skipped_word = if skipped == 1 { "file" } else { "files" };
+                    let excluded_note = if files.len() < scanned_count {
+                        " (excluding the output file)"
+                    } else {
+                        ""
+                    };
+                    eprintln!(
+                        "read {} chart {files_word} under {}{excluded_note} (skipped {} non-chart {skipped_word})",
+                        files.len(),
+                        path.display(),
+                        skipped
+                    );
+                }
+                for f in files {
+                    from_dir.insert(f.clone());
+                    expanded.push(f);
+                }
+            } else {
+                expanded.push(path.clone());
+            }
+        }
+        for path in &expanded {
             let target = Format::from_path(path).with_context(|| {
                 format!(
                     "cannot detect target from '{}'; rename the file or use --from to specify",
@@ -1040,7 +1102,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
             })?;
             let charts = read_file_target(path, target)
                 .with_context(|| format!("reading {}", path.display()))?;
-            if !to_stdout {
+            if !to_stdout && !from_dir.contains(path) {
                 println!("{}: {} charts", path.display(), charts.len());
             }
             for chart in &charts {
@@ -1137,9 +1199,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
                         let mut folded = landed.clone();
                         let notes: &[(astrogram::capability::ChartField, &'static str)] =
                             if let Some(g) = &global {
-                                folded.house_system = g.house_system;
-                                folded.zodiac = g.zodiac;
-                                folded.coordinate_system = g.coordinate_system;
+                                g.apply_to(&mut folded);
                                 &g.field_notes
                             } else {
                                 &[]
@@ -1374,15 +1434,14 @@ fn read_file_target(path: &Path, target: Target) -> Result<Vec<astrogram::chart:
         Target::Raw => bail!("raw is a write-only format; reading is not supported"),
         _ => {}
     }
-    let bytes = if path == Path::new("-") {
+    if path == Path::new("-") {
         use std::io::Read as _;
         let mut buf = Vec::new();
         std::io::stdin().read_to_end(&mut buf)?;
-        buf
+        astrogram::convert::read_bytes(target, &buf).map_err(|e| anyhow::anyhow!("{e}"))
     } else {
-        std::fs::read(path)?
-    };
-    astrogram::convert::read_bytes(target, &bytes).map_err(|e| anyhow::anyhow!("{e}"))
+        astrogram::convert::read_path(target, path).map_err(|e| anyhow::anyhow!("{e}"))
+    }
 }
 
 /// Write bytes to a file or to stdout when `path` is `"-"`.
@@ -1403,6 +1462,7 @@ fn write_file_target(
     // Friendly messages for directions convert::write_bytes rejects as UnsupportedDirection.
     match target {
         Target::Aaf => bail!("AAF is a read-only format; choose a writable --to/--output"),
+        Target::Jhd => bail!("JHD is a read-only format; choose a writable --to/--output"),
         Target::Luna => bail!("use --to luna for writing to LUNA"),
         Target::Astrocom => bail!("use --to astrocom for writing to astro.com"),
         Target::Astrotheoros => bail!("use --to astrotheoros for writing to astrotheoros.com"),
@@ -2303,5 +2363,33 @@ mod convert_tests {
         // Valid JSON that round-trips and mentions a known slug.
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert!(v.to_string().contains("sfcht"));
+    }
+
+    #[test]
+    fn without_output_file_drops_output_and_noops_otherwise() {
+        let dir = tempdir::TempDir::new("excl").unwrap();
+        let a = dir.path().join("a.jhd");
+        let b = dir.path().join("b.jhd");
+        let out = dir.path().join("collection.SFcht");
+        std::fs::write(&a, b"").unwrap();
+        std::fs::write(&b, b"").unwrap();
+        std::fs::write(&out, b"").unwrap();
+
+        // Output present in the list → dropped (matched by canonical path).
+        let kept = without_output_file(vec![a.clone(), b.clone(), out.clone()], Some(&out));
+        assert_eq!(kept, vec![a.clone(), b.clone()]);
+
+        // None output → no-op.
+        assert_eq!(
+            without_output_file(vec![a.clone(), b.clone()], None),
+            vec![a.clone(), b.clone()]
+        );
+
+        // Output that does not exist yet (first run) → no-op (canonicalize fails).
+        let missing = dir.path().join("not-yet.SFcht");
+        assert_eq!(
+            without_output_file(vec![a.clone(), b.clone()], Some(&missing)),
+            vec![a.clone(), b.clone()]
+        );
     }
 }

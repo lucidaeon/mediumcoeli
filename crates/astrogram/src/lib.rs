@@ -62,6 +62,8 @@ pub mod cookie_import;
 pub mod decision_log;
 pub mod error;
 pub mod format;
+/// Jagannatha Hora `.jhd` chart-file reader.
+pub mod jhd;
 /// JZOD v0.0.0 writer.
 pub mod jzod;
 pub mod luna;

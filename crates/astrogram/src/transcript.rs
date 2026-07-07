@@ -150,6 +150,17 @@ fn mapping(
 /// house system from an account-wide setting rather than storing it per chart.
 /// The caller must populate the corresponding `landed` fields from those
 /// settings before calling.
+///
+/// # Vocabulary note — deliberate divergence from `ChartField::label`
+///
+/// [`ChartField::Region`] and city are merged into a single composite
+/// `"location"` row (`"city, region"` or just city when region is absent).
+/// This label does not correspond to any single [`ChartField`] — it is an
+/// intentional display decision that prioritises human readability over
+/// one-to-one field correspondence. Similarly, [`ChartField::SecondaryName`]
+/// appears as `"secondary name"` (matching its label) but is a display row
+/// in its own right, not derived from the capability vocabulary. Both
+/// divergences are by design and must not be "fixed" to match `ChartField::label`.
 #[must_use]
 pub fn diff(
     source: &Chart,

@@ -1,3 +1,8 @@
+//! AAF (Astrolog ASCII Format) reader.
+//!
+//! Parses the `#A93:` / `#B93:` paired-line structure produced by Astrolog and
+//! astro.com AAF exports. The format is read-only — no write support is provided.
+
 use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac};
 use thiserror::Error;

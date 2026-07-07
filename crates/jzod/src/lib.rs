@@ -16,6 +16,7 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+pub mod ayanamsha;
 pub mod chart;
 pub mod coord;
 pub mod document;
@@ -29,8 +30,8 @@ pub mod uid;
 pub const FORMAT_VERSION: &str = "0.0.0";
 
 pub use chart::{
-    Birth, Chart, ChartType, CoordinateSystem, Datetime, Ephemeris, Location, LunarPhase,
-    LunarPhaseName, Name, Sect, Tithi, Zodiac,
+    Birth, Chart, ChartType, CoordinateSystem, Datetime, DraconicNode, Ephemeris, Location,
+    LunarPhase, LunarPhaseName, Name, Sect, SiderealFrame, Tithi, Zodiac,
 };
 pub use coord::{Degrees8, Position, Sign};
 pub use document::JzodDocument;

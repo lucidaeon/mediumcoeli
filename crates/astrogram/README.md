@@ -15,6 +15,7 @@ Modules currently shipping:
 - **`sfcht`** — Solar Fire `.SFcht` binary chart-collection format (cp1252, fixed-record layout, `+West` longitude/timezone). Round-trip read and write, verified by golden tests against 22 specimen files / 3,918 records.
 - **`adbxml`** — Astrodatabank XML reader (`export_format` 160715). Parses `{DD}{n|s}{MM}` coordinates and derives the UT offset from `jd_ut` or `stmerid`.
 - **`aaf`** — Astrolog ASCII Format `#A93:`/`#B93:` paired records.
+- **`jhd`** — Jagannatha Hora `.jhd` chart files (read-only; one chart per file, name from the filename).
 - **`zeus`** — Zeus `.zdb` UTF-8 semicolon-delimited records.
 - **`luna`** — lunaastrology.com HTTP session: listing pagination, `cast.json` metadata, sidebar HTML parsing, form-token-aware writes.
 - **`astrocom`** — astro.com HTTP session: credential login, full CRUD against the AWD endpoint with `nhor`-keyed identity.

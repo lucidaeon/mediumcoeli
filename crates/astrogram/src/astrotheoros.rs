@@ -1,10 +1,22 @@
 //! Astrotheoros.com session management and RSC parsing.
+//!
+//! Authentication uses Clerk's two-step flow: step 1 POSTs the email to
+//! `sign_ins` (identifies, returns a `sign_in_id`); step 2 POSTs the password to
+//! `attempt_first_factor` (verifies, returns a JWT + `session_id`). The JWT
+//! expires every 60 seconds; [`AstrotheorosSession`] auto-refreshes it via the
+//! session token endpoint when fewer than 20 seconds remain.
+//!
+//! Reading charts uses the Next.js RSC wire format: `GET /app` with an `rsc: 1`
+//! header returns newline-delimited `<hex>:<json>` lines. [`parse_rsc_response`]
+//! locates the `"charts":[` line, strips the `$D` date prefix, maps `"$undefined"`
+//! to `null`, and deserialises the result into `Vec<ApiChartEntry>`.
 
 use crate::capability::{CapabilitySet, ChartField};
 use crate::chart::{Chart, CoordinateSystem, EventType, HouseSystem, Latitude, Longitude, Zodiac};
 use reqwest::blocking::Client;
 use std::cell::RefCell;
 use std::time::Duration;
+use thiserror::Error;
 
 /// Fields recovered when reading an astrotheoros.com chart.
 ///
@@ -89,7 +101,7 @@ const ROUTER_STATE_TREE: &str = concat!(
 );
 
 /// Errors specific to astrotheoros.com sessions.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum AstrotheorosError {
     /// An HTTP request failed.
     #[error("HTTP: {0}")]

@@ -52,10 +52,12 @@ pub fn parse_file(xml: &str) -> Result<Vec<Chart>, ParseError> {
     let mut charts = Vec::new();
     for node in root.children() {
         if node.has_tag_name("adb_entry") {
-            let adb_id = node
+            let raw_id = node
                 .attribute("adb_id")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0u32);
+                .ok_or_else(|| ParseError::Xml("adb_entry missing adb_id".to_string()))?;
+            let adb_id: u32 = raw_id
+                .parse()
+                .map_err(|_| ParseError::Xml(format!("invalid adb_id {raw_id:?}")))?;
             charts.push(parse_entry(node, adb_id)?);
         }
     }
@@ -205,21 +207,28 @@ fn parse_coord(s: &str, hems: &[char], adb_id: u32) -> Result<(f64, char), Parse
         .parse()
         .map_err(|_| bad(adb_id, format!("invalid degrees in coord {s:?}")))?;
     let hem = s.as_bytes()[hem_pos] as char;
-    let frac = parse_minsec_digits(&s[hem_pos + 1..]);
+    let raw = &s[hem_pos + 1..];
+    let frac = parse_minsec_digits(raw).ok_or_else(|| {
+        bad(
+            adb_id,
+            format!("invalid minsec digits {raw:?} in coord {s:?}"),
+        )
+    })?;
     Ok((deg + frac, hem))
 }
 
 // Parse 2-digit (MM) or 4-digit (MMSS) trailing field into fractional degrees/hours.
-fn parse_minsec_digits(s: &str) -> f64 {
+// Returns `None` when the digits cannot be parsed as numbers.
+fn parse_minsec_digits(s: &str) -> Option<f64> {
     match s.len() {
-        0 => 0.0,
+        0 => Some(0.0),
         4 => {
-            let min: f64 = s[..2].parse().unwrap_or(0.0);
-            let sec: f64 = s[2..4].parse().unwrap_or(0.0);
-            min / 60.0 + sec / 3600.0
+            let min: f64 = s[..2].parse().ok()?;
+            let sec: f64 = s[2..4].parse().ok()?;
+            Some(min / 60.0 + sec / 3600.0)
         }
-        // 2-digit (minutes only) and any unexpected length: best-effort minutes
-        _ => s.parse::<f64>().unwrap_or(0.0) / 60.0,
+        // 2-digit (minutes only) and any unexpected length: minutes
+        _ => Some(s.parse::<f64>().ok()? / 60.0),
     }
 }
 
@@ -267,9 +276,13 @@ fn parse_stmerid(s: &str) -> f64 {
     let Some(dir_pos) = rest.find(['e', 'w']) else {
         return 0.0;
     };
+    // `.unwrap_or(0.0)` is deliberate: `stmerid` is a timezone-offset hint,
+    // not a coordinate. A malformed meridian code defaults to UTC (0.0) rather
+    // than hard-erroring, consistent with the `jd_ut`-absent fallback path.
+    // This is exempt from the hard-error policy that applies to coordinates.
     let major: f64 = rest[..dir_pos].parse().unwrap_or(0.0);
     let dir = rest.as_bytes()[dir_pos] as char;
-    let frac = parse_minsec_digits(&rest[dir_pos + 1..]);
+    let frac = parse_minsec_digits(&rest[dir_pos + 1..]).unwrap_or(0.0);
     let value = (major + frac) * scale;
     if dir == 'w' { -value } else { value }
 }
@@ -521,22 +534,28 @@ mod tests {
 
     #[test]
     fn minsec_empty_is_zero() {
-        assert_eq!(parse_minsec_digits(""), 0.0);
+        assert_eq!(parse_minsec_digits(""), Some(0.0));
     }
 
     #[test]
     fn minsec_two_digits_is_minutes() {
         // "42" → 42/60 = 0.7
-        let v = parse_minsec_digits("42");
+        let v = parse_minsec_digits("42").unwrap();
         assert!((v - 42.0 / 60.0).abs() < 1e-9);
     }
 
     #[test]
     fn minsec_four_digits_is_min_sec() {
         // "0445" → 04' 45" = 4/60 + 45/3600
-        let v = parse_minsec_digits("0445");
+        let v = parse_minsec_digits("0445").unwrap();
         let expected = 4.0 / 60.0 + 45.0 / 3600.0;
         assert!((v - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn minsec_garbage_is_none() {
+        assert_eq!(parse_minsec_digits("XX"), None);
+        assert_eq!(parse_minsec_digits("XXYY"), None);
     }
 
     // --- parse_stmerid ---
@@ -784,6 +803,101 @@ mod tests {
     fn rrc_unknown_defaults_to_x() {
         assert_eq!(rrc_from_source_rating(None), 6);
         assert_eq!(rrc_from_source_rating(Some("?")), 6);
+    }
+
+    // --- parse errors: garbage minsec and bad adb_id ---
+
+    #[test]
+    fn parse_file_garbage_minsec_errors_with_adb_id_and_raw_text() {
+        // Latitude "45nXX" has unparseable minute digits "XX".
+        // parse_file must return AdbEntry { adb_id: 42, reason: mentions "XX" }.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="utf-8"?>"#,
+            "\n<astrodatabank_export export_format=\"160715\">\n",
+            "  <adb_entry adb_id=\"42\">\n",
+            "    <public_data>\n",
+            "      <name>Garbage Lat</name>\n",
+            "      <bdata>\n",
+            "        <sbdate iyear=\"2000\" imonth=\"1\" iday=\"1\"/>\n",
+            "        <sbtime jd_ut=\"2451544.5\">12:00</sbtime>\n",
+            "        <place slati=\"45nXX\" slong=\"2e20\"/>\n",
+            "      </bdata>\n",
+            "    </public_data>\n",
+            "  </adb_entry>\n",
+            "</astrodatabank_export>\n",
+        );
+        let err = parse_file(xml).expect_err("expected error for garbage minsec");
+        match err {
+            ParseError::AdbEntry { adb_id, ref reason } => {
+                assert_eq!(adb_id, 42, "adb_id must be 42");
+                assert!(
+                    reason.contains("XX"),
+                    "reason must name the garbage text; got: {reason}"
+                );
+            }
+            other => panic!("expected ParseError::AdbEntry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_file_missing_adb_id_attribute_errors() {
+        // An <adb_entry> with no adb_id attribute must produce ParseError::Xml
+        // containing "missing adb_id" — the missing-attribute path in parse_file.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="utf-8"?>"#,
+            "\n<astrodatabank_export export_format=\"160715\">\n",
+            "  <adb_entry>\n",
+            "    <public_data>\n",
+            "      <name>No Id</name>\n",
+            "      <bdata>\n",
+            "        <sbdate iyear=\"2000\" imonth=\"1\" iday=\"1\"/>\n",
+            "        <sbtime jd_ut=\"2451544.5\">12:00</sbtime>\n",
+            "        <place slati=\"45n42\" slong=\"2e20\"/>\n",
+            "      </bdata>\n",
+            "    </public_data>\n",
+            "  </adb_entry>\n",
+            "</astrodatabank_export>\n",
+        );
+        let err = parse_file(xml).expect_err("expected error for missing adb_id attribute");
+        match err {
+            ParseError::Xml(ref msg) => {
+                assert!(
+                    msg.contains("missing adb_id"),
+                    "error must mention 'missing adb_id'; got: {msg}"
+                );
+            }
+            other => panic!("expected ParseError::Xml, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_file_bad_adb_id_attribute_errors() {
+        // adb_id="notanumber" cannot be parsed as u32; must not silently become 0.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="utf-8"?>"#,
+            "\n<astrodatabank_export export_format=\"160715\">\n",
+            "  <adb_entry adb_id=\"notanumber\">\n",
+            "    <public_data>\n",
+            "      <name>Bad Id</name>\n",
+            "      <bdata>\n",
+            "        <sbdate iyear=\"2000\" imonth=\"1\" iday=\"1\"/>\n",
+            "        <sbtime jd_ut=\"2451544.5\">12:00</sbtime>\n",
+            "        <place slati=\"45n42\" slong=\"2e20\"/>\n",
+            "      </bdata>\n",
+            "    </public_data>\n",
+            "  </adb_entry>\n",
+            "</astrodatabank_export>\n",
+        );
+        let err = parse_file(xml).expect_err("expected error for bad adb_id");
+        match err {
+            ParseError::Xml(ref msg) => {
+                assert!(
+                    msg.contains("notanumber"),
+                    "error must mention the raw id text; got: {msg}"
+                );
+            }
+            other => panic!("expected ParseError::Xml, got {other:?}"),
+        }
     }
 
     // --- xml_escape ---

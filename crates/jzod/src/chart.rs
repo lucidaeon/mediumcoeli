@@ -103,19 +103,62 @@ pub struct Ephemeris {
     pub jd_tt: Option<f64>,
 }
 
+/// Reduction frame for a sidereal zodiac: `mean` (precession only) or `true`
+/// (precession + nutation in longitude).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SiderealFrame {
+    /// Precession only.
+    Mean,
+    /// Precession plus nutation in longitude.
+    True,
+}
+
+/// Which lunar node was used to project a draconic chart.
+///
+/// `Mean` and `True` are distinct astronomical quantities — the mean node
+/// is smoothed (precession only); the true/osculating node reflects
+/// instantaneous motion and can diverge from the mean by up to ~1.5°.
+/// This type is deliberately separate from [`SiderealFrame`]: mean/true
+/// nutation (sidereal frames) and mean/true node (draconic projection) are
+/// different concepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DraconicNode {
+    /// Mean (smoothed) North Node.
+    Mean,
+    /// True (osculating) North Node.
+    True,
+}
+
 /// Zodiac, as an object with a `name` discriminator (JZOD OQ-4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "name", rename_all = "snake_case")]
 pub enum Zodiac {
     /// Anchored to the vernal equinox.
     Tropical,
-    /// Anchored to the North Node.
-    Draconic,
-    /// Anchored to the fixed stars; carries an optional ayanamsha slug.
+    /// Anchored to the North Node. Carries an optional `node` field recording
+    /// which lunar node was used for projection. `None` means the node is
+    /// unrecorded; a consumer that needs to know should treat this as
+    /// ambiguous.
+    Draconic {
+        /// Which lunar node was used to project these longitudes.
+        /// `None` = unrecorded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<DraconicNode>,
+    },
+    /// Anchored to the fixed stars; carries an optional ayanamsha slug and an
+    /// optional reduction frame.
     Sidereal {
         /// Ayanamsha identifier (e.g. `"lahiri"`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ayanamsha: Option<String>,
+        /// Whether nutation is folded in (`true`) or not (`mean`).
+        /// `None` = unrecorded; consumers needing a concrete frame should
+        /// consult [`crate::ayanamsha::resolve`] for the canonical default,
+        /// or refuse if none is established.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<SiderealFrame>,
     },
 }
 
@@ -273,6 +316,82 @@ mod tests {
     fn sidereal_zodiac_adds_ayanamsha() {
         let v = serde_json::to_value(Zodiac::Sidereal {
             ayanamsha: Some("lahiri".into()),
+            frame: Some(SiderealFrame::Mean),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "name": "sidereal", "ayanamsha": "lahiri", "frame": "mean" })
+        );
+    }
+
+    #[test]
+    fn sidereal_without_ayanamsha_omits_it() {
+        let v = serde_json::to_value(Zodiac::Sidereal {
+            ayanamsha: None,
+            frame: Some(SiderealFrame::Mean),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({ "name": "sidereal", "frame": "mean" })
+        );
+    }
+
+    #[test]
+    fn sidereal_zodiac_serializes_frame() {
+        let v = serde_json::to_value(Zodiac::Sidereal {
+            ayanamsha: Some("lahiri".into()),
+            frame: Some(SiderealFrame::True),
+        })
+        .unwrap();
+        assert_eq!(v["name"], "sidereal");
+        assert_eq!(v["ayanamsha"], "lahiri");
+        assert_eq!(v["frame"], "true");
+        // round-trip
+        let back: Zodiac = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            back,
+            Zodiac::Sidereal {
+                ayanamsha: Some("lahiri".into()),
+                frame: Some(SiderealFrame::True)
+            }
+        );
+    }
+
+    #[test]
+    fn draconic_zodiac_without_node_serializes_bare() {
+        let v = serde_json::to_value(Zodiac::Draconic { node: None }).unwrap();
+        assert_eq!(v, serde_json::json!({ "name": "draconic" }));
+    }
+
+    #[test]
+    fn draconic_zodiac_without_node_deserializes_bare() {
+        let v: Zodiac = serde_json::from_value(serde_json::json!({ "name": "draconic" })).unwrap();
+        assert_eq!(v, Zodiac::Draconic { node: None });
+    }
+
+    #[test]
+    fn draconic_zodiac_with_node_includes_it() {
+        let v = serde_json::to_value(Zodiac::Draconic {
+            node: Some(DraconicNode::Mean),
+        })
+        .unwrap();
+        assert_eq!(v, serde_json::json!({ "name": "draconic", "node": "mean" }));
+        let back: Zodiac = serde_json::from_value(v).unwrap();
+        assert_eq!(
+            back,
+            Zodiac::Draconic {
+                node: Some(DraconicNode::Mean)
+            }
+        );
+    }
+
+    #[test]
+    fn sidereal_without_frame_omits_frame_field() {
+        let v = serde_json::to_value(Zodiac::Sidereal {
+            ayanamsha: Some("lahiri".into()),
+            frame: None,
         })
         .unwrap();
         assert_eq!(
@@ -282,9 +401,15 @@ mod tests {
     }
 
     #[test]
-    fn sidereal_without_ayanamsha_omits_it() {
-        let v = serde_json::to_value(Zodiac::Sidereal { ayanamsha: None }).unwrap();
-        assert_eq!(v, serde_json::json!({ "name": "sidereal" }));
+    fn draconic_node_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&DraconicNode::Mean).unwrap(),
+            "\"mean\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DraconicNode::True).unwrap(),
+            "\"true\""
+        );
     }
 
     #[test]

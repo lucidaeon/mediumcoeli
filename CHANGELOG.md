@@ -5,7 +5,113 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/3e1b1e8a6538875769995b4b83565afe9db324b1...main), [astrogram/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.4.0), [blackmoon/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.3.0), [jzod/0.5.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.5.1), [pericynthion/0.8.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.8.0), [starcat/0.6.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.6.1), [wristband/0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.0), 2026.06.29
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/88e39c860240bb696c7dd2e23aeb89b51ba3df52...main), [astrogram/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.5.0), [blackmoon/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.0), [jzod/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.6.0), [pericynthion/0.9.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.9.0), [starcat/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.7.0), [wristband/0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.1), 2026.07.07
+
+This cycle delivers the **sidereal-zodiac engine** end to end — ayanamsha-at-date
+math from the numeric core through the CLI flags and the JZOD output — alongside
+a **JHD (Jagannatha Hora) reader** and **directory input** in the conversion
+suite, and a hard-error sweep that replaces silent fallbacks with named errors.
+
+### Added — `pericynthion`
+
+- **`sidereal` module** (behind the new `sidereal` feature): `sidereal_longitude`
+  (tropical − ayanamsha, normalized to [0°, 360°)); frame-aware `ayanamsha_deg` —
+  the **mean** frame accrues IAU 2006 general precession in longitude from a
+  published epoch value, the **true** frame adds nutation in longitude;
+  `AyanamshaFrame` with a per-ayanamsha intrinsic `default_frame`; and
+  `project_chart`, rotating a whole `ComputedChart` into the sidereal frame.
+  House cusps stay tropical — assignment is invariant under the constant shift.
+- **Compiled-in ayanamsha catalog** (`AyanamshaRegistry` over the static
+  `BUILTIN_AYANAMSHAS` table), primary-sourced: **Lahiri** (Indian Astronomical
+  Ephemeris 2019 True Ayanamsa, definition per Calendar Reform Committee 1955;
+  intrinsic frame true), **Fagan-Bradley** (Bradley's Synetic Vernal Point,
+  335°57′28.64″ at epoch 1950.0; intrinsic frame mean), and **Raman**
+  (fixed-annual-rate model, validated against Table IV of *Hindu Predictive
+  Astrology*; intrinsic frame mean). `PrecessionModel` dispatches between the
+  IAU 2006 epoch-anchor path and `FixedAnnualRate`.
+
+### Changed — `pericynthion`
+
+- `jzod::to_jzod_chart` gains an authoritative **`zodiac` parameter** that both
+  stamps `chart.zodiac` and selects the longitude projection (tropical /
+  draconic / sidereal), resolving an unrecorded sidereal frame through the
+  ayanamsha's intrinsic default. The `jzod` feature now implies `sidereal`.
+- Two silent fallbacks are now hard errors: an **unknown ayanamsha slug**
+  (`UnknownAyanamshaSlug`, listing the known slugs) and a **draconic chart
+  without a node longitude** (`DraconicNodeUnavailable`) — both previously
+  emitted tropical longitudes under a wrong zodiac stamp.
+
+### Added — `jzod`
+
+- **`ayanamsha` module** — the canonical ayanamsha authority table (15 slugs)
+  with alias resolution (`fagan_allen` → `fagan_bradley`) and canonical default
+  frames; pinned against the JZOD.md slug table by test and consumed by both
+  pericynthion and astrogram, with authority-coherence tests failing on drift.
+- **`DraconicNode`** (Mean / True), re-exported at the crate root;
+  `Zodiac::Draconic` becomes a struct variant carrying `node:
+  Option<DraconicNode>` (absent = unrecorded).
+
+### Changed — `jzod`
+
+- `Zodiac::Sidereal.frame` is now **`Option<SiderealFrame>`** — absent means
+  unrecorded rather than a fabricated default. Schema gains the `node` property
+  and the optional frame.
+
+### Added — `astrogram`
+
+- **JHD (Jagannatha Hora) reader**: `Format::Jhd` joins the format registry
+  (slug `jhd`, file kind, read-only) with a chart-file parser and
+  specimen-gated structural tests.
+- **`convert::chart_files_under`** — recursive chart-file discovery under a
+  directory (follows file symlinks; directory symlinks are not recursed, for
+  cycle safety) — and **`convert::read_path`**, which names an
+  embedded-name-less chart (e.g. JHD) from its file stem.
+- **Library-owned fill policy**: `pipeline::FillSpec` / `FILL_SPECS` /
+  `fill_spec` (label, flag suffix, default slug, parser per non-omittable
+  field) plus **`GlobalRender::apply_to`**; pin tests guard both against field
+  drift.
+- **`ChartError::Io`** — filesystem failures carry the path and `io::Error`
+  source instead of masquerading as parse errors.
+
+### Changed — `astrogram`
+
+- The JZOD writer **consults the canonical jzod ayanamsha table**:
+  `FaganAllen` emits the canonical `fagan_bradley` slug, Lahiri emits
+  `frame: true`, other named sidereal variants emit no frame rather than a
+  fabricated mean, and a Solar Fire `Other(n)` id is preserved textually as
+  `other_<n>`.
+- Parse-error hardening: ADB XML minute/second and `adb_id` failures propagate
+  as errors naming the offending raw text (was a silent zero fallback);
+  astrocom's `AafParse` carries the structured `AafError` via `source()`; the
+  redundant "parse error: " display prefix is gone.
+
+### Added — `starcat`
+
+- **`compute --zodiac {tropical|sidereal|draconic}`**, **`--ayanamsha <slug>`**
+  (default `lahiri`), and **`--ayanamsha-frame {mean|true}`** (default: the
+  ayanamsha's intrinsic frame). Sidereal rotates all placements (bodies,
+  angles, nodes, Lilith, lots, stars) across the JZOD, `--text`, and `--page`
+  outputs; the banner discloses the resolution, e.g. `sidereal (lahiri, true)`.
+  `--zodiac draconic` is equivalent to `--draconic`.
+
+### Added — `blackmoon`
+
+- **Directory input**: a directory named as an input is scanned recursively for
+  chart files of any registered file format, with a summary line of files read
+  and skipped; the resolved `--output` file is excluded from the scan so a
+  prior output collection is not re-ingested on a later run.
+
+### Changed — `blackmoon`
+
+- `apply_fills` drives off the library `FillSpec` table; a non-omittable field
+  without a spec is now a hard error instead of a silent skip. The read-only
+  JHD format gets an explicit write-bail arm.
+
+### Fixed — `wristband`
+
+- Crate-manifest description typo ("Ins and out" → "In and out").
+
+## [88e39c8](https://github.com/lucidaeon/mediumcoeli/compare/3e1b1e8a6538875769995b4b83565afe9db324b1...88e39c860240bb696c7dd2e23aeb89b51ba3df52), [astrogram/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.4.0), [blackmoon/0.3.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.3.0), [jzod/0.5.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.5.1), [pericynthion/0.8.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.8.0), [starcat/0.6.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.6.1), [wristband/0.1.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.0), 2026.06.29
 
 This cycle centres on two efforts: a **consent-gated User-Agent system** — a web
 request can present the cookie-source browser's real UA, but only on explicit

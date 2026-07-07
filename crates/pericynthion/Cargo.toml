@@ -1,6 +1,6 @@
 [package]
 name = "pericynthion"
-version = "0.8.0"
+version = "0.9.0"
 description = "Astrological ephemeris computation library: pure-Rust NASA JPL Ephemerides reader"
 keywords = ["astrology", "chart", "de441", "ephemeris", "natal"]
 categories = ["algorithms", "date-and-time", "mathematics", "science"]
@@ -29,12 +29,18 @@ serde = ["dep:serde"]
 noref-houses = []
 # JZOD chart export: maps ComputedChart → jzod::Chart. Optional so that
 # the numeric core can be compiled without the serialization dependency.
-jzod = ["dep:jzod"]
+# Implies `sidereal` so the emitter can rotate longitudes when a sidereal
+# zodiac is requested.
+jzod = ["dep:jzod", "sidereal"]
 # On-demand SPK fetching from the JPL Horizons API (the `horizons` module).
 # Pulls in an HTTP client (reqwest, rustls-tls) + JSON + base64. Default-off so
 # the numeric core stays network-free for library consumers; the starcat CLI
 # enables it. Matches the off-by-default pattern of jzod / serde / noref-houses.
 horizons = ["dep:reqwest", "dep:serde_json", "dep:base64"]
+# Sidereal-zodiac engine (the `sidereal` module): ayanamsha-at-date math plus a
+# compiled-in ayanamsha catalog. Default-off so the tropical numeric core stays
+# minimal for library consumers; no extra dependencies.
+sidereal = []
 
 [dependencies]
 thiserror.workspace = true
