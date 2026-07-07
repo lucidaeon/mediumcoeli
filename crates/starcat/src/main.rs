@@ -241,6 +241,24 @@ enum DataCmd {
     /// Report every catalogued body + the fixed stars: their data file(s),
     /// source URL, and whether each is cached locally. Read-only; no network.
     Provenance(ProvenanceArgs),
+    /// Download a dataset (default `de441`, ~2.8 GB) into the platform data
+    /// directory, resumably, and verify it. See `data fetch --list`.
+    Fetch(FetchArgs),
+}
+
+/// Arguments for `data fetch`.
+#[derive(Args, Debug)]
+struct FetchArgs {
+    /// Dataset slug to fetch. See `data fetch --list`.
+    #[arg(default_value = "de441")]
+    dataset: String,
+    /// List available datasets and exit.
+    #[arg(long)]
+    list: bool,
+    /// Destination root (the dir that will contain `ssd.jpl.nasa.gov/`). Falls
+    /// back to `$STARCAT_JPL_DATA`, then the platform data directory.
+    #[arg(long = "jpl-data")]
+    jpl_data: Option<PathBuf>,
 }
 
 /// Arguments for `data verify`.
@@ -493,7 +511,7 @@ struct ComputeArgs {
     /// names (Sirius, Algol), Robson/Brady names (Rasalhague, Sadalmelek),
     /// multi-word concatenated (ZubenElgenubi), HR numbers (936, HR936), or
     /// BSC5P designations (26Bet Per). See `starcat catalogue --stars`.
-    #[arg(long = "stars", value_delimiter = ',')]
+    #[arg(long = "stars", value_delimiter = ',', add = clap_complete::ArgValueCandidates::new(star_candidates))]
     stars: Vec<String>,
 
     /// Append Antiscion / Contra-antiscion reflections to the output — a
@@ -745,7 +763,20 @@ impl From<BodyArg> for Body {
     }
 }
 
+/// Dynamic completion candidates for `--stars`: the 33 NOTABLE common names.
+///
+/// Arbitrary BSC5P designations (e.g. `26Bet Per`) are always accepted — this
+/// list is advisory only (tab-complete suggestions, not a restrictive validator).
+fn star_candidates() -> Vec<clap_complete::CompletionCandidate> {
+    pericynthion::stars::NOTABLE
+        .iter()
+        .map(|(name, _hr)| clap_complete::CompletionCandidate::new(*name))
+        .collect()
+}
+
 fn main() -> Result<()> {
+    use clap::CommandFactory;
+    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     let cli = Cli::parse();
     match cli.command {
         Command::Compute(args) => cmd_compute(args),
@@ -760,7 +791,6 @@ fn main() -> Result<()> {
         Command::Horizons(args) => cmd_horizons(&args),
         Command::Data(args) => cmd_data(&args),
         Command::GenerateCompletion { shell } => {
-            use clap::CommandFactory;
             let Some(shell) = shell.or_else(detect_shell) else {
                 anyhow::bail!(
                     "could not detect shell from $SHELL; pass it explicitly (e.g. generate-completion zsh)"
@@ -1252,12 +1282,15 @@ fn resolve_jpl_dir(data_dir_arg: Option<&std::path::Path>) -> Result<PathBuf> {
     if let Ok(env) = std::env::var("STARCAT_JPL_DATA") {
         return Ok(PathBuf::from(env));
     }
+    if let Some(home) = pericynthion::default_data_dir()
+        && home.join("ssd.jpl.nasa.gov").is_dir()
+    {
+        return Ok(home);
+    }
     bail!(
-        "no JPL data location supplied. Pass --jpl-data PATH or set the \
-         STARCAT_JPL_DATA environment variable to any directory in the JPL \
-         mirror hierarchy (the de441 dir, ascii/, Linux/, planets/, eph/, \
-         ftp/, or the ssd.jpl.nasa.gov root). Binary and ASCII datasets are \
-         both supported."
+        "no ephemeris data found. Run `starcat data fetch` to download it \
+         (~2.8 GB, one time), or pass --jpl-data PATH / set $STARCAT_JPL_DATA \
+         to an existing JPL mirror."
     );
 }
 
@@ -1280,9 +1313,14 @@ fn resolve_mirror_root(root_arg: Option<&std::path::Path>) -> Result<PathBuf> {
             )
         });
     }
+    if let Some(home) = pericynthion::default_data_dir()
+        && home.join("ssd.jpl.nasa.gov").is_dir()
+    {
+        return Ok(home);
+    }
     bail!(
-        "no mirror root supplied. Pass --root PATH (the directory containing \
-         `ssd.jpl.nasa.gov/`) or set $STARCAT_JPL_DATA to any path within the mirror."
+        "no ephemeris data found. Run `starcat data fetch` to download it \
+         (~2.8 GB, one time), or pass --root PATH / set $STARCAT_JPL_DATA."
     )
 }
 
@@ -1292,6 +1330,7 @@ fn cmd_data(args: &DataArgs) -> Result<()> {
         DataCmd::Verify(v) => cmd_data_verify(v),
         DataCmd::Prod(p) => cmd_data_prod(p),
         DataCmd::Provenance(p) => cmd_data_provenance(p),
+        DataCmd::Fetch(f) => cmd_data_fetch(f),
     }
 }
 
@@ -1428,6 +1467,83 @@ fn prod_paths(jpl_root: &std::path::Path, horizons_dir: &std::path::Path) -> Vec
         .iter()
         .map(|p| display_verify_path(p))
         .collect()
+}
+
+/// Resolve the fetch destination root: `--jpl-data` → `$STARCAT_JPL_DATA` →
+/// the platform data directory.
+///
+/// # Errors
+///
+/// Returns an error when none of the three sources yield a path.
+fn resolve_fetch_dest(arg: Option<&std::path::Path>) -> Result<PathBuf> {
+    if let Some(d) = arg {
+        return Ok(d.to_path_buf());
+    }
+    if let Ok(env) = std::env::var("STARCAT_JPL_DATA") {
+        return Ok(PathBuf::from(env));
+    }
+    pericynthion::default_data_dir().ok_or_else(|| {
+        anyhow::anyhow!("could not determine a data directory; pass --jpl-data PATH")
+    })
+}
+
+/// `data fetch`: download a dataset with a progress bar, then print the verify
+/// report.
+///
+/// # Errors
+///
+/// Returns an error if the destination cannot be determined, the dataset slug
+/// is unknown, the download fails, or the post-fetch verify step fails.
+fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
+    if args.list {
+        for d in pericynthion::datasets() {
+            println!("{}\t{}", d.slug, d.description);
+        }
+        return Ok(());
+    }
+    let dataset = pericynthion::dataset_from_slug(&args.dataset).ok_or_else(|| {
+        let known: Vec<&str> = pericynthion::datasets().iter().map(|d| d.slug).collect();
+        anyhow::anyhow!(
+            "unknown dataset {:?}; known: {}",
+            args.dataset,
+            known.join(", ")
+        )
+    })?;
+    let root = resolve_fetch_dest(args.jpl_data.as_deref())?;
+
+    let bar = indicatif::ProgressBar::new(0);
+    bar.set_style(
+        indicatif::ProgressStyle::with_template(
+            "{msg}\n[{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+        )
+        .expect("valid template"),
+    );
+    let mut current = usize::MAX;
+    let summary = pericynthion::fetch_dataset(dataset, &root, |p: pericynthion::FetchProgress| {
+        if p.file_index != current {
+            current = p.file_index;
+            bar.set_length(p.bytes_total);
+            bar.set_position(0);
+            bar.set_message(format!(
+                "{}  ({}/{})",
+                p.file_name,
+                p.file_index + 1,
+                p.file_count
+            ));
+        }
+        bar.set_position(p.bytes_done);
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    bar.finish_and_clear();
+    println!(
+        "fetched {} file(s), skipped {} already-present, into {}",
+        summary.downloaded.len(),
+        summary.skipped.len(),
+        root.display()
+    );
+
+    // Final canonical verify report (for de441 == `data verify supported`).
+    verify_required_subset(&root)
 }
 
 /// List the data files needed to package starcat's supported placements,
@@ -1653,11 +1769,11 @@ fn cmd_placements_verify(dry_run: bool) -> Result<()> {
         let horizons_id = body.horizons_naif_id().unwrap();
 
         // (a) try n373 first
-        if let Some(ref spk) = n373 {
-            if spk.state(sb441_id, 0.0).is_ok() {
-                println!("{}\tsmall-body SPK (sb441-n373.bsp)", body.name);
-                continue;
-            }
+        if let Some(ref spk) = n373
+            && spk.state(sb441_id, 0.0).is_ok()
+        {
+            println!("{}\tsmall-body SPK (sb441-n373.bsp)", body.name);
+            continue;
         }
 
         // (b) try existing Horizons SPK on disk
@@ -1681,31 +1797,26 @@ fn cmd_placements_verify(dry_run: bool) -> Result<()> {
         }
 
         // (c) live fetch (skipped in dry_run or when no output dir)
-        if !dry_run {
-            if let Some(ref dir) = horizons_dir {
-                let command = body.horizons_command().unwrap();
-                eprint!("  fetching {} from Horizons ... ", body.name);
-                std::thread::sleep(THROTTLE);
-                match horizons::fetch_spk(&command, DEFAULT_START, DEFAULT_STOP) {
-                    Ok(bytes) => {
-                        let bsp_path = dir.join(format!("{horizons_id}.bsp"));
-                        if let Err(e) = std::fs::write(&bsp_path, &bytes) {
-                            eprintln!("write failed: {e}");
-                            continue;
-                        }
-                        match SpkEphemeris::open(&bsp_path) {
-                            Ok(spk) if spk.state(horizons_id, 0.0).is_ok() => {
-                                eprintln!("ok ({} bytes)", bytes.len());
-                                println!(
-                                    "{}\tHorizons SPK; fetch with `starcat horizons`",
-                                    body.name
-                                );
-                            }
-                            _ => eprintln!("fetched but state() failed"),
-                        }
+        if !dry_run && let Some(ref dir) = horizons_dir {
+            let command = body.horizons_command().unwrap();
+            eprint!("  fetching {} from Horizons ... ", body.name);
+            std::thread::sleep(THROTTLE);
+            match horizons::fetch_spk(&command, DEFAULT_START, DEFAULT_STOP) {
+                Ok(bytes) => {
+                    let bsp_path = dir.join(format!("{horizons_id}.bsp"));
+                    if let Err(e) = std::fs::write(&bsp_path, &bytes) {
+                        eprintln!("write failed: {e}");
+                        continue;
                     }
-                    Err(e) => eprintln!("fetch failed: {e}"),
+                    match SpkEphemeris::open(&bsp_path) {
+                        Ok(spk) if spk.state(horizons_id, 0.0).is_ok() => {
+                            eprintln!("ok ({} bytes)", bytes.len());
+                            println!("{}\tHorizons SPK; fetch with `starcat horizons`", body.name);
+                        }
+                        _ => eprintln!("fetched but state() failed"),
+                    }
                 }
+                Err(e) => eprintln!("fetch failed: {e}"),
             }
         }
     }
@@ -2753,6 +2864,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn data_fetch_defaults_to_de441() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["starcat", "data", "fetch"]);
+        match cli.command {
+            Command::Data(DataArgs {
+                cmd: DataCmd::Fetch(f),
+            }) => {
+                assert_eq!(f.dataset, "de441");
+                assert!(!f.list);
+            }
+            other => panic!("expected data fetch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn data_fetch_list_flag_parses() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["starcat", "data", "fetch", "--list"]);
+        match cli.command {
+            Command::Data(DataArgs {
+                cmd: DataCmd::Fetch(f),
+            }) => assert!(f.list),
+            other => panic!("expected data fetch --list, got {other:?}"),
+        }
+    }
+
     /// Helper: parse a `compute` command line into its `ComputeArgs`.
     fn compute_args(extra: &[&str]) -> ComputeArgs {
         let mut argv = vec![
@@ -3314,5 +3452,45 @@ mod tests {
             (con1 - 270.0).abs() < 1e-12,
             "Moon contra expected 270°, got {con1}"
         );
+    }
+
+    #[test]
+    fn star_candidates_is_non_empty_and_contains_sirius() {
+        let candidates = super::star_candidates();
+        assert!(
+            !candidates.is_empty(),
+            "star_candidates() must return at least one entry"
+        );
+        let names: Vec<String> = candidates
+            .iter()
+            .map(|c| c.get_value().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "Sirius"),
+            "expected Sirius in candidates, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn stars_arg_accepts_non_notable_designation() {
+        // Arbitrary BSC5P designation "26Bet Per" is not in NOTABLE but must parse.
+        let args = Cli::try_parse_from([
+            "starcat",
+            "compute",
+            "--date",
+            "2000-01-01",
+            "--time",
+            "12:00",
+            "--tz",
+            "+00:00",
+            "--stars",
+            "26Bet Per",
+        ])
+        .expect("--stars with BSC5P designation should parse");
+        if let Command::Compute(a) = args.command {
+            assert_eq!(a.stars, vec!["26Bet Per"]);
+        } else {
+            panic!("expected Compute");
+        }
     }
 }

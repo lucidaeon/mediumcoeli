@@ -3,7 +3,7 @@
 //! The catalogue is inlined below verbatim as raw text: there is no
 //! `catalog.gz` in the source tree, and no decompression at build or run time.
 //! The CDS `ReadMe` (the byte-by-byte record format and provenance) comes first,
-//! the catalogue records second. [`crate::stars`] parses [`BSC5_RAW`] once into
+//! the catalogue records second. [`crate::stars`] parses `BSC5_RAW` once into
 //! `stars::BSC5_CATALOG`.
 //!
 //! Provenance: Hoffleit D. & Warren Jr W.H., *The Bright Star Catalogue*, 5th
@@ -13,7 +13,7 @@
 //! contents into the two raw-string literals below, verbatim.
 
 /// The CDS `ReadMe` for catalogue V/50 — the byte-by-byte record layout and
-/// full provenance for [`BSC5_RAW`].
+/// full provenance for `BSC5_RAW`.
 // Extra `#` headroom: the ReadMe/catalogue are re-inlined verbatim and may
 // contain `"` (the ReadMe already does), so keep a fixed safe delimiter.
 #[allow(clippy::needless_raw_string_hashes)]

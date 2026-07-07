@@ -75,16 +75,16 @@ fn manifest_providers(body: &str) -> Vec<Provider> {
 #[must_use]
 pub fn providers_for_body(name: &str) -> Vec<Provider> {
     let mut out = manifest_providers(name);
-    if let Some(p) = CATALOG.iter().find(|p| p.name == name) {
-        if let Some(naif) = p.horizons_naif_id() {
-            out.push(Provider {
-                kind: SourceKind::HorizonsSpk,
-                root_kind: RootKind::HorizonsDir,
-                rel_path: format!("{naif}.bsp"),
-                source_url: horizons_url(naif),
-                coverage: None,
-            });
-        }
+    if let Some(p) = CATALOG.iter().find(|p| p.name == name)
+        && let Some(naif) = p.horizons_naif_id()
+    {
+        out.push(Provider {
+            kind: SourceKind::HorizonsSpk,
+            root_kind: RootKind::HorizonsDir,
+            rel_path: format!("{naif}.bsp"),
+            source_url: horizons_url(naif),
+            coverage: None,
+        });
     }
     out
 }

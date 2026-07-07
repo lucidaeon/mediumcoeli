@@ -115,6 +115,8 @@ mod bsc5_catalogue;
 pub mod chart;
 pub mod chebyshev;
 pub mod coords;
+#[cfg(feature = "data-dir")]
+mod datafetch;
 pub mod datafiles;
 pub mod draconic;
 pub mod ephemeris;
@@ -133,6 +135,12 @@ pub mod provenance;
 #[cfg(feature = "sidereal")]
 pub mod sidereal;
 pub mod spk;
+#[cfg(feature = "data-dir")]
+pub use datafetch::{Dataset, dataset_from_slug, datasets, default_data_dir};
+#[cfg(feature = "data-fetch")]
+pub use datafetch::{
+    FetchError, FetchProgress, FetchSummary, entry_url, fetch_dataset, fetch_entries, part_path,
+};
 pub mod stars;
 pub mod time;
 

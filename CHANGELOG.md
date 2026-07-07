@@ -5,7 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/88e39c860240bb696c7dd2e23aeb89b51ba3df52...main), [astrogram/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.5.0), [blackmoon/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.0), [jzod/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.6.0), [pericynthion/0.9.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.9.0), [starcat/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.7.0), [wristband/0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.1), 2026.07.07
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/c27784981d38727fbfcd3bd9eef55f3a565f2f83...main), [astrogram/0.5.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.5.1), [blackmoon/0.4.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.1), [pericynthion/0.10.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.10.0), [starcat/0.8.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.8.0), [wristband/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.2), 2026.07.07
+
+This cycle makes starcat **self-sufficient for a first-time user**: a new
+`data fetch` command downloads the DE441 production ephemeris — resumably and
+BLAKE3-verified — into a platform-native data directory, so computing a chart no
+longer requires a hand-mirrored `$STARCAT_JPL_DATA`. It also lands **dynamic
+`--stars` completion**, the **Gamma Velorum** fixed star, GitHub Actions CI, and
+a self-cleaning Docker builder teardown.
+
+### Added — `pericynthion`
+
+- **`datafetch` module** (behind the new `data-dir` / `data-fetch` features):
+  `default_data_dir` resolving the platform-native persistent **data** directory
+  (via `directories`); a **named-dataset registry** (`Dataset`, `datasets`,
+  `dataset_from_slug`) whose sole `de441` entry maps to the DE441 production
+  subset; and `fetch_dataset` — a **streaming, resumable** downloader
+  (`Range` / `.part`, `206`-append / `200`-restart) that verifies each file's
+  BLAKE3 **before** promoting it, skips already-valid files, and retries once
+  from scratch on a post-resume checksum mismatch.
+- **Gamma Velorum** (γ² Vel, HR 3207) added to the notable fixed stars —
+  resolvable by name or the `Regor` alias, and now `--stars` tab-completable.
+
+### Changed — `pericynthion`
+
+- The JPL data-resolution chain now falls back to `default_data_dir()` when
+  neither `--jpl-data` nor `$STARCAT_JPL_DATA` is set, with a missing-data
+  message pointing at `starcat data fetch`.
+- The `NOTABLE` fixed-star list is now **strictly HR-sorted** (Agena ahead of
+  Arcturus), enforced by a sort-invariant test.
+
+### Fixed — `pericynthion`
+
+- Corrected the documented Windows data-directory path to
+  `%APPDATA%\starcat\data\` (matching `directories` v6).
+
+### Added — `starcat`
+
+- **`data fetch`** subcommand: downloads a dataset (default `de441`, ~2.8 GB)
+  into the platform data directory with an `indicatif` progress bar, then prints
+  the canonical `data verify` report; `--list` enumerates datasets.
+- **Dynamic `--stars` shell completion** (clap_complete `unstable-dynamic`):
+  suggests the notable fixed stars **without restricting** input (arbitrary
+  BSC5P designations still parse). The static `generate-completion` script is
+  retained as a fallback.
+
+### Added — CI
+
+- **Quality-gate workflow** (fmt, clippy `-D warnings`, doc, workspace tests,
+  codegen-drift) and a **release-trigger workflow** that opens a Homebrew
+  formula-bump PR on a `starcat/*` or `blackmoon/*` tag.
+
+### Changed — build / justfile
+
+- `just docker prune-builders` now performs a **full teardown** — removing every
+  `multiarch-*` buildx builder and sweeping orphaned BuildKit containers on the
+  local and current-remote daemons — and runs automatically at the tail of
+  `just docker release`.
+
+### Added — docs
+
+- New **"Ephemeris Data: Sources and File Formats"** section in the astrologer
+  domain reference: the JPL DE series, bulk SSD-FTP vs the Horizons API,
+  `.441` / `.bsp` container formats, and span-vs-coverage as a correctness axis.
+
+### Changed — workspace
+
+- Raised the workspace MSRV to **Rust 1.96** (the CI toolchain is pinned to
+  match), and cleared the lint debt the new CI's fresh `-D warnings` pass
+  surfaced — `collapsible_if` → let-chains, `manual_is_multiple_of`, and
+  `broken-intra-doc-links` — across `astrogram`, `blackmoon`, `pericynthion`,
+  `starcat`, and `wristband`.
+- Added a **`just ci`** recipe mirroring the GitHub Actions gates (`-D warnings`
+  fmt / clippy / doc / test), so a clean local run predicts a green CI.
+
+## [c277849](https://github.com/lucidaeon/mediumcoeli/compare/88e39c860240bb696c7dd2e23aeb89b51ba3df52...c27784981d38727fbfcd3bd9eef55f3a565f2f83), [astrogram/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.5.0), [blackmoon/0.4.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.0), [jzod/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.6.0), [pericynthion/0.9.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.9.0), [starcat/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.7.0), [wristband/0.1.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.1), 2026.07.07
 
 This cycle delivers the **sidereal-zodiac engine** end to end — ayanamsha-at-date
 math from the numeric core through the CLI flags and the JZOD output — alongside

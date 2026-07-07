@@ -173,10 +173,10 @@ pub fn open_dir(dir: &Path) -> Vec<SpkEphemeris> {
     let mut out = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("bsp") {
-            if let Ok(spk) = SpkEphemeris::open(&path) {
-                out.push(spk);
-            }
+        if path.extension().and_then(|e| e.to_str()) == Some("bsp")
+            && let Ok(spk) = SpkEphemeris::open(&path)
+        {
+            out.push(spk);
         }
     }
     out
@@ -234,12 +234,11 @@ pub fn open_all_sources(
     if let Some(p) = explicit {
         spk_files.push(SpkEphemeris::open(p)?);
     }
-    if let Some(start) = jpl_start {
-        if let Some(bsp) = locate_default_bsp(start) {
-            if let Ok(s) = SpkEphemeris::open(&bsp) {
-                spk_files.push(s);
-            }
-        }
+    if let Some(start) = jpl_start
+        && let Some(bsp) = locate_default_bsp(start)
+        && let Ok(s) = SpkEphemeris::open(&bsp)
+    {
+        spk_files.push(s);
     }
     if let Some(hz) = horizons_dir {
         spk_files.extend(open_dir(hz));

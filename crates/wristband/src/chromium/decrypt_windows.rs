@@ -13,15 +13,15 @@
 //!     and UTF-8-decodes. All failures return `None`.
 //!
 //! - **Windows-only** (`#[cfg(target_os = "windows")]`):
-//!   - [`master_key`] — reads `<browser_root>/Local State` JSON, base64-decodes
+//!   - `master_key` — reads `<browser_root>/Local State` JSON, base64-decodes
 //!     `os_crypt.encrypted_key`, strips the 5-byte `DPAPI` prefix, and
 //!     decrypts via a PowerShell subprocess calling
 //!     `System.Security.Cryptography.ProtectedData.Unprotect` (`CurrentUser` scope).
-//!   - [`decrypt_legacy_dpapi`] — DPAPI-decrypts a raw `encrypted_value` blob
+//!   - `decrypt_legacy_dpapi` — DPAPI-decrypts a raw `encrypted_value` blob
 //!     (pre-v10 per-cookie DPAPI path) via the same PowerShell mechanism.
-//!   - [`decrypt`] — dispatches: v10/v11 → [`decrypt_gcm_body`] (after stripping
-//!     the 3-byte prefix); legacy DPAPI → [`decrypt_legacy_dpapi`].
-//!   - [`chromium::read_chromium`] / `read_chromium_from_paths` (in
+//!   - `decrypt` — dispatches: v10/v11 → [`decrypt_gcm_body`] (after stripping
+//!     the 3-byte prefix); legacy DPAPI → `decrypt_legacy_dpapi`.
+//!   - `chromium::read_chromium` / `read_chromium_from_paths` (in
 //!     `chromium/mod.rs`) is the Windows entry point that drives this module.
 //!
 //! # Master-key layout (`Local State` JSON)
@@ -90,7 +90,7 @@ use crate::chromium::framing::{Key256, strip_hash};
 ///
 /// This function is called by both [`decrypt_v10_gcm`] (which strips the
 /// `v10` prefix before calling) and by the `v11` arm of
-/// [`decrypt`] (which strips the `v11` prefix). Neither arm allocates an
+/// `decrypt` (which strips the `v11` prefix). Neither arm allocates an
 /// intermediate Vec to re-prefix.
 // Cross-platform for testability; `decrypt` (Windows-gated) is the only
 // non-test caller, so this function is unreachable on non-Windows non-test builds.

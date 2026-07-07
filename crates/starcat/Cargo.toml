@@ -1,6 +1,6 @@
 [package]
 name = "starcat"
-version = "0.7.0"
+version = "0.8.0"
 description = "A tribute to UNIX `cat`: Command-line astrological ephemeris and natal-chart calculator built on pericynthion"
 keywords = ["astrology", "divination", "ephemeris"]
 categories = ["command-line-utilities", "science"]
@@ -29,15 +29,16 @@ page = ["dep:tabled"]
 noref-houses = ["pericynthion/noref-houses"]
 
 [dependencies]
-pericynthion = { workspace = true, features = ["serde", "jzod", "horizons", "sidereal"] }
+pericynthion = { workspace = true, features = ["serde", "jzod", "horizons", "sidereal", "data-fetch"] }
 jzod = { workspace = true }
 clap.workspace = true
-clap_complete.workspace = true
+clap_complete = { workspace = true, features = ["unstable-dynamic"] }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 tabled = { workspace = true, optional = true }
+indicatif = { workspace = true }
 
 [dev-dependencies]
 tempdir = "0.3"

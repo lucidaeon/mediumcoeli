@@ -146,7 +146,7 @@ impl AstrocomSession {
             .default_headers(headers)
             .user_agent(user_agent)
             .http1_only()
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_mins(1))
             .build()
             .map_err(|e| AstrocomError::HttpClientBuild(e.to_string()))
     }
@@ -204,7 +204,7 @@ impl AstrocomSession {
         let anon_client = Client::builder()
             .user_agent(user_agent)
             .http1_only()
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_mins(1))
             .build()
             .map_err(|e| AstrocomError::HttpClientBuild(e.to_string()))?;
 

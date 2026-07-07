@@ -92,6 +92,18 @@ fmt:
 fmt-check:
 	cargo fmt --all -- --check
 
+# Mirror the GitHub Actions CI gates locally (same -D warnings strictness) so a
+# clean run here predicts a green CI. Data-gated tests skip if env vars unset.
+[group('qa')]
+ci:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	export RUSTFLAGS="-D warnings"
+	cargo fmt --all --check
+	cargo clippy --workspace --all-targets --keep-going -- -D warnings
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+	cargo test --release --workspace
+
 # Build docs with broken intra-doc links as hard errors (or one CRATE).
 # docs.rs builds permissively and ships dead links as-is — this gate catches
 # them before publish.

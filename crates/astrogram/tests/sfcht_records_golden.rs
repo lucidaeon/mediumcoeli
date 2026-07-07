@@ -40,10 +40,9 @@ fn walk_specimens(dir: &Path, map: &mut std::collections::HashMap<String, PathBu
         } else if path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("sfcht"))
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
         {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                map.insert(stem.to_owned(), path);
-            }
+            map.insert(stem.to_owned(), path);
         }
     }
 }

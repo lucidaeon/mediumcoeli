@@ -1,0 +1,40 @@
+name: Release (formula bump)
+
+on:
+  push:
+    tags:
+      - "starcat/*"
+      - "blackmoon/*"
+
+permissions:
+  contents: read
+
+jobs:
+  bump-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Derive crate and version from tag
+        id: tag
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"          # e.g. starcat/0.7.1
+          crate="${ref%%/*}"                        # starcat
+          version="${ref##*/}"                      # 0.7.1
+          {
+            echo "crate=$crate"
+            echo "version=$version"
+            echo "url=https://github.com/lucidaeon/mediumcoeli/archive/refs/tags/${ref}.tar.gz"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open formula-bump PR in the tap
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          HOMEBREW_NO_INSTALL_FROM_API: "1"
+        run: |
+          brew tap lucidaeon/tap
+          brew bump-formula-pr \
+            --no-audit \
+            --no-browse \
+            --no-fork \
+            --version="${{ steps.tag.outputs.version }}" \
+            --url="${{ steps.tag.outputs.url }}" \
+            "lucidaeon/tap/${{ steps.tag.outputs.crate }}"

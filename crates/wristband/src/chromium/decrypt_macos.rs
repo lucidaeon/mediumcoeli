@@ -162,7 +162,7 @@ fn decrypt_v10(ciphertext: &[u8], key: &Key, meta_version: i64) -> Option<String
 
     // AES-CBC requires the ciphertext length to be a multiple of the block size
     // (16 bytes). If the blob is shorter or not aligned, bail out.
-    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return None;
     }
 

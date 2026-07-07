@@ -278,10 +278,10 @@ pub fn parse_rsc_response(text: &str) -> Vec<ApiChartEntry> {
         } else {
             value
         };
-        if let Some(charts_val) = props.get("charts") {
-            if let Ok(entries) = serde_json::from_value::<Vec<ApiChartEntry>>(charts_val.clone()) {
-                return entries;
-            }
+        if let Some(charts_val) = props.get("charts")
+            && let Ok(entries) = serde_json::from_value::<Vec<ApiChartEntry>>(charts_val.clone())
+        {
+            return entries;
         }
     }
     Vec::new()
@@ -596,7 +596,7 @@ impl AstrotheorosSession {
     fn build_client(user_agent: &str) -> Result<Client, AstrotheorosError> {
         Client::builder()
             .user_agent(user_agent)
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_mins(1))
             .cookie_store(true)
             .build()
             .map_err(|e| AstrotheorosError::HttpClientBuild(e.to_string()))

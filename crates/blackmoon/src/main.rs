@@ -998,13 +998,13 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
         if from != Some(out_target) {
             existing = p.read_existing(&sink)?;
         }
-    } else if let Some(p) = out_path {
-        if p.exists() {
-            existing = read_file_target(p, out_target)
-                .with_context(|| format!("reading existing output {}", p.display()))?;
-            if !to_stdout {
-                println!("{}: {} charts (existing)", p.display(), existing.len());
-            }
+    } else if let Some(p) = out_path
+        && p.exists()
+    {
+        existing = read_file_target(p, out_target)
+            .with_context(|| format!("reading existing output {}", p.display()))?;
+        if !to_stdout {
+            println!("{}: {} charts (existing)", p.display(), existing.len());
         }
     }
 

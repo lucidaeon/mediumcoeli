@@ -66,10 +66,10 @@ fn origin_attrs_has_context(origin_attributes: &str, id: u32) -> bool {
 /// Return `true` if `origin_attributes` matches the given container filter.
 ///
 /// - [`Container::None`] — keep rows where `originAttributes` is empty.
-/// - [`Container::Named(n)`] — resolve `n` → id via `containers.json`, then
+/// - [`Container::Named`] — resolve `n` → id via `containers.json`, then
 ///   keep rows where `originAttributes` has an exact `userContextId=<id>`
 ///   token (delimited by `^` or `&`).
-/// - [`Container::Id(id)`] — same as `Named` but with the id already known.
+/// - [`Container::Id`] — same as `Named` but with the id already known.
 /// - [`Container::All`] — keep everything.
 // Called from read_firefox; dead until Task 6 wires read_firefox in.
 #[allow(dead_code)]

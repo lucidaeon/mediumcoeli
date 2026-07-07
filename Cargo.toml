@@ -4,7 +4,7 @@ members = ["crates/pericynthion", "crates/starcat", "crates/astrogram", "crates/
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.96"
 license = "CC0-1.0"
 authors = ["lucidaeon <lucidaeon@users.noreply.github.com>"]
 repository = "https://github.com/lucidaeon/mediumcoeli"
@@ -13,10 +13,10 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Internal
-pericynthion = { path = "crates/pericynthion", version = "0.9.0" }
-astrogram = { path = "crates/astrogram", version = "0.5.0" }
+pericynthion = { path = "crates/pericynthion", version = "0.10.0" }
+astrogram = { path = "crates/astrogram", version = "0.5.1" }
 jzod = { path = "crates/jzod", version = "0.6.0" }
-wristband = { path = "crates/wristband", version = "0.1.1" }
+wristband = { path = "crates/wristband", version = "0.1.2" }
 
 # Errors
 thiserror = "2"
@@ -49,6 +49,11 @@ scraper = "0.22"
 # HTTP. Used by astrogram (web chart formats) and, feature-gated, by
 # pericynthion's `horizons` SPK fetcher. rustls-tls keeps the stack pure-Rust.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "cookies", "rustls-tls"] }
+
+# Platform-native directory resolution (pericynthion `data-dir` feature).
+directories = "6"
+# Progress display for the resumable dataset downloader.
+indicatif = "0.17"
 
 # Dev / test
 approx = "0.5"

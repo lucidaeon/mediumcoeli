@@ -194,15 +194,15 @@ fn find_firefox_dbs(bases: &[PathBuf]) -> Vec<PathBuf> {
         }
         // Profiles/* glob.
         let profiles_dir = base.join("Profiles");
-        if profiles_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&profiles_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if p.is_dir() {
-                        let db = p.join("cookies.sqlite");
-                        if db.is_file() {
-                            found.push(db);
-                        }
+        if profiles_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&profiles_dir)
+        {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let db = p.join("cookies.sqlite");
+                    if db.is_file() {
+                        found.push(db);
                     }
                 }
             }

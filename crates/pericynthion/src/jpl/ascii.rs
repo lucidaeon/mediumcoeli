@@ -65,9 +65,9 @@ fn parse_record<'a>(
 pub(crate) struct AsciiChunk {
     /// Absolute path to the chunk file.
     pub path: PathBuf,
-    /// Julian Date of the first granule's start (coeffs[0] of the first record).
+    /// Julian Date of the first granule's start (`coeffs[0]` of the first record).
     pub start_jd: f64,
-    /// Julian Date of the last granule's end (coeffs[1] of the last record).
+    /// Julian Date of the last granule's end (`coeffs[1]` of the last record).
     pub end_jd: f64,
     /// Granule size in days as read from the first record (`coeffs[1] -
     /// coeffs[0]`). Retained so `index_chunks` can debug-assert grid

@@ -14,7 +14,7 @@
 //!   - [`decrypt`] — AES-128-CBC + v10/v11 dispatch + empty-password retry
 //!
 //! - **Linux-only** (`#[cfg(target_os = "linux")]`):
-//!   - [`key_for`] — shells out to `kwallet-query` / `secret-tool` to fetch
+//!   - `key_for` — shells out to `kwallet-query` / `secret-tool` to fetch
 //!     the keyring password; tests are `#[ignore]`d
 //!   - The `read_cookies` Linux arm wiring in `lib.rs`
 //!
@@ -137,10 +137,10 @@ pub(crate) fn detect_keyring(env: &dyn Fn(&str) -> Option<String>) -> Keyring {
     }
 
     // Step 2 — DESKTOP_SESSION (single value)
-    if let Some(val) = env("DESKTOP_SESSION") {
-        if let Some(k) = keyring_for_de_name(&val, env) {
-            return k;
-        }
+    if let Some(val) = env("DESKTOP_SESSION")
+        && let Some(k) = keyring_for_de_name(&val, env)
+    {
+        return k;
     }
 
     // Step 3 — GNOME_DESKTOP_SESSION_ID
@@ -225,7 +225,7 @@ pub(crate) fn derive_key_linux(password: &[u8]) -> Key {
 fn decrypt_cbc(ciphertext: &[u8], key: &Key, meta_version: i64) -> Option<String> {
     type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
-    if ciphertext.is_empty() || ciphertext.len() % 16 != 0 {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
         return None;
     }
 
@@ -304,7 +304,7 @@ fn gnome_app_attr(browser: crate::Browser) -> &'static str {
     }
 }
 
-/// Linux-only helper: the "account" string used in GNOME / KWallet lookups.
+/// Linux-only helper: the "account" string used in GNOME / `KWallet` lookups.
 ///
 /// Maps each browser variant to the account name used in its keyring entry.
 #[cfg(target_os = "linux")]
@@ -329,14 +329,14 @@ fn browser_account(browser: crate::Browser) -> &'static str {
 ///
 /// # Subprocess tools used
 ///
-/// - **KWallet** (`KWallet`, `KWallet5`, `KWallet6`): shells to
+/// - **`KWallet`** (`KWallet`, `KWallet5`, `KWallet6`): shells to
 ///   `kwallet-query --read-password "<Browser> Safe Storage" --folder "<Browser> Keys" kdewallet`
 ///   (D-Bus access via the CLI wrapper). An exit code indicating "failed to
 ///   read" is treated as an empty password.
-/// - **GnomeKeyring**: shells to
+/// - **`GnomeKeyring`**: shells to
 ///   `secret-tool search --unlock application <app>` first, then falls back
 ///   to `secret-tool lookup service "<Browser> Safe Storage" account "<Browser>"`.
-/// - **BasicText**: no I/O — derives from `b"peanuts"` immediately.
+/// - **`BasicText`**: no I/O — derives from `b"peanuts"` immediately.
 ///
 /// All decryption falls through to `derive_key_linux(b"")` on any retrieval
 /// failure, mirroring Chromium's own fallback behaviour.
@@ -347,6 +347,10 @@ fn browser_account(browser: crate::Browser) -> &'static str {
 /// attempts fail and the fallback empty-password path is also unavailable
 /// (only on programming error; in practice the empty key is always returned).
 #[cfg(target_os = "linux")]
+// `Result` is kept for cross-platform parity: the macOS/Windows `key_for` are
+// fallible (keychain / DPAPI access), even though the Linux path currently
+// always succeeds via the empty-key fallback.
+#[allow(clippy::unnecessary_wraps)]
 pub(crate) fn key_for(
     browser: crate::Browser,
     keyring: Keyring,
@@ -432,9 +436,7 @@ pub(crate) fn key_for(
                 }
             });
 
-            let pw_bytes = password
-                .map(|s| s.into_bytes())
-                .unwrap_or_else(|| b"".to_vec());
+            let pw_bytes = password.map_or_else(|| b"".to_vec(), String::into_bytes);
 
             Ok(derive_key_linux(&pw_bytes))
         }
@@ -907,7 +909,7 @@ mod tests {
     // Linux-gated keyring tests — #[ignore]d
     // -----------------------------------------------------------------------
 
-    /// Live KWallet test — requires `kwallet-query` and a running KDE session.
+    /// Live `KWallet` test — requires `kwallet-query` and a running KDE session.
     #[test]
     #[ignore = "requires Linux with a running KDE session and kwallet-query installed"]
     #[cfg(target_os = "linux")]

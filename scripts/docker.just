@@ -102,6 +102,8 @@ release +TAGS:
 	    done
 	done
 	[[ "$found" == 1 ]] || { echo "no scripts/Dockerfile.* found (run from repo root)" >&2; exit 1; }
+	# Release is out — tear down all buildx builders + BuildKit containers.
+	just docker prune-builders || true
 
 # ── internals ─────────────────────────────────────────────────────────────────
 
@@ -145,7 +147,10 @@ _buildx EXTRA TAG CRATE:
 	done
 
 # Reads instance files directly, so it never hangs on a builder with a dead node.
-# Remove stray multiarch-* buildx builders left behind when DOCKER_AMD64_HOST changes.
+# The remote sweep catches the pile-up `buildx rm` cannot: a roamed-away host's
+# containers are unreachable at their old IP yet still run at its current address.
+# Everything recreates on the next build; also invoked as the tail of `release`.
+# Tear down all multiarch-* buildx builders and their orphaned BuildKit containers.
 prune-builders:
 	#!/usr/bin/env bash
 	set -euo pipefail
@@ -159,3 +164,15 @@ prune-builders:
 	    timeout 15 docker buildx rm -f "$b" 2>/dev/null || rm -f "$f"
 	done
 	[[ "$found" == 1 ]] || echo "no multiarch-* builders found"
+	# Sweep orphaned BuildKit containers on reachable daemons (local colima +,
+	# if set, the current $DOCKER_AMD64_HOST) — the pile-up buildx rm can't reach.
+	sweep() {
+	    local label="$1"; shift
+	    local ids
+	    ids="$(timeout 15 docker "$@" ps -aq --filter name=buildx_buildkit 2>/dev/null || true)"
+	    [[ -n "$ids" ]] || return 0
+	    echo "sweeping orphaned BuildKit containers ($label)"
+	    timeout 15 docker "$@" rm -f $ids >/dev/null 2>&1 || true
+	}
+	sweep "local"
+	[[ -n "${DOCKER_AMD64_HOST:-}" ]] && sweep "$DOCKER_AMD64_HOST" -H "$DOCKER_AMD64_HOST"

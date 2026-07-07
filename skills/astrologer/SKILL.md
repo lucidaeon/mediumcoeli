@@ -37,6 +37,27 @@ The luminaries — Sun and Moon — have been observed and tracked by humans for
 
 Telescope-era discoveries brought new bodies into the astrological catalog at specific historical moments: Uranus in 1781, Ceres in 1801, Neptune in 1846, Pluto in 1930, Quaoar in 2002, Sedna in 2003, Orcus and Haumea in 2004, Eris and Makemake in 2005, and Gonggong in 2007. The year of discovery matters because it marks when a body became available to astrologers and when interpretive traditions around it began forming.
 
+## Ephemeris Data: Sources and File Formats
+
+A body's position comes from an **ephemeris** — a dataset of precomputed positions, or of coefficients from which positions are reconstructed. Sourcing this data is a real engineering task, and the landscape has traps worth knowing.
+
+The authoritative source is JPL's **Development Ephemeris (DE) series** (NASA Jet Propulsion Laboratory, Solar System Dynamics group). Each release carries a number: **DE440** is the modern high-precision fit; **DE441** is its long-span companion, covering roughly **−13200 … +17191** (≈13,200 BCE to 17,191 CE). A higher number is a newer fit, not automatically "better" — the covered span and the release both matter.
+
+JPL exposes DE data through **two distinct channels**, and conflating them causes design mistakes:
+
+1. **Bulk static files — the SSD FTP tree** (served over HTTPS at `https://ssd.jpl.nasa.gov/ftp/eph/…`). Whole-ephemeris files that already exist on the server; you download them verbatim. This is how you get the full planetary/lunar ephemeris.
+2. **The Horizons API** (`https://ssd.jpl.nasa.gov/api/horizons.api`). An on-demand service: you *query* for one body over one time span and it **generates** the answer (an SPK file or a table). This is how you get individual small bodies — asteroids, comets, TNOs — that are not in the bulk planetary set.
+
+**The same ephemeris ships in several file formats — identical numbers, different container.** The suffix and filename encode meaning:
+
+- **`.NNN` ASCII** (`ascp*.441`, `ascm*.441`, plus a `header.441`) — human-readable Chebyshev coefficient blocks. The numeric suffix is the DE version (`.441` = DE441). The `ascp` / `ascm` split separates future (positive years) from past (negative years) epochs.
+- **`.NNN` platform binary** (`linux_*.441`, with Mac/PC-endian variants, plus `header.441`) — the endian-packed binary of the same coefficients. The **filename encodes the span**: `linux_m13000p17000.441` = −13000 … +17000; `linux_p1550p2650.441` = 1550 … 2650. `m` / `p` are minus / plus years.
+- **`.bsp` (SPICE SPK)** — the NAIF SPICE toolkit's kernel format. `de441.bsp` is the full-span SPK; `de441s.bsp` is the "short" 1550–2650 SPK. Small-body ephemerides are distributed as SPK as well (e.g. `sb441-n16.bsp`, `sb441-n373.bsp` — bundled asteroid-perturber sets — or per-body kernels keyed by NAIF ID). A `.bsp` and a `.441` can hold the **identical** ephemeris in different wrappers; which one an engine reads is an implementation choice — the planetary DE-binary reader and the SPICE-SPK reader are separate code paths.
+
+**Span versus size is a correctness axis, not merely a disk-space one.** Long-span files are large (the DE441 full binary is ~2.8 GB); short-span files are small (a 1550–2650 SPK is ~27 MB) but **hard-error outside their window**. Defaulting to a truncated ephemeris silently breaks charts for ancient nativities, historical mundane work, or deep-time ingresses. For general-purpose astrology software the long span is the safer default; trimming coverage to save bytes is a decision to make deliberately, never by accident.
+
+**Other ephemeris families exist.** The Swiss Ephemeris distributes compressed `.se1` files derived from JPL DE data — a different lineage with its own licensing terms; treat its published documentation as citable and its internals as off-limits. The naked-eye planets and the luminaries are always covered by the DE set; obscure asteroids and freshly discovered TNOs typically require a Horizons fetch.
+
 ## Astrology Concepts
 
 The [Rodden Rating System](https://web.archive.org/web/20251126091315/https://www.astro.com/astro-databank/Help:RR), extended by the [Astro-Databank system](https://web.archive.org/web/20251011012415/http://www.astro.com/astro-databank/Help:DataSource), is the standard way to communicate confidence in birth data. Ratings range from AA (birth certificate or equivalent) down through A, B, C, and DD (dirty data). The important nuance is that these systems conflate data source with data confidence — a rating describes where the data came from as much as how trustworthy it is.

@@ -112,7 +112,9 @@ Derived views re-project or augment the placement longitudes already emitted. Th
 
 9096 stars to V≤6.5 (3143 Bayer/Flamsteed named, 5953 HR-number only). J2000 ICRS positions; tropical longitude computed via IAU 2006 precession at chart epoch. Source: *The Bright Star Catalogue, 5th Revised Ed.* (Hoffleit & Warren 1991, NASA/NSSDC/ADC — public domain).
 
-**Notable fixed stars** (3110 others not listed):
+**Notable fixed stars** (3109 others not listed):
+
+Listed by Harvard Revised (HR) catalogue number, which runs in order of right ascension.
 
 - Alpheratz (21Alp And, HR 15, V2.06)
 - Mirach (43Bet And, HR 337, V2.06)
@@ -129,12 +131,13 @@ Derived views re-project or augment the placement longitudes already emitted. Th
 - Castor (66Alp Gem, HR 2891, V1.98)
 - Procyon (10Alp CMi, HR 2943, V0.38)
 - Pollux (78Bet Gem, HR 2990, V1.14)
+- Gamma Velorum (Gam2Vel, HR 3207, V1.78)
 - Regulus (32Alp Leo, HR 3982, V1.35)
 - Denebola (94Bet Leo, HR 4534, V2.14)
 - Vindemiatrix (47Eps Vir, HR 4932, V2.83)
 - Spica (67Alp Vir, HR 5056, V0.98)
-- Arcturus (16Alp Boo, HR 5340, V-0.04)
 - Agena (Bet Cen, HR 5267, V0.61)
+- Arcturus (16Alp Boo, HR 5340, V-0.04)
 - Zuben Elgenubi (9Alp2Lib, HR 5531, V2.75)
 - Alphecca (5Alp CrB, HR 5793, V2.23)
 - Unukalhai (24Alp Ser, HR 5854, V2.65)

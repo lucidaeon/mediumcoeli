@@ -74,12 +74,13 @@ pub const NOTABLE: &[(&str, u16)] = &[
     ("Castor", 2891),
     ("Procyon", 2943),
     ("Pollux", 2990),
+    ("Gamma Velorum", 3207),
     ("Regulus", 3982), // royal star
     ("Denebola", 4534),
     ("Vindemiatrix", 4932),
     ("Spica", 5056),
-    ("Arcturus", 5340),
     ("Agena", 5267), // Hadar / β Cen
+    ("Arcturus", 5340),
     ("Zuben Elgenubi", 5531),
     ("Alphecca", 5793),
     ("Unukalhai", 5854), // α Ser
@@ -140,6 +141,7 @@ pub fn markdown_stats() -> String {
         Source: *The Bright Star Catalogue, 5th Revised Ed.* (Hoffleit & Warren 1991, \
         NASA/NSSDC/ADC — public domain).\n\n\
         **Notable fixed stars** ({others} others not listed):\n\n\
+        Listed by Harvard Revised (HR) catalogue number, which runs in order of right ascension.\n\n\
         {bullets}",
         total - named,
     )
@@ -393,6 +395,9 @@ const STAR_ALIASES: &[(&str, u16)] = &[
     // HR 3165 — Pelagus / ζ Pup (Robson)
     ("pelagus", 3165),
     ("zetapup", 3165),
+    // HR 3207 — Gamma Velorum / γ² Vel (NOTABLE; alias Regor)
+    ("gammavelorum", 3207),
+    ("regor", 3207),
     // HR 3572 — Acubens / α Cnc (Robson / Brady)
     ("acubens", 3572),
     ("alphacnc", 3572),
@@ -613,10 +618,10 @@ pub fn resolve_star(input: &str) -> Option<ResolvedStar> {
     }
 
     // 3. Alias table → HR → BSC5 entry
-    if let Some(&(_, hr)) = STAR_ALIASES.iter().find(|(k, _)| *k == norm) {
-        if let Some(entry) = BscEntry::by_hr(hr) {
-            return Some(ResolvedStar::Bsc5(entry));
-        }
+    if let Some(&(_, hr)) = STAR_ALIASES.iter().find(|(k, _)| *k == norm)
+        && let Some(entry) = BscEntry::by_hr(hr)
+    {
+        return Some(ResolvedStar::Bsc5(entry));
     }
 
     // 4. BSC5_CATALOG name-field scan (normalise BSC5 name for comparison)
@@ -629,10 +634,10 @@ pub fn resolve_star(input: &str) -> Option<ResolvedStar> {
 
     // 5. HR number parse: strip optional "hr" prefix then parse
     let hr_str = norm.strip_prefix("hr").unwrap_or(&norm);
-    if let Ok(hr) = hr_str.parse::<u16>() {
-        if let Some(entry) = BscEntry::by_hr(hr) {
-            return Some(ResolvedStar::Bsc5(entry));
-        }
+    if let Ok(hr) = hr_str.parse::<u16>()
+        && let Some(entry) = BscEntry::by_hr(hr)
+    {
+        return Some(ResolvedStar::Bsc5(entry));
     }
 
     None
@@ -1017,5 +1022,44 @@ mod resolve_tests {
         assert!(!named.is_empty());
         assert!(named.iter().all(|e| !e.name.is_empty()));
         assert!(named.len() < BSC5_CATALOG.len()); // fewer than total
+    }
+
+    #[test]
+    fn markdown_stats_contains_hr_ordering_rationale() {
+        let md = markdown_stats();
+        assert!(
+            md.contains("order of right ascension"),
+            "markdown_stats() must document the HR ordering rationale; got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn resolve_gamma_velorum_by_name_and_alias() {
+        // Display name and the Regor alias both land on HR 3207.
+        assert!(matches!(
+            resolve_star("Gamma Velorum"),
+            Some(ResolvedStar::Bsc5(e)) if e.hr == 3207
+        ));
+        assert!(matches!(
+            resolve_star("Regor"),
+            Some(ResolvedStar::Bsc5(e)) if e.hr == 3207
+        ));
+    }
+
+    #[test]
+    fn gamma_velorum_is_notable() {
+        assert!(
+            NOTABLE
+                .iter()
+                .any(|&(name, hr)| name == "Gamma Velorum" && hr == 3207)
+        );
+    }
+
+    #[test]
+    fn notable_is_strictly_hr_sorted() {
+        assert!(
+            NOTABLE.windows(2).all(|w| w[0].1 < w[1].1),
+            "NOTABLE must be strictly ascending by HR number",
+        );
     }
 }
