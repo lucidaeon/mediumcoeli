@@ -183,6 +183,7 @@ fn render_capabilities(rows: &[astrogram::format::CapabilityRow], fmt: CapsForma
 #[derive(Parser)]
 #[command(
     name = "blackmoon",
+    version,
     about = "Astrology data converter — reads any target, writes any target.",
     long_about = "\
 Reads one or more source targets (files or web endpoints), merges and deduplicates,
@@ -1836,6 +1837,21 @@ mod credential_tests {
         ]));
         assert!(!only_cookie_source(&[SourceKind::Login]));
         assert!(!only_cookie_source(&[]));
+    }
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::*;
+    use clap::{CommandFactory, error::ErrorKind};
+
+    #[test]
+    fn cli_supports_version_flag() {
+        // `blackmoon --version` must be wired, same as starcat.
+        let err = Cli::command()
+            .try_get_matches_from(["blackmoon", "--version"])
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DisplayVersion);
     }
 }
 

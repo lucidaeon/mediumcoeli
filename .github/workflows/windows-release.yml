@@ -1,0 +1,82 @@
+name: Windows release (build + scoop bump)
+
+on:
+  push:
+    tags:
+      - "starcat/*"
+      - "blackmoon/*"
+
+permissions:
+  contents: write # create the GitHub Release + upload the .exe asset
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.96
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Derive crate + version from tag
+        id: tag
+        shell: bash
+        run: |
+          ref="${GITHUB_REF#refs/tags/}"          # e.g. starcat/0.8.0
+          crate="${ref%%/*}"
+          version="${ref##*/}"
+          asset="${crate}-${version}-x86_64-pc-windows-msvc.zip"
+          {
+            echo "crate=$crate"
+            echo "version=$version"
+            echo "asset=$asset"
+            echo "url=https://github.com/lucidaeon/mediumcoeli/releases/download/${ref}/${asset}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: cargo build --release --locked -p ${{ steps.tag.outputs.crate }} --target x86_64-pc-windows-msvc
+
+      - name: Package + hash
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate="${{ steps.tag.outputs.crate }}"
+          asset="${{ steps.tag.outputs.asset }}"
+          7z a "$asset" "./target/x86_64-pc-windows-msvc/release/${crate}.exe"
+          echo "sha256=$(sha256sum "$asset" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish .exe to the tag's Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ steps.tag.outputs.asset }}
+
+      - name: Open manifest-bump PR in the scoop bucket
+        env:
+          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          CRATE: ${{ steps.tag.outputs.crate }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          URL: ${{ steps.tag.outputs.url }}
+          SHA: ${{ steps.pkg.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/lucidaeon/scoop-bucket.git" scoop-bucket
+          cd scoop-bucket
+          branch="bump-${CRATE}-${VERSION}"
+          git switch -c "$branch"
+          manifest="bucket/${CRATE}.json"
+          tmp="$(mktemp)"
+          jq --arg v "$VERSION" --arg u "$URL" --arg h "$SHA" \
+            'del(."##") | .version = $v | .architecture["64bit"].url = $u | .architecture["64bit"].hash = $h' \
+            "$manifest" > "$tmp"
+          mv "$tmp" "$manifest"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Bump ${CRATE} to ${VERSION}"
+          git push -u origin "$branch"
+          gh pr create --repo lucidaeon/scoop-bucket \
+            --base main --head "$branch" \
+            --title "Bump ${CRATE} to ${VERSION}" \
+            --body "Automated manifest bump from the ${CRATE}/${VERSION} GitHub Release. Verify the url + sha256, then squash-merge it with 'gh pr merge --squash' (GitHub signs the squash). main requires signed commits; the squash lands one signed commit instead of dragging this bot commit onto main."

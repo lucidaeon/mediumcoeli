@@ -5,7 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/c27784981d38727fbfcd3bd9eef55f3a565f2f83...main), [astrogram/0.5.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.5.1), [blackmoon/0.4.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.1), [pericynthion/0.10.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.10.0), [starcat/0.8.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.8.0), [wristband/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.2), 2026.07.07
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/2e993084950c1de635d8ea0b2831b05ba8db2dcb...main), [blackmoon/0.4.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.2), 2026.07.08
+
+This cycle opens the **Windows distribution channel**: a tag-triggered workflow
+builds the Windows executable, publishes it to the tag's GitHub Release, and
+opens a scoop-bucket manifest bump PR — with clippy matrixed over Linux and
+Windows so `cfg(windows)` code is linted before it ships. `blackmoon` picks up
+the missing `--version` flag as a patch release.
+
+### Added — CI
+
+- **`windows-release.yml`** — on `starcat/*` / `blackmoon/*` tag pushes: builds
+  the crate's `.exe` (`--release --locked`, `x86_64-pc-windows-msvc`), zips and
+  sha256-hashes it, uploads it to the tag's GitHub Release, and opens a
+  manifest-bump PR (version, url, hash) in the scoop bucket, worded for a
+  GitHub-signed squash-merge.
+- The clippy job now runs a **matrix over `ubuntu-latest` + `windows-latest`**,
+  so platform-gated code (e.g. `wristband`'s per-OS cookie stores) is linted on
+  a toolchain that actually compiles it.
+
+### Changed — build / justfile
+
+- `just ci` is now a composed macOS preflight: it first drops our own crates'
+  build/clippy artifacts (dependencies kept), then chains the qa recipes —
+  `fmt-check`, `lint`, `doc`, `test` — under `-D warnings`; OS-specific lints
+  are left to the pipeline's matrix.
+- `just doc` now passes `--document-private-items`, making the local gate a
+  superset of CI's doc job.
+- Removed the `publish-order` recipe (superseded by cargo's coordinated
+  `publish --workspace`); `just fetch` help now lists `bsc5`.
+
+### Fixed — `blackmoon`
+
+- Wired the `--version` flag (mirroring `starcat`), with a test pinning it —
+  the flag should have existed all along, hence patch **0.4.2**.
+
+## [2a9542a](https://github.com/lucidaeon/mediumcoeli/compare/c27784981d38727fbfcd3bd9eef55f3a565f2f83...2a9542af2f308e7410af739bfb8e7c80111c905e), [astrogram/0.5.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.5.1), [blackmoon/0.4.1](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.1), [pericynthion/0.10.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.10.0), [starcat/0.8.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.8.0), [wristband/0.1.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.2), 2026.07.07
 
 This cycle makes starcat **self-sufficient for a first-time user**: a new
 `data fetch` command downloads the DE441 production ephemeris — resumably and

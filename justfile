@@ -92,42 +92,32 @@ fmt:
 fmt-check:
 	cargo fmt --all -- --check
 
-# Mirror the GitHub Actions CI gates locally (same -D warnings strictness) so a
-# clean run here predicts a green CI. Data-gated tests skip if env vars unset.
+# Fast local preflight (macOS-native): start CLEAN — drop our crates' build+clippy
+# artifacts (deps kept, they can't mask OUR lints) so no stale result hides an issue —
+# then run the qa recipes at -D warnings strictness: fmt-check, lint, doc, test. `doc`
+# here checks --all-features --document-private-items, a superset of CI's doc job, so a
+# green `just ci` reliably predicts a green CI doc run. OS-specific lints
+# (cfg(linux)/cfg(windows), e.g. wristband's per-OS cookie paths) are the PIPELINE's
+# scope — the mac can't compile those targets. Data-gated tests skip if env vars unset.
 [group('qa')]
 ci:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	export RUSTFLAGS="-D warnings"
-	cargo fmt --all --check
-	cargo clippy --workspace --all-targets --keep-going -- -D warnings
-	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
-	cargo test --release --workspace
+	for p in $(cargo metadata --format-version 1 --no-deps | jq -r '.packages[].name'); do cargo clean -p "$p"; done
+	just fmt-check
+	just lint
+	just doc
+	just test
 
 # Build docs with broken intra-doc links as hard errors (or one CRATE).
 # docs.rs builds permissively and ships dead links as-is — this gate catches
 # them before publish.
 [group('qa')]
 doc CRATE='':
-	RUSTDOCFLAGS="-D warnings" cargo doc {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }} --no-deps --all-features
+	RUSTDOCFLAGS="-D warnings" cargo doc {{ if CRATE == '' { '--workspace' } else { '-p ' + CRATE } }} --no-deps --all-features --document-private-items
 
 # ── distribution ──────────────────────────────────────────────────────────────
-
-# Emit workspace crate names in publish-safe dependency order.
-[group('dist')]
-publish-order:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	members=$(for f in crates/*/Cargo.toml; do
-	    awk '/^\[package\]/{p=1} p && /^name = /{split($0,a,"\""); print a[2]; exit}' "$f"
-	done)
-	for crate in $members; do
-	    grep -E 'workspace = true' "crates/$crate/Cargo.toml" \
-	        | grep -oE '^[a-zA-Z0-9_-]+' \
-	        | grep -Fxf <(printf '%s\n' $members) \
-	        | sed "s/.*/& $crate/" \
-	        || true
-	done | tsort
 
 # Publish each crate in dependency order. DRY=--dry-run by default; pass DRY='' to publish for real.
 [group('dist')]
@@ -140,14 +130,12 @@ publish DRY='--dry-run':
 	# One coordinated workspace publish (cargo's `package-workspace` feature):
 	# cargo orders the crates by dependency and resolves intra-workspace versions
 	# from the local tree, so a first-time cross-version bump — and its --dry-run —
-	# succeeds without each sibling already being on crates.io. Supersedes the
-	# old per-crate `publish-order` loop, which could neither dry-run a fresh
-	# cross-bump nor satisfy each crate's isolated verify build.
+	# succeeds without each sibling already being on crates.io.
 	cargo publish --workspace {{DRY}}
 
 # ── test corpora ──────────────────────────────────────────────────────────────
 
-# Fetch a test corpus by name: de441 | adbxml | horizons.
+# Fetch a test corpus by name: de441 | adbxml | horizons | bsc5.
 [group('corpus')]
 fetch SOURCE:
 	#!/usr/bin/env bash
