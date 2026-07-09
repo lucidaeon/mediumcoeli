@@ -214,7 +214,7 @@ pub(crate) fn master_key(
     let json_text = std::fs::read_to_string(&local_state_path).map_err(|e| {
         crate::error::WristbandError::Keychain(format!(
             "cannot read Local State at {}: {e}",
-            local_state_path.display()
+            crate::path::display_path(&local_state_path)
         ))
     })?;
 

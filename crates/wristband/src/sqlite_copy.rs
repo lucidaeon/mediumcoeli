@@ -17,6 +17,7 @@ use rusqlite::{Connection, OpenFlags};
 use tempfile::TempDir;
 
 use crate::error::WristbandError;
+use crate::path::display_path;
 
 /// An in-scope, read-only copy of a browser `SQLite` database.
 ///
@@ -50,7 +51,7 @@ pub(crate) fn copy_db(original: &Path) -> Result<DbCopy, WristbandError> {
     let dir = TempDir::new().map_err(|e| WristbandError::Io(e.to_string()))?;
 
     let file_name = original.file_name().ok_or_else(|| {
-        WristbandError::Io(format!("no filename in path: {}", original.display()))
+        WristbandError::Io(format!("no filename in path: {}", display_path(original)))
     })?;
 
     // Copy main database file, preserving its name so SQLite can re-associate
@@ -58,7 +59,7 @@ pub(crate) fn copy_db(original: &Path) -> Result<DbCopy, WristbandError> {
     // to the database path).
     let dest = dir.path().join(file_name);
     std::fs::copy(original, &dest)
-        .map_err(|e| WristbandError::Io(format!("copy {}: {e}", original.display())))?;
+        .map_err(|e| WristbandError::Io(format!("copy {}: {e}", display_path(original))))?;
 
     // Copy sidecars if they exist alongside the original.
     for suffix in &["-wal", "-shm"] {
@@ -68,8 +69,9 @@ pub(crate) fn copy_db(original: &Path) -> Result<DbCopy, WristbandError> {
         if sidecar_src.exists() {
             let mut sidecar_dest = file_name.to_owned();
             sidecar_dest.push(suffix);
-            std::fs::copy(&sidecar_src, dir.path().join(&sidecar_dest))
-                .map_err(|e| WristbandError::Io(format!("copy {}: {e}", sidecar_src.display())))?;
+            std::fs::copy(&sidecar_src, dir.path().join(&sidecar_dest)).map_err(|e| {
+                WristbandError::Io(format!("copy {}: {e}", display_path(&sidecar_src)))
+            })?;
         }
     }
 

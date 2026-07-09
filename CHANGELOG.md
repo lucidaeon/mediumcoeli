@@ -5,7 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/2e993084950c1de635d8ea0b2831b05ba8db2dcb...main), [blackmoon/0.4.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.2), 2026.07.08
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/a53f13a2ef1de7f8d2066fc0acfc75a9b448a4e9...main), [blackmoon/0.4.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.3), [pericynthion/0.11.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.11.0), [starcat/0.9.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.9.0), [wristband/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.3), 2026.07.09
+
+This cycle hardens the JPL **fetch-and-locate** layer and the historical-calendar
+contract. `starcat data fetch` now lands in the platform data directory and
+**reuses an existing mirror via copy-on-write** (reflink) instead of
+re-downloading; every data lookup tolerates a flat drop-folder or a full site
+mirror; each fetch prints a **capabilities readout** of what the on-disk data can
+actually compute. `--calendar` becomes optional with an `auto` default — but a
+hard error in the 1582-1927 Julian/Gregorian transition window, where the
+recorded calendar is jurisdiction-dependent, so a chart is never silently cast in
+the wrong calendar.
+
+### Added — starcat
+
+- **Copy-on-write `data fetch`.** Clones DE441 + `sb441` bundles from an existing
+  mirror (`--jpl-data` / `$STARCAT_JPL_DATA`) via reflink (APFS `clonefile`,
+  btrfs/XFS `FICLONE`, Windows ReFS), falling back to a plain copy off-CoW, and
+  reaching the network only when a file is valid nowhere locally. The destination
+  is always the platform data directory.
+- **Post-fetch capabilities readout** and `data fetch --what`: which datasets and
+  files unlock which bodies (DE441 planets, `sb441-n16` main belt, `sb441-n373`
+  dwarfs/TNOs, Horizons centaurs + Albion), driven live off the placements catalog.
+- `--stars notable` / `--stars all` (and a bare `--stars`) expand to the 33
+  notable common-name stars; combinable with explicit names, de-duplicated.
+- `horizons` output directory now defaults to `.../starcat/horizons/`.
+
+### Added — pericynthion
+
+- `capability` module — on-disk body-availability assessment from the placements
+  catalog.
+- `datafiles` module — layout-agnostic data-file location (`find_under` /
+  `locate_jpl_file`): hoist to the `ssd.jpl.nasa.gov/` mirror root when one exists
+  above the pointed path, otherwise search the pointed directory directly.
+- `DataSource` classification on the placements catalog; copy-on-write
+  clone-from-mirror in the fetcher (`FetchSummary` reflinked/copied tallies).
+
+### Changed
+
+- **starcat** `--calendar` is now optional, defaulting to `auto` (proleptic
+  Julian before 1582-10-15, Gregorian after), but **required** for dates in the
+  1582-1927 transition era, where the recorded calendar depends on jurisdiction.
+  Input validation now runs before ephemeris resolution (fast-fail).
+- **starcat / pericynthion** JPL data resolution is layout-agnostic — a flat
+  folder of loose files or a full 200-GB site mirror both resolve; no assumption
+  of the `ssd.jpl.nasa.gov/ftp/eph/.../` tree.
+- **pericynthion** adds the `reflink-copy` dependency for copy-on-write cloning.
+
+### Fixed
+
+- **starcat** `data fetch` no longer re-downloads — nor double-nests the
+  `ssd.jpl.nasa.gov/` path segment — when `$STARCAT_JPL_DATA` points into an
+  existing mirror; existing BLAKE3-valid files are found and skipped.
+- **starcat / pericynthion / blackmoon / wristband** all filesystem-path output
+  collapses repeated separators (no stray `//`).
+
+## [a53f13a](https://github.com/lucidaeon/mediumcoeli/compare/2e993084950c1de635d8ea0b2831b05ba8db2dcb...a53f13a2ef1de7f8d2066fc0acfc75a9b448a4e9), [blackmoon/0.4.2](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.2), 2026.07.08
 
 This cycle opens the **Windows distribution channel**: a tag-triggered workflow
 builds the Windows executable, publishes it to the tag's GitHub Release, and

@@ -80,6 +80,12 @@ mod fetch {
     pub struct FetchSummary {
         /// Files that were freshly downloaded (and verified).
         pub downloaded: Vec<PathBuf>,
+        /// Files cloned copy-on-write from the source mirror (~0 disk on
+        /// APFS/btrfs/ReFS), verified after cloning.
+        pub reflinked: Vec<PathBuf>,
+        /// Files copied in full from the source mirror (the off-CoW fallback),
+        /// verified after copying.
+        pub copied: Vec<PathBuf>,
         /// Files that were already present and hash-valid (skipped).
         pub skipped: Vec<PathBuf>,
     }
@@ -136,7 +142,22 @@ mod fetch {
         }
     }
 
-    /// Download `entries` into `root`, skipping any already present + hash-valid.
+    /// Fetch `entries` into `root`, preferring local data over the network:
+    ///
+    /// 1. Already present + BLAKE3-valid in `root` -> skip (no network, no copy).
+    /// 2. Not in `root`, but a base-name match is present + BLAKE3-valid
+    ///    anywhere under `source` (a distinct existing mirror, in any layout —
+    ///    full `ssd.jpl.nasa.gov/` tree or a flat drop-folder; located by
+    ///    walking, see [`crate::find_under`]) -> copy-on-write clone into `root`
+    ///    at the entry's canonical path (via [`reflink_copy::reflink_or_copy`]),
+    ///    then re-verify. On a true reflink the file is recorded in
+    ///    [`FetchSummary::reflinked`]; on the full-copy fallback, in
+    ///    [`FetchSummary::copied`]. If the clone fails verification it is removed
+    ///    and the entry falls through to a download.
+    /// 3. Valid nowhere locally -> download.
+    ///
+    /// The `source` mirror is only ever read from (cloned/copied) — never moved
+    /// or deleted.
     ///
     /// # Errors
     /// Returns [`FetchError::Http`] on network failures, [`FetchError::Io`] on
@@ -145,6 +166,7 @@ mod fetch {
     pub fn fetch_entries(
         entries: &[OracleEntry],
         root: &Path,
+        source: Option<&Path>,
         mut on_progress: impl FnMut(FetchProgress),
     ) -> Result<FetchSummary, FetchError> {
         let client = reqwest::blocking::Client::new();
@@ -156,22 +178,90 @@ mod fetch {
                 summary.skipped.push(target);
                 continue;
             }
+            if let Some(src) = source
+                && src != root
+                && let Some(src_file) = locate_source_file(src, entry)
+                && let Some(reflinked) = clone_entry(&src_file, root, entry, &target)?
+            {
+                if reflinked {
+                    summary.reflinked.push(target);
+                } else {
+                    summary.copied.push(target);
+                }
+                continue;
+            }
             download_entry(&client, entry, &target, i, count, &mut on_progress)?;
             summary.downloaded.push(target);
         }
         Ok(summary)
     }
 
-    /// Download all of a dataset's entries into `root`.
+    /// Locate the source file for `entry` under an existing mirror `src`.
+    ///
+    /// Routes through the common [`crate::locate_jpl_file`] locator: hoists `src`
+    /// to the `ssd.jpl.nasa.gov/` mirror root when it points inside a real
+    /// mirror, then walks down for a file whose base name matches the entry's —
+    /// so a deep-point, differently-laid-out, or flat source mirror still yields
+    /// a copy-on-write candidate. The located file's size + BLAKE3 are verified
+    /// against the oracle record; returns the path only when it verifies `Ok`,
+    /// otherwise `None` (the entry then falls through to a download).
+    fn locate_source_file(src: &Path, entry: &OracleEntry) -> Option<PathBuf> {
+        let base = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+        let candidate = crate::locate_jpl_file(src, base)?;
+        matches!(oracle::verify_file(&candidate, entry), VerifyStatus::Ok).then_some(candidate)
+    }
+
+    /// Copy-on-write clone a single located source file (`src_path`) into `root`
+    /// at the entry's canonical destination.
+    ///
+    /// Returns `Ok(Some(true))` when a true reflink succeeded, `Ok(Some(false))`
+    /// when it fell back to a full copy, and `Ok(None)` when the clone landed but
+    /// failed BLAKE3 verification (the stale destination is removed so the caller
+    /// falls through to a network download).
+    fn clone_entry(
+        src_path: &Path,
+        root: &Path,
+        entry: &OracleEntry,
+        target: &Path,
+    ) -> Result<Option<bool>, FetchError> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        // reflink_or_copy requires the destination absent; clear any stale files.
+        let _ = std::fs::remove_file(target);
+        let _ = std::fs::remove_file(part_path(target));
+
+        let reflinked = match reflink_copy::reflink_or_copy(src_path, target) {
+            Ok(None) => true,
+            Ok(Some(_)) => false,
+            Err(source) => {
+                return Err(FetchError::Io {
+                    path: target.to_path_buf(),
+                    source,
+                });
+            }
+        };
+
+        if matches!(oracle::verify_entry(root, entry).status, VerifyStatus::Ok) {
+            Ok(Some(reflinked))
+        } else {
+            let _ = std::fs::remove_file(target);
+            Ok(None)
+        }
+    }
+
+    /// Fetch all of a dataset's entries into `root`, optionally cloning from an
+    /// existing `source` mirror before hitting the network.
     ///
     /// # Errors
     /// Delegates to [`fetch_entries`]; see its error documentation.
     pub fn fetch_dataset(
         dataset: &Dataset,
         root: &Path,
+        source: Option<&Path>,
         on_progress: impl FnMut(FetchProgress),
     ) -> Result<FetchSummary, FetchError> {
-        fetch_entries(&dataset.entries(), root, on_progress)
+        fetch_entries(&dataset.entries(), root, source, on_progress)
     }
 
     fn download_entry(
@@ -346,6 +436,212 @@ mod tests {
         );
     }
 
+    /// BLAKE3 of `b"cow bytes\n"` — used by the CoW-source tests below.
+    #[cfg(feature = "data-fetch")]
+    const COW_BYTES: &[u8] = b"cow bytes\n";
+
+    /// Build a leaked `&'static str` of the BLAKE3 of `bytes`, so a synthetic
+    /// [`OracleEntry`] can carry a real hash without a compile-time constant.
+    #[cfg(feature = "data-fetch")]
+    fn leak_hash(bytes: &[u8]) -> &'static str {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(bytes);
+        Box::leak(hasher.finalize().to_hex().to_string().into_boxed_str())
+    }
+
+    /// Write `bytes` at `root.join(rel_path)`, creating parent dirs.
+    #[cfg(feature = "data-fetch")]
+    fn place(root: &std::path::Path, rel_path: &str, bytes: &[u8]) {
+        use std::io::Write;
+        let full = root.join(rel_path);
+        std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+        std::fs::File::create(&full)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_entries_skips_when_already_valid_in_root() {
+        let rel = "ssd.jpl.nasa.gov/ftp/eph/x/cow.bin";
+        let entry = OracleEntry {
+            path: rel.into(),
+            size: COW_BYTES.len() as u64,
+            blake3_hex: leak_hash(COW_BYTES),
+        };
+        let dst = tempdir::TempDir::new("fetch-skip-dst").unwrap();
+        let src = tempdir::TempDir::new("fetch-skip-src").unwrap();
+        // Already present + valid in the destination root.
+        place(dst.path(), rel, COW_BYTES);
+
+        let summary = super::fetch_entries(
+            std::slice::from_ref(&entry),
+            dst.path(),
+            Some(src.path()),
+            |_| {},
+        )
+        .expect("skip fetch");
+
+        assert_eq!(summary.skipped, vec![dst.path().join(rel)]);
+        assert!(summary.downloaded.is_empty());
+        assert!(summary.reflinked.is_empty());
+        assert!(summary.copied.is_empty());
+        // The source was never touched (nothing was ever written to it).
+        assert!(!src.path().join(rel).exists());
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_entries_clones_from_source_without_network() {
+        let rel = "ssd.jpl.nasa.gov/ftp/eph/x/cow.bin";
+        let entry = OracleEntry {
+            path: rel.into(),
+            size: COW_BYTES.len() as u64,
+            blake3_hex: leak_hash(COW_BYTES),
+        };
+        let dst = tempdir::TempDir::new("fetch-cow-dst").unwrap();
+        let src = tempdir::TempDir::new("fetch-cow-src").unwrap();
+        // Destination empty; valid file present at the source mirror.
+        place(src.path(), rel, COW_BYTES);
+
+        let summary = super::fetch_entries(
+            std::slice::from_ref(&entry),
+            dst.path(),
+            Some(src.path()),
+            |_| {},
+        )
+        .expect("cow fetch");
+
+        // Landed in the destination and verifies Ok.
+        let landed = dst.path().join(rel);
+        assert!(landed.exists());
+        assert_eq!(std::fs::read(&landed).unwrap(), COW_BYTES);
+        assert!(matches!(
+            oracle::verify_entry(dst.path(), &entry).status,
+            oracle::VerifyStatus::Ok
+        ));
+        // It came from the source path (reflink OR copy — filesystem-dependent).
+        let in_reflinked = summary.reflinked.contains(&landed);
+        let in_copied = summary.copied.contains(&landed);
+        assert!(
+            in_reflinked ^ in_copied,
+            "landed file must be reported in exactly one of reflinked/copied"
+        );
+        assert!(summary.downloaded.is_empty());
+        assert!(summary.skipped.is_empty());
+        // The source file is untouched (clone only, never moved/deleted).
+        assert!(src.path().join(rel).exists());
+        assert_eq!(std::fs::read(src.path().join(rel)).unwrap(), COW_BYTES);
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_entries_clones_from_flat_source_layout() {
+        // Source mirror is laid out FLAT: the file sits directly in the source
+        // dir, not under the canonical ssd.jpl.nasa.gov/... path. The walker
+        // must still find it by base name and CoW-clone it to the canonical
+        // destination path in `root`.
+        let rel = "ssd.jpl.nasa.gov/ftp/eph/x/cow.bin";
+        let base = "cow.bin";
+        let entry = OracleEntry {
+            path: rel.into(),
+            size: COW_BYTES.len() as u64,
+            blake3_hex: leak_hash(COW_BYTES),
+        };
+        let dst = tempdir::TempDir::new("fetch-flatcow-dst").unwrap();
+        let src = tempdir::TempDir::new("fetch-flatcow-src").unwrap();
+        // Flat: base name directly in the source root (no mirror subtree).
+        place(src.path(), base, COW_BYTES);
+
+        let summary = super::fetch_entries(
+            std::slice::from_ref(&entry),
+            dst.path(),
+            Some(src.path()),
+            |_| {},
+        )
+        .expect("flat cow fetch");
+
+        // Landed at the CANONICAL destination path and verifies Ok.
+        let landed = dst.path().join(rel);
+        assert!(landed.exists());
+        assert_eq!(std::fs::read(&landed).unwrap(), COW_BYTES);
+        assert!(matches!(
+            oracle::verify_entry(dst.path(), &entry).status,
+            oracle::VerifyStatus::Ok
+        ));
+        let in_reflinked = summary.reflinked.contains(&landed);
+        let in_copied = summary.copied.contains(&landed);
+        assert!(
+            in_reflinked ^ in_copied,
+            "landed file must be reported in exactly one of reflinked/copied"
+        );
+        assert!(summary.downloaded.is_empty());
+        assert!(summary.skipped.is_empty());
+        // The flat source file is untouched.
+        assert!(src.path().join(base).exists());
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_entries_clones_from_deep_point_in_full_source_mirror() {
+        // The `source` points DEEP inside a full mirror (a sibling branch to
+        // where the file lives). The mirror-root hoist in locate_source_file
+        // must walk up, then find the file in its own branch and CoW-clone it.
+        let rel = "ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/cow.bin";
+        let entry = OracleEntry {
+            path: rel.into(),
+            size: COW_BYTES.len() as u64,
+            blake3_hex: leak_hash(COW_BYTES),
+        };
+        let dst = tempdir::TempDir::new("fetch-deepcow-dst").unwrap();
+        let src = tempdir::TempDir::new("fetch-deepcow-src").unwrap();
+        // Full mirror at the source; file in the small_bodies branch.
+        place(src.path(), rel, COW_BYTES);
+        // Point `source` at a DEEP sibling branch (planets/Linux/de441).
+        let deep = src
+            .path()
+            .join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441");
+        std::fs::create_dir_all(&deep).unwrap();
+
+        let summary = super::fetch_entries(
+            std::slice::from_ref(&entry),
+            dst.path(),
+            Some(deep.as_path()),
+            |_| {},
+        )
+        .expect("deep-point cow fetch");
+
+        let landed = dst.path().join(rel);
+        assert!(landed.exists());
+        assert_eq!(std::fs::read(&landed).unwrap(), COW_BYTES);
+        assert!(matches!(
+            oracle::verify_entry(dst.path(), &entry).status,
+            oracle::VerifyStatus::Ok
+        ));
+        let in_reflinked = summary.reflinked.contains(&landed);
+        let in_copied = summary.copied.contains(&landed);
+        assert!(
+            in_reflinked ^ in_copied,
+            "landed file must be reported in exactly one of reflinked/copied"
+        );
+        assert!(summary.downloaded.is_empty());
+        assert!(summary.skipped.is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn reflink_or_copy_yields_byte_identical_content() {
+        let tmp = tempdir::TempDir::new("reflink-sanity").unwrap();
+        let from = tmp.path().join("from.bin");
+        let to = tmp.path().join("to.bin");
+        std::fs::write(&from, COW_BYTES).unwrap();
+        // Ok(None) => true reflink; Ok(Some(_)) => full-copy fallback.
+        let outcome = reflink_copy::reflink_or_copy(&from, &to).expect("reflink_or_copy");
+        assert!(matches!(outcome, None | Some(_)));
+        assert_eq!(std::fs::read(&to).unwrap(), COW_BYTES);
+    }
+
     #[test]
     #[cfg(feature = "data-fetch")]
     fn live_fetch_small_body_verifies_and_is_idempotent() {
@@ -362,7 +658,7 @@ mod tests {
         let tmp = tempdir::TempDir::new("fetch").unwrap();
         let root = tmp.path();
 
-        let s1 = super::fetch_entries(&entries, root, |_| {}).expect("first fetch");
+        let s1 = super::fetch_entries(&entries, root, None, |_| {}).expect("first fetch");
         assert_eq!(s1.downloaded.len(), 1);
         assert_eq!(s1.skipped.len(), 0);
         // Verified on land: the file matches the oracle.
@@ -372,7 +668,7 @@ mod tests {
         ));
 
         // Second run skips (idempotent).
-        let s2 = super::fetch_entries(&entries, root, |_| {}).expect("second fetch");
+        let s2 = super::fetch_entries(&entries, root, None, |_| {}).expect("second fetch");
         assert_eq!(s2.downloaded.len(), 0);
         assert_eq!(s2.skipped.len(), 1);
     }

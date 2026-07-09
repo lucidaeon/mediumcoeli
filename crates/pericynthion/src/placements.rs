@@ -110,6 +110,40 @@ impl Placement {
     pub fn sb441_naif_id(&self) -> Option<i32> {
         self.mpc_number.map(|n| 2_000_000 + n as i32)
     }
+
+    /// Classify this placement's data source from its `note`. The catalog notes
+    /// are the canonical strings, so this is a total, deterministic mapping.
+    #[must_use]
+    pub fn data_source(&self) -> DataSource {
+        let n = self.note;
+        if n.contains("sb441-n16") {
+            DataSource::Sb441N16
+        } else if n.contains("sb441-n373") {
+            DataSource::Sb441N373
+        } else if n.contains("Horizons") {
+            DataSource::Horizons
+        } else if n.starts_with("DE441") {
+            DataSource::De441
+        } else {
+            DataSource::Computed
+        }
+    }
+}
+
+/// Where a placement's ephemeris data comes from -- the single axis the
+/// "what gets you what" table and the post-fetch capability readout group on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataSource {
+    /// The DE441 planetary binary (Sun, Moon, Mercury..Neptune, Pluto).
+    De441,
+    /// JPL's bundled `sb441-n16.bsp` main-belt ephemeris.
+    Sb441N16,
+    /// JPL's bundled `sb441-n373.bsp` extended small-body ephemeris.
+    Sb441N373,
+    /// A Horizons-generated on-demand SPK (`starcat horizons`).
+    Horizons,
+    /// Computed from other bodies plus chart geometry; needs no extra file.
+    Computed,
 }
 
 const fn p(
@@ -588,6 +622,41 @@ pub fn markdown() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn data_source_classifies_each_body_group() {
+        use super::{DataSource, find_by_slug};
+        let src = |name: &str| find_by_slug(name).unwrap().data_source();
+        assert_eq!(src("Sun"), DataSource::De441);
+        assert_eq!(src("Moon"), DataSource::De441);
+        assert_eq!(src("Mercury"), DataSource::De441);
+        assert_eq!(src("Pluto"), DataSource::De441);
+        assert_eq!(src("Ceres"), DataSource::Sb441N16);
+        assert_eq!(src("Vesta"), DataSource::Sb441N16);
+        assert_eq!(src("Eris"), DataSource::Sb441N373);
+        assert_eq!(src("Quaoar"), DataSource::Sb441N373);
+        assert_eq!(src("Chiron"), DataSource::Horizons);
+        assert_eq!(src("Albion"), DataSource::Horizons);
+        assert_eq!(src("Ascendant"), DataSource::Computed);
+        assert_eq!(src("Lot of Fortune"), DataSource::Computed);
+    }
+
+    #[test]
+    fn every_mpc_body_maps_to_a_file_source() {
+        use super::{CATALOG, DataSource};
+        for p in CATALOG {
+            if p.mpc_number.is_some() {
+                assert_ne!(
+                    p.data_source(),
+                    DataSource::Computed,
+                    "{} has an MPC number but classified as Computed -- note {:?} unrecognized",
+                    p.name,
+                    p.note
+                );
+                assert_ne!(p.data_source(), DataSource::De441, "{}", p.name);
+            }
+        }
+    }
 
     #[test]
     fn catalog_is_well_formed() {

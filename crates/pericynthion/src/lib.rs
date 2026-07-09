@@ -112,6 +112,7 @@ pub mod body;
 /// Embedded Yale Bright Star Catalogue (BSC5) raw data + CDS provenance,
 /// parsed by [`stars`]. See the module docs for regeneration.
 mod bsc5_catalogue;
+pub mod capability;
 pub mod chart;
 pub mod chebyshev;
 pub mod coords;
@@ -144,7 +145,14 @@ pub use datafetch::{
 pub mod stars;
 pub mod time;
 
-pub use datafiles::{production_file_paths, provider_cached};
+pub use capability::{
+    BodyStatus, CapabilityReport, assess, render_capabilities, source_label, what_gets_you_what,
+};
+pub use datafiles::{
+    find_under, find_under_matching, locate_jpl_file, locate_jpl_file_matching,
+    production_file_paths, provider_cached,
+};
+pub use jpl::oracle::display_path;
 pub use placements::{BodyResolveError, omniscient_body_ids, resolve_body_id};
 
 pub use provenance::{

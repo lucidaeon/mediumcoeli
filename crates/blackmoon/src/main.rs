@@ -22,7 +22,9 @@ use std::path::{Path, PathBuf};
 pub use astrogram::format::Format as Target;
 
 mod consolidate_ui;
+mod path;
 mod providers;
+use path::display_path;
 use providers::WebProvider;
 
 // ── format value parser ───────────────────────────────────────────────────────
@@ -959,7 +961,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
         (None, Some(p)) => Format::from_path(p).with_context(|| {
             format!(
                 "cannot detect target from '{}'; use --to to specify",
-                p.display()
+                display_path(p)
             )
         })?,
         (None, None) => bail!("--output (or --to luna / --to astrocom) is required"),
@@ -1003,9 +1005,9 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
         && p.exists()
     {
         existing = read_file_target(p, out_target)
-            .with_context(|| format!("reading existing output {}", p.display()))?;
+            .with_context(|| format!("reading existing output {}", display_path(p)))?;
         if !to_stdout {
-            println!("{}: {} charts (existing)", p.display(), existing.len());
+            println!("{}: {} charts (existing)", display_path(p), existing.len());
         }
     }
 
@@ -1065,11 +1067,11 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
                     files: scanned_files,
                     skipped,
                 } = astrogram::convert::chart_files_under(path, cli.from)
-                    .with_context(|| format!("scanning directory {}", path.display()))?;
+                    .with_context(|| format!("scanning directory {}", display_path(path)))?;
                 let scanned_count = scanned_files.len();
                 let files = without_output_file(scanned_files, output_to_exclude);
                 if files.is_empty() {
-                    bail!("no chart files found under {}", path.display());
+                    bail!("no chart files found under {}", display_path(path));
                 }
                 if !to_stdout {
                     let files_word = if files.len() == 1 { "file" } else { "files" };
@@ -1082,7 +1084,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
                     eprintln!(
                         "read {} chart {files_word} under {}{excluded_note} (skipped {} non-chart {skipped_word})",
                         files.len(),
-                        path.display(),
+                        display_path(path),
                         skipped
                     );
                 }
@@ -1098,13 +1100,13 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
             let target = Format::from_path(path).with_context(|| {
                 format!(
                     "cannot detect target from '{}'; rename the file or use --from to specify",
-                    path.display()
+                    display_path(path)
                 )
             })?;
             let charts = read_file_target(path, target)
-                .with_context(|| format!("reading {}", path.display()))?;
+                .with_context(|| format!("reading {}", display_path(path)))?;
             if !to_stdout && !from_dir.contains(path) {
-                println!("{}: {} charts", path.display(), charts.len());
+                println!("{}: {} charts", display_path(path), charts.len());
             }
             for chart in &charts {
                 source_of.entry(providers::key(chart)).or_insert(target);
@@ -1251,7 +1253,7 @@ fn cmd_convert(cli: &Cli) -> Result<()> {
             println!("  in:       {new_input_count:>6}");
             println!("  dupes:    {dupes:>6}");
             println!("  out:      {:>6}", merged.len());
-            println!("wrote {}", p.display());
+            println!("wrote {}", display_path(p));
         }
     }
     Ok(())
@@ -1265,15 +1267,19 @@ fn cmd_normalize_inplace(inputs: &[PathBuf]) -> Result<()> {
     }
     for path in inputs {
         let target = Format::from_path(path)
-            .with_context(|| format!("cannot detect target from '{}'", path.display()))?;
+            .with_context(|| format!("cannot detect target from '{}'", display_path(path)))?;
         let mut charts = read_file_target(path, target)
-            .with_context(|| format!("reading {}", path.display()))?;
+            .with_context(|| format!("reading {}", display_path(path)))?;
         for chart in &mut charts {
             normalize_chart(chart);
         }
         write_file_target(path, target, &charts)
-            .with_context(|| format!("writing {}", path.display()))?;
-        println!("normalised {} charts in {}", charts.len(), path.display());
+            .with_context(|| format!("writing {}", display_path(path)))?;
+        println!(
+            "normalised {} charts in {}",
+            charts.len(),
+            display_path(path)
+        );
     }
     Ok(())
 }
@@ -1329,7 +1335,7 @@ fn cmd_consolidate(provider: WebProvider, cli: &Cli) -> Result<()> {
         .clone()
         .unwrap_or_else(decision_log::default_path);
 
-    println!("Decision log: {}", log_path.display());
+    println!("Decision log: {}", display_path(&log_path));
 
     let (charts, ids) = provider
         .fetch_all_with_ids(&sink)

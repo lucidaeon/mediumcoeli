@@ -182,21 +182,14 @@ pub fn open_dir(dir: &Path) -> Vec<SpkEphemeris> {
     out
 }
 
-/// Relative path from the mirror root to the default small-body SPK file.
-const BSP_MIRROR_TAIL: &str = "ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp";
-
-/// Mirror-relative path to the n373 KBO perturber BSP file.
-const BSP_N373_MIRROR_TAIL: &str =
-    "ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n373.bsp";
-
-/// Locate the default asteroid SPK file (`sb441-n16.bsp`) under the JPL mirror.
+/// Locate the default asteroid SPK file (`sb441-n16.bsp`) from `start`.
 ///
-/// Resolves the mirror root by walking `start` and its ancestors upward until a
-/// directory containing an `ssd.jpl.nasa.gov/` child is found (see
-/// [`crate::jpl::oracle::mirror_root_from`]). Then returns
-/// `root/ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp`
-/// if that file exists, or `None` if either the mirror root cannot be resolved
-/// or the BSP file is not present.
+/// Routes through the common [`crate::locate_jpl_file`] locator: hoists to the
+/// `ssd.jpl.nasa.gov/` mirror root when `start` is inside a real mirror, then
+/// walks down. Returns the first `sb441-n16.bsp` found, or `None`.
+/// Layout-agnostic: resolves whether the user mirrored the full tree (even when
+/// pointing at a deep sibling branch such as `.../planets/Linux/de441`) or
+/// dropped the BSP into a single flat directory.
 ///
 /// # Examples
 ///
@@ -210,9 +203,7 @@ const BSP_N373_MIRROR_TAIL: &str =
 /// ```
 #[must_use]
 pub fn locate_default_bsp(start: &Path) -> Option<PathBuf> {
-    let root = crate::jpl::oracle::mirror_root_from(start)?;
-    let bsp = root.join(BSP_MIRROR_TAIL);
-    if bsp.is_file() { Some(bsp) } else { None }
+    crate::locate_jpl_file(start, "sb441-n16.bsp")
 }
 
 /// Open every SPK a chart computation should consult, in priority order:
@@ -246,15 +237,15 @@ pub fn open_all_sources(
     Ok(spk_files)
 }
 
-/// Locate `sb441-n373.bsp` under the JPL mirror rooted at or above `start`.
+/// Locate `sb441-n373.bsp` from `start`.
 ///
-/// `start` may be any path inside or above the mirror root. Returns the
-/// absolute path to the file if found, `None` otherwise.
+/// Routes through the common [`crate::locate_jpl_file`] locator (mirror-root
+/// hoist, then walk down) and returns the first `sb441-n373.bsp` found, `None`
+/// otherwise. Layout-agnostic: resolves whether the file sits in the full mirror
+/// tree (including a deep-point start) or a flat directory.
 #[must_use]
 pub fn locate_n373_bsp(start: &Path) -> Option<PathBuf> {
-    let root = crate::jpl::oracle::mirror_root_from(start)?;
-    let bsp = root.join(BSP_N373_MIRROR_TAIL);
-    if bsp.is_file() { Some(bsp) } else { None }
+    crate::locate_jpl_file(start, "sb441-n373.bsp")
 }
 
 #[cfg(test)]
@@ -423,19 +414,50 @@ mod tests {
         std::fs::create_dir_all(bsp_path.parent().unwrap()).unwrap();
         std::fs::write(&bsp_path, b"").unwrap();
 
-        // start = mirror root itself
+        // start = mirror root itself (canonical full-mirror layout resolves)
         assert_eq!(locate_default_bsp(root), Some(bsp_path.clone()));
 
-        // start = a subdirectory within the mirror
+        // start = a sibling subdirectory within the mirror (NOT an ancestor of
+        // the BSP). The mirror-root hoist restores this: point anywhere inside a
+        // real mirror and the BSP over in the small_bodies branch still resolves.
         let sub = root.join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441");
         std::fs::create_dir_all(&sub).unwrap();
         assert_eq!(locate_default_bsp(&sub), Some(bsp_path));
     }
 
     #[test]
+    fn locate_default_bsp_deep_point_in_full_mirror_finds_sibling_branch() {
+        // Full mirror with BOTH branches populated. Point start at the DEEP
+        // planets/Linux/de441 dir and assert the BSP over in the sibling
+        // small_bodies branch still resolves (mirror-root hoist).
+        let tmp = tempdir::TempDir::new("spk-deep-point").unwrap();
+        let root = tmp.path();
+        let de_dir = root.join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441");
+        std::fs::create_dir_all(&de_dir).unwrap();
+        std::fs::write(de_dir.join("header.441"), b"").unwrap();
+        std::fs::write(de_dir.join("linux_m13000p17000.441"), b"").unwrap();
+        let bsp_path =
+            root.join("ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp");
+        std::fs::create_dir_all(bsp_path.parent().unwrap()).unwrap();
+        std::fs::write(&bsp_path, b"").unwrap();
+
+        // Pointed at the deep DE441 dir, the sibling-branch BSP resolves.
+        assert_eq!(locate_default_bsp(&de_dir), Some(bsp_path));
+    }
+
+    #[test]
+    fn locate_default_bsp_finds_file_in_flat_dir() {
+        // A normal user who dropped sb441-n16.bsp into one flat folder.
+        let tmp = tempdir::TempDir::new("spk-locate-flat").unwrap();
+        let bsp = tmp.path().join("sb441-n16.bsp");
+        std::fs::write(&bsp, b"").unwrap();
+        assert_eq!(locate_default_bsp(tmp.path()), Some(bsp));
+    }
+
+    #[test]
     fn locate_default_bsp_returns_none_for_unrelated_dir() {
         let tmp = tempdir::TempDir::new("spk-locate-none-test").unwrap();
-        // No ssd.jpl.nasa.gov child — mirror root cannot be found.
+        // No sb441-n16.bsp anywhere under the dir.
         assert_eq!(locate_default_bsp(tmp.path()), None);
     }
 
@@ -452,7 +474,9 @@ mod tests {
         std::fs::create_dir_all(&bsp_dir).unwrap();
         // A minimal valid DAF header so open() would succeed (we only need the file to exist).
         std::fs::write(bsp_dir.join("sb441-n373.bsp"), b"DAF/SPK placeholder").unwrap();
-        // locate from a deep child of the root
+        // locate from a deep child of the mirror root (not an ancestor of the
+        // file): the mirror-root hoist walks up to ssd.jpl.nasa.gov's parent,
+        // then descends to the canonical file.
         let deep = tmp.path().join("some").join("subdir");
         std::fs::create_dir_all(&deep).unwrap();
         let found = super::locate_n373_bsp(&deep);
@@ -460,5 +484,14 @@ mod tests {
         // absent → None
         let other = tempdir::TempDir::new("n373loc_absent").unwrap();
         assert!(super::locate_n373_bsp(other.path()).is_none());
+    }
+
+    #[test]
+    fn locate_n373_bsp_finds_file_in_flat_dir() {
+        // Flat layout: the n373 bundle dropped directly into one folder.
+        let tmp = tempdir::TempDir::new("n373flat").unwrap();
+        let bsp = tmp.path().join("sb441-n373.bsp");
+        std::fs::write(&bsp, b"DAF/SPK placeholder").unwrap();
+        assert_eq!(super::locate_n373_bsp(tmp.path()), Some(bsp));
     }
 }

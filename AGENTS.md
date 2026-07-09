@@ -13,11 +13,11 @@ be up-to-date for the correct version.
 
 Run `cargo path NAME` from inside a given crate directory to find the source directory for a dependency.
 
-Blackmoon and Starcat are thin CLI wrappers to the libraries they leverage. Do not put anything in
-the CLI tools that would have to be repeated by a GUI tool using the same libraries. 
+Blackmoon and Starcat are thin CLI wrappers to the libraries they leverage. Do not put anything in the CLI tools that would have to be repeated by a GUI tool using the same libraries.
 
 Committed code must only point at committed files.
 
+Users deserve to be empowered to make informed decisions. Possible long wait times, possible filesystem consumption, data omitted at lossy boundaries during conversion. These types of matters warrant disclosure.
 # Definitions
 
 Accurate: Documentation is a promise to the world. It needs to reflect the reality of the code base.

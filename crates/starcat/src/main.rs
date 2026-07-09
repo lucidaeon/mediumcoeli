@@ -255,8 +255,12 @@ struct FetchArgs {
     /// List available datasets and exit.
     #[arg(long)]
     list: bool,
-    /// Destination root (the dir that will contain `ssd.jpl.nasa.gov/`). Falls
-    /// back to `$STARCAT_JPL_DATA`, then the platform data directory.
+    /// Print which dataset gets you which bodies, then exit (no fetch).
+    #[arg(long)]
+    what: bool,
+    /// Your existing JPL mirror to reflink/copy from instead of re-downloading
+    /// (default: `$STARCAT_JPL_DATA`). Fetched files always land in the default
+    /// data directory; this source is only ever read from, never modified.
     #[arg(long = "jpl-data")]
     jpl_data: Option<PathBuf>,
 }
@@ -287,7 +291,8 @@ struct HorizonsArgs {
     #[arg(long)]
     to: Option<String>,
     /// Directory to write `<naif_id>.bsp` files into. Falls back to
-    /// `$STARCAT_HORIZONS_DATA`. Kept separate from the JPL mirror.
+    /// `$STARCAT_HORIZONS_DATA`, then to `.../starcat/horizons/` in the
+    /// platform data dir. Kept separate from the JPL mirror.
     #[arg(long)]
     out: Option<PathBuf>,
 }
@@ -368,8 +373,11 @@ struct ComputeArgs {
     #[arg(long)]
     time: Option<String>,
 
-    /// Which calendar the date is recorded in. No default — caller must choose.
-    /// Required to compute a chart.
+    /// Which calendar the date is recorded in. Optional for dates before
+    /// 1582-10-15 or after 1927 (defaults to `auto`: proleptic Julian before the
+    /// cutover, Gregorian after). REQUIRED for 1582-1927 dates, where the
+    /// recorded calendar is jurisdiction-dependent (errors if omitted); pass
+    /// julian|gregorian.
     #[arg(long)]
     calendar: Option<CalendarArg>,
 
@@ -510,8 +518,18 @@ struct ComputeArgs {
     /// Comma-separated fixed star names to include in the chart. Accepts common
     /// names (Sirius, Algol), Robson/Brady names (Rasalhague, Sadalmelek),
     /// multi-word concatenated (ZubenElgenubi), HR numbers (936, HR936), or
-    /// BSC5P designations (26Bet Per). See `starcat catalogue --stars`.
-    #[arg(long = "stars", value_delimiter = ',', add = clap_complete::ArgValueCandidates::new(star_candidates))]
+    /// BSC5P designations (26Bet Per). Use `notable` (alias `all`) to include
+    /// the 33 common-name stars; combine with explicit names, e.g.
+    /// `--stars notable,Sirius`. Bare `--stars` (no value) is equivalent to
+    /// `--stars notable` (the 33 common-name stars). See
+    /// `starcat catalogue --stars`.
+    #[arg(
+        long = "stars",
+        value_delimiter = ',',
+        num_args = 0..=1,
+        default_missing_value = "notable",
+        add = clap_complete::ArgValueCandidates::new(star_candidates)
+    )]
     stars: Vec<String>,
 
     /// Append Antiscion / Contra-antiscion reflections to the output — a
@@ -763,15 +781,49 @@ impl From<BodyArg> for Body {
     }
 }
 
-/// Dynamic completion candidates for `--stars`: the 33 NOTABLE common names.
+/// Expand the `notable` / `all` sentinel tokens in a `--stars` list to the 33
+/// NOTABLE common-name stars, passing other tokens through. Case-insensitive;
+/// de-duplicated (case-insensitive) so an explicitly-named notable is not
+/// computed twice. Order: sentinel-expanded names first (catalog order), then
+/// any remaining explicit names in input order.
+fn expand_star_tokens(input: &[String]) -> Vec<String> {
+    let wants_notable = input
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("notable") || t.eq_ignore_ascii_case("all"));
+    let mut out: Vec<String> = Vec::new();
+    if wants_notable {
+        for (common, _hr) in pericynthion::stars::NOTABLE {
+            out.push((*common).to_string());
+        }
+    }
+    for t in input {
+        if t.eq_ignore_ascii_case("notable") || t.eq_ignore_ascii_case("all") {
+            continue;
+        }
+        if out.iter().any(|e| e.eq_ignore_ascii_case(t)) {
+            continue;
+        }
+        out.push(t.clone());
+    }
+    out
+}
+
+/// Dynamic completion candidates for `--stars`: the `notable`/`all` sentinels
+/// followed by the 33 NOTABLE common names.
 ///
 /// Arbitrary BSC5P designations (e.g. `26Bet Per`) are always accepted — this
 /// list is advisory only (tab-complete suggestions, not a restrictive validator).
 fn star_candidates() -> Vec<clap_complete::CompletionCandidate> {
-    pericynthion::stars::NOTABLE
-        .iter()
-        .map(|(name, _hr)| clap_complete::CompletionCandidate::new(*name))
-        .collect()
+    let mut out = vec![
+        clap_complete::CompletionCandidate::new("notable"),
+        clap_complete::CompletionCandidate::new("all"),
+    ];
+    out.extend(
+        pericynthion::stars::NOTABLE
+            .iter()
+            .map(|(name, _hr)| clap_complete::CompletionCandidate::new(*name)),
+    );
+    out
 }
 
 fn main() -> Result<()> {
@@ -1010,19 +1062,63 @@ fn body_resolve_cli_error(e: pericynthion::placements::BodyResolveError) -> anyh
 // Called once per process from `main`; taking ComputeArgs by value lets the
 // body freely consume fields (e.g. `args.bodies` via `.clone()`-then-drop)
 // without lifetime juggling. The allocation cost is zero in CLI context.
+/// Is this date in the Julian/Gregorian transition era (on/after 1582-10-15
+/// through 1927)? In this window the recorded calendar depends on jurisdiction
+/// (Britain/US switched 1752, Russia 1918, Greece 1923, Turkey 1926), so a date
+/// alone cannot determine it and `--calendar` must be given explicitly. Dates
+/// before the 1582 cutover (proleptic Julian) and after 1927 (universally
+/// Gregorian) are unambiguous and return `false`.
+fn in_calendar_transition_era(year: i16, month: u8, day: u8) -> bool {
+    let on_or_after_cutover =
+        year > 1582 || (year == 1582 && (month > 10 || (month == 10 && day >= 15)));
+    let through_1927 = year <= 1927;
+    on_or_after_cutover && through_1927
+}
+
+/// Resolve the effective calendar. An explicit choice always wins; otherwise
+/// `Auto` outside the transition era, or a hard error inside 1582-1927 (where
+/// the recorded calendar is jurisdiction-dependent). Takes the parsed civil
+/// year as `i32` (parse_date's type) and guards the i16 conversion here — an
+/// out-of-i16 year is far outside the era, so it resolves to `Auto`.
+fn resolve_calendar_arg(
+    explicit: Option<CalendarArg>,
+    year: i32,
+    month: u8,
+    day: u8,
+) -> Result<CalendarArg> {
+    if let Some(c) = explicit {
+        return Ok(c);
+    }
+    let in_era = i16::try_from(year)
+        .map(|y| in_calendar_transition_era(y, month, day))
+        .unwrap_or(false);
+    if in_era {
+        bail!(
+            "--calendar is required for dates in the 1582-1927 Julian/Gregorian transition era; \
+             the recorded calendar depends on jurisdiction (Britain/US switched 1752, Russia 1918, \
+             Greece 1923). Pass --calendar julian|gregorian."
+        );
+    }
+    Ok(CalendarArg::Auto)
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn cmd_compute(args: ComputeArgs) -> Result<()> {
     // === Output format (read before any partial moves of `args`) ===
     let fmt = CoordFormat::from_args(&args);
 
-    // === Ephemeris file ===
-    let dir = resolve_jpl_dir(args.jpl_data.as_deref())?;
+    // Fast-fail on I/O-free input validation (required-check, date parse,
+    // calendar resolution) BEFORE resolving/opening the JPL ephemeris, so a bad
+    // invocation reports the cheap input error first rather than a spurious
+    // "no ephemeris data".
 
-    // === Compute always builds a chart — date/time/calendar are required ===
+    // === Compute always builds a chart — date/time are required ===
+    // `--calendar` is optional and defaults to `auto` outside the transition
+    // era; the Option is retained so an implicit default can be distinguished
+    // from an explicit choice when resolving `calendar_arg` below.
     let missing: Vec<&str> = [
         args.date.is_none().then_some("--date"),
         args.time.is_none().then_some("--time"),
-        args.calendar.is_none().then_some("--calendar"),
     ]
     .into_iter()
     .flatten()
@@ -1032,11 +1128,19 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     }
     let date_str = args.date.as_deref().unwrap();
     let time_str = args.time.as_deref().unwrap();
-    let calendar_arg = args.calendar.unwrap();
 
     // === Parse date and time ===
+    // parse_date must run before resolving the calendar, since the required-in-
+    // the-transition-era rule depends on the parsed date.
     let (year, month, day) =
         parse_date(date_str).with_context(|| format!("invalid --date {date_str:?}"))?;
+
+    // === Calendar ===
+    // Optional outside the 1582-1927 Julian/Gregorian transition era (defaults
+    // to `auto`); required inside it, where the recorded calendar is
+    // jurisdiction-dependent and auto-detect would silently misassign it.
+    let calendar_arg = resolve_calendar_arg(args.calendar, year, month, day)?;
+
     let (hour, minute, second) =
         parse_time(time_str).with_context(|| format!("invalid --time {time_str:?}"))?;
     let civil = CivilDate {
@@ -1063,8 +1167,16 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         bail!("either --tz or --lmt (with --lon) must be supplied")
     };
 
-    let (header, source) = discover::open_dataset(&dir)
-        .with_context(|| format!("locate + open JPL ephemeris under {}", dir.display()))?;
+    // === Ephemeris file ===
+    // Resolved only after the I/O-free input checks above have passed.
+    let dir = resolve_jpl_dir(args.jpl_data.as_deref())?;
+
+    let (header, source) = discover::open_dataset(&dir).with_context(|| {
+        format!(
+            "locate + open JPL ephemeris under {}",
+            pericynthion::display_path(&dir)
+        )
+    })?;
     let ephem = Ephemeris::new(&*source, &header).context("build ephemeris facade")?;
 
     // === Coordinate mode request ===
@@ -1138,8 +1250,9 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         asteroids: asteroid_naif_ids,
     };
     // Resolve --stars names; warn and skip unknowns; silently skip empty/whitespace entries.
-    let resolved_stars: Vec<pericynthion::ResolvedStar> = args
-        .stars
+    // The `notable`/`all` sentinel expands to the 33 NOTABLE common-name stars first.
+    let star_names = expand_star_tokens(&args.stars);
+    let resolved_stars: Vec<pericynthion::ResolvedStar> = star_names
         .iter()
         .filter_map(|name| {
             if name.trim().is_empty() {
@@ -1283,7 +1396,7 @@ fn resolve_jpl_dir(data_dir_arg: Option<&std::path::Path>) -> Result<PathBuf> {
         return Ok(PathBuf::from(env));
     }
     if let Some(home) = pericynthion::default_data_dir()
-        && home.join("ssd.jpl.nasa.gov").is_dir()
+        && has_jpl_data(&home)
     {
         return Ok(home);
     }
@@ -1314,7 +1427,7 @@ fn resolve_mirror_root(root_arg: Option<&std::path::Path>) -> Result<PathBuf> {
         });
     }
     if let Some(home) = pericynthion::default_data_dir()
-        && home.join("ssd.jpl.nasa.gov").is_dir()
+        && has_jpl_data(&home)
     {
         return Ok(home);
     }
@@ -1322,6 +1435,15 @@ fn resolve_mirror_root(root_arg: Option<&std::path::Path>) -> Result<PathBuf> {
         "no ephemeris data found. Run `starcat data fetch` to download it \
          (~2.8 GB, one time), or pass --root PATH / set $STARCAT_JPL_DATA."
     )
+}
+
+/// True when the tree rooted at `root` contains any starcat dataset file, in
+/// any layout (full `ssd.jpl.nasa.gov/` mirror or a flat drop-folder). Checks
+/// for the DE441 header or the headline small-body SPK via the layout-agnostic
+/// walker, so a flat default-dir layout is accepted, not just a mirror.
+fn has_jpl_data(root: &std::path::Path) -> bool {
+    pericynthion::locate_jpl_file(root, "header.441").is_some()
+        || pericynthion::locate_jpl_file(root, "sb441-n16.bsp").is_some()
 }
 
 /// Dispatch the `data` subcommand.
@@ -1348,18 +1470,12 @@ fn cmd_data(args: &DataArgs) -> Result<()> {
 /// cwd prefix so the path is relative when the file lives below the caller.
 fn display_verify_path(full: &std::path::Path) -> String {
     let cwd = std::env::current_dir().ok();
-    let rel = cwd
+    let shown = cwd
         .as_deref()
         .and_then(|d| full.strip_prefix(d).ok())
-        .map(|p| p.to_string_lossy().into_owned());
-    let s = rel.unwrap_or_else(|| full.to_string_lossy().into_owned());
-    // Collapse any double-slashes introduced by a trailing-slash env var.
-    let mut out = s.replace("//", "/");
-    // Repeat in case of triple-slash edge case.
-    while out.contains("//") {
-        out = out.replace("//", "/");
-    }
-    out
+        .unwrap_or(full);
+    // Delegate slash-collapse / `.`-normalization to the shared lexical helper.
+    pericynthion::display_path(shown)
 }
 
 fn cmd_data_verify(args: &VerifyArgs) -> Result<()> {
@@ -1469,22 +1585,84 @@ fn prod_paths(jpl_root: &std::path::Path, horizons_dir: &std::path::Path) -> Vec
         .collect()
 }
 
-/// Resolve the fetch destination root: `--jpl-data` → `$STARCAT_JPL_DATA` →
-/// the platform data directory.
+/// Resolve the fetch *destination* — always the platform default data
+/// directory ([`pericynthion::default_data_dir`]), normalized to the mirror
+/// root via [`oracle::mirror_root_for_write`] so `root.join(entry.path)` lands
+/// files under the `ssd.jpl.nasa.gov/` subtree.
+///
+/// `--jpl-data` / `$STARCAT_JPL_DATA` are NOT the destination — they designate
+/// an existing mirror to reuse as a copy-on-write source (see
+/// [`resolve_fetch_source`]). Fetched files always land in the default data dir.
 ///
 /// # Errors
 ///
-/// Returns an error when none of the three sources yield a path.
-fn resolve_fetch_dest(arg: Option<&std::path::Path>) -> Result<PathBuf> {
-    if let Some(d) = arg {
-        return Ok(d.to_path_buf());
+/// Returns an error when no platform data directory is available.
+fn resolve_fetch_dest() -> Result<PathBuf> {
+    let home = pericynthion::default_data_dir().ok_or_else(|| {
+        anyhow::anyhow!("could not determine a platform data directory to fetch into")
+    })?;
+    Ok(oracle::mirror_root_for_write(&home))
+}
+
+/// Resolve the fetch *copy-on-write source* — the user's existing opinionated
+/// JPL mirror to reflink/copy from instead of re-downloading.
+///
+/// Precedence: `--jpl-data` arg → `$STARCAT_JPL_DATA` → `None`. The chosen path
+/// is normalized to the mirror root via [`oracle::mirror_root_from`], which
+/// walks up looking for an existing `ssd.jpl.nasa.gov/` directory. A source is
+/// only useful if it already exists, so if no such mirror is found (or neither
+/// arg nor env is set) this returns `None` and the fetch proceeds network-only.
+fn resolve_fetch_source(arg: Option<&std::path::Path>) -> Option<PathBuf> {
+    let start = if let Some(d) = arg {
+        d.to_path_buf()
+    } else {
+        PathBuf::from(std::env::var("STARCAT_JPL_DATA").ok()?)
+    };
+    oracle::mirror_root_from(&start)
+}
+
+/// Build the up-front announcement lines for a `data fetch` run: the dataset
+/// slug + description, the destination root and mirror-subtree note, and the
+/// file count with a human-readable total size.
+///
+/// Pure (no I/O): the domain data — file paths and sizes — comes from the
+/// caller's `entries` slice, which the oracle owns.
+fn fetch_header_lines(
+    slug: &str,
+    desc: &str,
+    root: &std::path::Path,
+    source: Option<&std::path::Path>,
+    entries: &[oracle::OracleEntry],
+) -> Vec<String> {
+    let total_bytes: u64 = entries.iter().map(|e| e.size).sum();
+    let mut lines = vec![
+        format!("Fetching dataset {slug}: {desc}"),
+        format!(
+            "Destination: {} (files land under the `ssd.jpl.nasa.gov/` mirror subtree)",
+            pericynthion::display_path(root)
+        ),
+    ];
+    if let Some(src) = source {
+        lines.push(format!(
+            "Reusing existing mirror {} via copy-on-write where possible (no re-download).",
+            pericynthion::display_path(src)
+        ));
     }
-    if let Ok(env) = std::env::var("STARCAT_JPL_DATA") {
-        return Ok(PathBuf::from(env));
-    }
-    pericynthion::default_data_dir().ok_or_else(|| {
-        anyhow::anyhow!("could not determine a data directory; pass --jpl-data PATH")
-    })
+    lines.push(format!(
+        "{} file(s), {} total",
+        entries.len(),
+        indicatif::HumanBytes(total_bytes)
+    ));
+    lines
+}
+
+/// The final path component of `p` as a string, or the whole display path if
+/// it has no file-name component.
+fn file_name_of(p: &std::path::Path) -> String {
+    p.file_name().map_or_else(
+        || pericynthion::display_path(p),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// `data fetch`: download a dataset with a progress bar, then print the verify
@@ -1495,6 +1673,10 @@ fn resolve_fetch_dest(arg: Option<&std::path::Path>) -> Result<PathBuf> {
 /// Returns an error if the destination cannot be determined, the dataset slug
 /// is unknown, the download fails, or the post-fetch verify step fails.
 fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
+    if args.what {
+        print!("{}", pericynthion::what_gets_you_what());
+        return Ok(());
+    }
     if args.list {
         for d in pericynthion::datasets() {
             println!("{}\t{}", d.slug, d.description);
@@ -1509,7 +1691,19 @@ fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
             known.join(", ")
         )
     })?;
-    let root = resolve_fetch_dest(args.jpl_data.as_deref())?;
+    let root = resolve_fetch_dest()?;
+    let source = resolve_fetch_source(args.jpl_data.as_deref());
+    let entries = dataset.entries();
+
+    for line in fetch_header_lines(
+        dataset.slug,
+        dataset.description,
+        &root,
+        source.as_deref(),
+        &entries,
+    ) {
+        println!("{line}");
+    }
 
     let bar = indicatif::ProgressBar::new(0);
     bar.set_style(
@@ -1519,41 +1713,83 @@ fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
         .expect("valid template"),
     );
     let mut current = usize::MAX;
-    let summary = pericynthion::fetch_dataset(dataset, &root, |p: pericynthion::FetchProgress| {
-        if p.file_index != current {
-            current = p.file_index;
-            bar.set_length(p.bytes_total);
-            bar.set_position(0);
-            bar.set_message(format!(
-                "{}  ({}/{})",
-                p.file_name,
-                p.file_index + 1,
-                p.file_count
-            ));
-        }
-        bar.set_position(p.bytes_done);
-    })
+    let summary = pericynthion::fetch_dataset(
+        dataset,
+        &root,
+        source.as_deref(),
+        |p: pericynthion::FetchProgress| {
+            if p.file_index != current {
+                current = p.file_index;
+                // Leave a persistent scrollback line above the bar as each file
+                // starts, showing its size and where it lands.
+                if let Some(entry) = entries.get(p.file_index) {
+                    bar.println(format!(
+                        "  {}  ({})  -> {}",
+                        p.file_name,
+                        indicatif::HumanBytes(entry.size),
+                        pericynthion::display_path(&root.join(&entry.path))
+                    ));
+                }
+                bar.set_length(p.bytes_total);
+                bar.set_position(0);
+                bar.set_message(format!(
+                    "{}  ({}/{})",
+                    p.file_name,
+                    p.file_index + 1,
+                    p.file_count
+                ));
+            }
+            bar.set_position(p.bytes_done);
+        },
+    )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     bar.finish_and_clear();
+
+    // Per-file persistent lines for locally-sourced files: where each landed
+    // and whether it was a zero-disk reflink or a full copy.
+    for path in &summary.reflinked {
+        bar.println(format!(
+            "  reflink   {} -> {}",
+            file_name_of(path),
+            pericynthion::display_path(path)
+        ));
+    }
+    for path in &summary.copied {
+        bar.println(format!(
+            "  copy (full)  {} -> {}",
+            file_name_of(path),
+            pericynthion::display_path(path)
+        ));
+    }
+
     println!(
-        "fetched {} file(s), skipped {} already-present, into {}",
+        "downloaded {} file(s), reflinked {}, copied {}, skipped {} already-present, into {}",
         summary.downloaded.len(),
+        summary.reflinked.len(),
+        summary.copied.len(),
         summary.skipped.len(),
-        root.display()
+        pericynthion::display_path(&root)
     );
 
     // Final canonical verify report (for de441 == `data verify supported`).
-    verify_required_subset(&root)
+    let verified = verify_required_subset(&root);
+
+    // Capabilities now on disk (self-updating; reads the catalog + the files).
+    let horizons_dir = resolve_horizons_dir(None).ok();
+    let report = pericynthion::assess(Some(&root), horizons_dir.as_deref());
+    print!("\n{}", pericynthion::render_capabilities(&report));
+
+    verified
 }
 
 /// List the data files needed to package starcat's supported placements,
 /// one per line, paths as supplied.
 fn cmd_data_prod(args: &ProdArgs) -> Result<()> {
     let jpl_root = resolve_mirror_root(args.root.as_deref())?;
-    // Horizons dir is optional for prod listing; fall back to a bare label so
-    // the centaur/KBO/TNO files still appear even if the env var is unset.
-    let horizons_dir =
-        resolve_horizons_dir(None).unwrap_or_else(|_| PathBuf::from("$STARCAT_HORIZONS_DATA"));
+    // The Horizons dir now always resolves to the platform-default
+    // `.../starcat/horizons/` when no flag/env is set, so the centaur/KBO/TNO
+    // files appear with their real landing paths.
+    let horizons_dir = resolve_horizons_dir(None)?;
     for line in prod_paths(&jpl_root, &horizons_dir) {
         println!("{line}");
     }
@@ -1666,8 +1902,27 @@ fn print_provenance_json(
     Ok(())
 }
 
-/// Resolve the directory for Horizons-fetched SPKs from `--out` or
-/// `$STARCAT_HORIZONS_DATA`. Deliberately separate from the JPL mirror.
+/// Derive the default Horizons SPK directory from a platform data base dir:
+/// the `horizons/` subdirectory, sibling to the JPL mirror. `None` propagates
+/// when no platform data dir is available.
+///
+/// Pure and side-effect-free (no env, no filesystem) so it can be unit-tested.
+fn horizons_default_dir(base: Option<PathBuf>) -> Option<PathBuf> {
+    base.map(|b| b.join("horizons"))
+}
+
+/// Resolve the directory for Horizons-fetched SPKs.
+///
+/// Resolution order:
+/// 1. `--out` PATH (arg), if `Some`.
+/// 2. `$STARCAT_HORIZONS_DATA`, if set.
+/// 3. `pericynthion::default_data_dir()` joined with `horizons/` (e.g.
+///    `~/Library/Application Support/starcat/horizons/`), sibling to the JPL
+///    mirror under the same platform data dir.
+///
+/// Only `bail!`s if even step 3 yields `None` (no platform data dir). Does not
+/// create the directory — read paths just probe existence and the fetch path
+/// creates dirs itself.
 fn resolve_horizons_dir(out: Option<&std::path::Path>) -> Result<PathBuf> {
     if let Some(o) = out {
         return Ok(o.to_path_buf());
@@ -1675,10 +1930,13 @@ fn resolve_horizons_dir(out: Option<&std::path::Path>) -> Result<PathBuf> {
     if let Ok(env) = std::env::var("STARCAT_HORIZONS_DATA") {
         return Ok(PathBuf::from(env));
     }
-    bail!(
-        "no output directory. Pass --out PATH or set $STARCAT_HORIZONS_DATA \
-         (kept separate from the JPL mirror in $STARCAT_JPL_DATA)."
-    )
+    horizons_default_dir(pericynthion::default_data_dir()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no output directory. Pass --out PATH or set $STARCAT_HORIZONS_DATA \
+             (no platform data directory available for the default \
+             `.../starcat/horizons/`)."
+        )
+    })
 }
 
 /// Fetch SPKs for every minor body in a class, skipping ones already on disk.
@@ -1721,14 +1979,19 @@ fn cmd_horizons(args: &HorizonsArgs) -> Result<()> {
     }
 
     eprintln!(
-        "Fetching {} body/bodies for {:?}, {start} .. {stop}, into {} \
+        "Fetching {} body/bodies for {:?}, {start} .. {stop} \
          (sequential, throttled — be kind to JPL)",
         targets.len(),
         args.noun,
-        dir.display()
     );
+    eprintln!("Destination: {}", pericynthion::display_path(&dir));
     let failures = horizons::fetch_all(&targets, &dir, start, stop, |t, res| match res {
-        Ok((path, n)) => println!("ok   {:<12} {:>9} bytes  {}", t.label, n, path.display()),
+        Ok((path, n)) => println!(
+            "ok   {:<12} {:>9} bytes  {}",
+            t.label,
+            n,
+            pericynthion::display_path(path)
+        ),
         Err(e) => eprintln!("FAIL {:<12} {e}", t.label),
     })?;
     if failures > 0 {
@@ -2401,8 +2664,9 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat, zo
     let coords_str = page_coords_str(observer);
     let sect_str = page_sect_label(computed).unwrap_or("–").to_string();
 
-    // calendar is guaranteed present by cmd_compute's pre-flight check
-    let calendar_str = match args.calendar.unwrap_or(CalendarArg::Gregorian) {
+    // --calendar is optional and defaults to auto, matching cmd_compute's
+    // resolution (unwrap_or Auto).
+    let calendar_str = match args.calendar.unwrap_or(CalendarArg::Auto) {
         CalendarArg::Julian => "Julian",
         CalendarArg::Gregorian => "Gregorian",
         CalendarArg::Auto => "Auto",
@@ -2817,6 +3081,135 @@ mod tests {
     use super::*;
 
     #[test]
+    fn expand_star_tokens_expands_notable_and_all_and_dedupes() {
+        let notable_len = pericynthion::stars::NOTABLE.len();
+        // "notable" alone -> all 33 notable names.
+        let a = expand_star_tokens(&["notable".to_string()]);
+        assert_eq!(a.len(), notable_len);
+        assert!(a.iter().any(|n| n.eq_ignore_ascii_case("Regulus")));
+        // "all" is an alias for the same set.
+        let b = expand_star_tokens(&["all".to_string()]);
+        assert_eq!(b.len(), notable_len);
+        // Combining with an explicit notable name does not duplicate it.
+        let c = expand_star_tokens(&["notable".to_string(), "Regulus".to_string()]);
+        assert_eq!(
+            c.len(),
+            notable_len,
+            "explicit Regulus must not double-count"
+        );
+        // A non-sentinel passes through.
+        let d = expand_star_tokens(&["Sirius".to_string()]);
+        assert_eq!(d, vec!["Sirius".to_string()]);
+    }
+
+    #[test]
+    fn bare_stars_defaults_to_notable_sentinel() {
+        // A bare `--stars` (no value) resolves to the `notable` sentinel, which
+        // `expand_star_tokens` turns into the 33 common-name stars.
+        let a = compute_args(&["--stars"]);
+        assert_eq!(a.stars, vec!["notable".to_string()]);
+        assert_eq!(
+            expand_star_tokens(&a.stars).len(),
+            pericynthion::stars::NOTABLE.len()
+        );
+    }
+
+    #[test]
+    fn stars_with_comma_list_still_splits() {
+        // An explicit comma list is still split on the delimiter.
+        let a = compute_args(&["--stars", "Regulus,Sirius"]);
+        assert_eq!(a.stars, vec!["Regulus".to_string(), "Sirius".to_string()]);
+    }
+
+    #[test]
+    fn stars_notable_plus_explicit_still_expands() {
+        // `notable,<non-notable>` -> the 33 notables plus the extra name.
+        // Sadalmelek is a Robson/Brady name that is not in NOTABLE, so it adds one.
+        let a = compute_args(&["--stars", "notable,Sadalmelek"]);
+        assert_eq!(
+            a.stars,
+            vec!["notable".to_string(), "Sadalmelek".to_string()]
+        );
+        assert_eq!(
+            expand_star_tokens(&a.stars).len(),
+            pericynthion::stars::NOTABLE.len() + 1
+        );
+    }
+
+    #[test]
+    fn bare_stars_does_not_swallow_following_flag() {
+        // A flag immediately after a bare `--stars` must not be consumed as its value.
+        let a = compute_args(&["--stars", "--antiscia"]);
+        assert_eq!(a.stars, vec!["notable".to_string()]);
+        assert!(a.antiscia);
+    }
+
+    #[test]
+    fn resolve_fetch_source_finds_existing_mirror_root() {
+        // An explicit --jpl-data pointing at an existing mirror
+        // (<tmp>/nasa/ssd.jpl.nasa.gov) resolves back to the mirror root
+        // (<tmp>/nasa) so it can be used as a copy-on-write clone source.
+        let tmp = tempdir::TempDir::new("starcat-fetch-source").unwrap();
+        let nasa = tmp.path().join("nasa");
+        let ssd = nasa.join("ssd.jpl.nasa.gov");
+        std::fs::create_dir_all(&ssd).unwrap();
+        let source = resolve_fetch_source(Some(ssd.as_path()));
+        assert_eq!(source, Some(nasa));
+    }
+
+    #[test]
+    fn resolve_fetch_source_is_none_when_no_mirror_present() {
+        // A path with no `ssd.jpl.nasa.gov/` ancestor is not a usable source.
+        let tmp = tempdir::TempDir::new("starcat-fetch-nosource").unwrap();
+        assert_eq!(resolve_fetch_source(Some(tmp.path())), None);
+    }
+
+    #[test]
+    fn has_jpl_data_accepts_flat_layout() {
+        // A flat default-dir drop (just header.441 + the SPK, no mirror tree).
+        let tmp = tempdir::TempDir::new("starcat-flat-datadir").unwrap();
+        assert!(!has_jpl_data(tmp.path()));
+        std::fs::write(tmp.path().join("sb441-n16.bsp"), b"x").unwrap();
+        assert!(has_jpl_data(tmp.path()));
+    }
+
+    #[test]
+    fn has_jpl_data_accepts_full_mirror_layout() {
+        // The canonical archivist layout must also be recognised.
+        let tmp = tempdir::TempDir::new("starcat-mirror-datadir").unwrap();
+        let de = tmp
+            .path()
+            .join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441");
+        std::fs::create_dir_all(&de).unwrap();
+        std::fs::write(de.join("header.441"), b"x").unwrap();
+        assert!(has_jpl_data(tmp.path()));
+    }
+
+    #[test]
+    fn data_fetch_readout_reports_present_bundles() {
+        use std::fs;
+        let tmp = tempdir::TempDir::new("fetchcap").unwrap();
+        let root = tmp.path();
+        fs::write(root.join("header.441"), b"h").unwrap();
+        fs::write(root.join("linux_p.441"), b"b").unwrap();
+        fs::write(root.join("sb441-n16.bsp"), b"x").unwrap();
+        fs::write(root.join("sb441-n373.bsp"), b"y").unwrap();
+        let report = pericynthion::assess(Some(root), None);
+        let out = pericynthion::render_capabilities(&report);
+        assert!(out.contains("[have] Planets"));
+        assert!(out.contains("[have] Main-belt"));
+        assert!(out.contains("[have] Dwarf planets"));
+        assert!(out.contains("[need] Centaurs"));
+        assert!(out.contains("starcat horizons cent"));
+    }
+
+    #[test]
+    fn what_flag_lists_sources_and_bodies() {
+        let t = pericynthion::what_gets_you_what();
+        assert!(t.contains("Ceres") && t.contains("Chiron") && t.contains("starcat horizons"));
+    }
+
+    #[test]
     fn data_subcommand_tree_is_wired() {
         use clap::CommandFactory;
         let cli = Cli::command();
@@ -2908,6 +3301,107 @@ mod tests {
             Command::Compute(a) => a,
             _ => panic!("expected Compute"),
         }
+    }
+
+    #[test]
+    fn transition_era_pre_cutover_year_false() {
+        assert!(!in_calendar_transition_era(1500, 1, 1));
+    }
+
+    #[test]
+    fn transition_era_day_before_cutover_false() {
+        assert!(!in_calendar_transition_era(1582, 10, 14));
+    }
+
+    #[test]
+    fn transition_era_cutover_day_true() {
+        assert!(in_calendar_transition_era(1582, 10, 15));
+    }
+
+    #[test]
+    fn transition_era_mid_window_true() {
+        assert!(in_calendar_transition_era(1700, 6, 1));
+    }
+
+    #[test]
+    fn transition_era_last_ambiguous_year_true() {
+        assert!(in_calendar_transition_era(1927, 12, 31));
+    }
+
+    #[test]
+    fn transition_era_post_1927_false() {
+        assert!(!in_calendar_transition_era(1928, 1, 1));
+    }
+
+    #[test]
+    fn transition_era_modern_false() {
+        assert!(!in_calendar_transition_era(2000, 1, 1));
+    }
+
+    #[test]
+    fn resolve_calendar_errors_in_era_without_flag() {
+        // In-window date, no --calendar -> hard error carrying the real
+        // jurisdiction-dependent message (asserted so a regression is caught).
+        let err = resolve_calendar_arg(None, 1700, 6, 1).expect_err("in-era must error");
+        let msg = err.to_string();
+        assert!(msg.contains("1582-1927"), "message was: {msg}");
+        assert!(msg.contains("jurisdiction"), "message was: {msg}");
+    }
+
+    #[test]
+    fn resolve_calendar_yields_auto_out_of_era_without_flag() {
+        // Out-of-window date, no --calendar -> Auto default.
+        let c = resolve_calendar_arg(None, 2000, 1, 1).expect("out-of-era resolves");
+        assert!(matches!(c, CalendarArg::Auto));
+    }
+
+    #[test]
+    fn resolve_calendar_explicit_wins_in_era() {
+        // Explicit --calendar in-window is honored (no error).
+        let c =
+            resolve_calendar_arg(Some(CalendarArg::Julian), 1700, 6, 1).expect("explicit resolves");
+        assert!(matches!(c, CalendarArg::Julian));
+    }
+
+    #[test]
+    fn resolve_calendar_explicit_honored_modern() {
+        // An explicit choice wins regardless of era: Julian "today" is silly but
+        // honored, never overridden to Auto.
+        let c =
+            resolve_calendar_arg(Some(CalendarArg::Julian), 2024, 1, 1).expect("explicit resolves");
+        assert!(matches!(c, CalendarArg::Julian));
+    }
+
+    #[test]
+    fn resolve_calendar_explicit_honored_pre_cutover() {
+        // Explicit proleptic Gregorian before the 1582 cutover is silly but
+        // honored, never overridden to Auto.
+        let c = resolve_calendar_arg(Some(CalendarArg::Gregorian), 1400, 1, 1)
+            .expect("explicit resolves");
+        assert!(matches!(c, CalendarArg::Gregorian));
+    }
+
+    #[test]
+    fn bare_compute_without_calendar_parses_to_none() {
+        // A bare `compute` (with the required --date/--time/--tz) parses, and
+        // --calendar is left as None; the transition-era rule is enforced later
+        // in cmd_compute, not by clap.
+        let a = compute_args(&[]);
+        assert!(a.calendar.is_none());
+    }
+
+    #[test]
+    fn compute_missing_date_still_errors() {
+        // --calendar is optional at the clap layer, but --date remains required.
+        let err = Cli::try_parse_from(["starcat", "compute", "--time", "12:00", "--tz", "+00:00"]);
+        // clap accepts it (date is Option at the clap layer); the runtime
+        // pre-flight check is what enforces --date. Assert the parsed value has
+        // no date so the runtime check would fire.
+        let args = match err.expect("clap parse").command {
+            Command::Compute(a) => a,
+            _ => panic!("expected Compute"),
+        };
+        assert!(args.date.is_none());
     }
 
     #[test]
@@ -3492,5 +3986,99 @@ mod tests {
         } else {
             panic!("expected Compute");
         }
+    }
+
+    #[test]
+    fn horizons_default_dir_appends_horizons_subdir() {
+        let base = PathBuf::from("/x/starcat");
+        let got = horizons_default_dir(Some(base)).expect("Some base yields Some dir");
+        assert_eq!(
+            got.file_name().and_then(|n| n.to_str()),
+            Some("horizons"),
+            "default horizons dir must end in `horizons`, got {got:?}"
+        );
+        assert_eq!(got, PathBuf::from("/x/starcat/horizons"));
+    }
+
+    #[test]
+    fn horizons_default_dir_is_none_without_base() {
+        assert!(
+            horizons_default_dir(None).is_none(),
+            "no platform data dir must propagate to None"
+        );
+    }
+
+    #[test]
+    fn resolve_horizons_dir_returns_explicit_out_verbatim() {
+        // An explicit --out is returned as-is, ahead of env/default resolution.
+        let out = PathBuf::from("/tmp/some/explicit/dir");
+        let got = resolve_horizons_dir(Some(&out)).expect("explicit --out resolves");
+        assert_eq!(got, out);
+    }
+
+    #[test]
+    fn fetch_header_lines_reports_root_count_and_total() {
+        let entries = vec![
+            oracle::OracleEntry {
+                path: "ssd.jpl.nasa.gov/a.bsp".to_string(),
+                size: 1_000_000,
+                blake3_hex: "00",
+            },
+            oracle::OracleEntry {
+                path: "ssd.jpl.nasa.gov/b.bsp".to_string(),
+                size: 2_000_000,
+                blake3_hex: "11",
+            },
+        ];
+        let root = PathBuf::from("/data/starcat");
+        let lines = fetch_header_lines("de441", "the survey", &root, None, &entries);
+        let joined = lines.join("\n");
+        // Destination root appears.
+        assert!(
+            joined.contains("/data/starcat"),
+            "header must name the root: {joined}"
+        );
+        // With no source, no reuse line is emitted.
+        assert!(
+            !joined.contains("Reusing existing mirror"),
+            "no source => no reuse line: {joined}"
+        );
+        // File count appears.
+        assert!(
+            joined.contains("2 file(s)"),
+            "header must state the file count: {joined}"
+        );
+        // Human byte total appears (3_000_000 bytes -> "2.86 MiB").
+        let expected_total = indicatif::HumanBytes(3_000_000).to_string();
+        assert!(
+            joined.contains(&expected_total),
+            "header must state the human byte total {expected_total}: {joined}"
+        );
+        // Slug/description appear.
+        assert!(
+            joined.contains("de441"),
+            "header must name the slug: {joined}"
+        );
+        assert!(
+            joined.contains("the survey"),
+            "header must include the description: {joined}"
+        );
+    }
+
+    #[test]
+    fn fetch_header_lines_announces_cow_source_when_present() {
+        let entries = vec![oracle::OracleEntry {
+            path: "ssd.jpl.nasa.gov/a.bsp".to_string(),
+            size: 1,
+            blake3_hex: "00",
+        }];
+        let root = PathBuf::from("/data/starcat");
+        let source = PathBuf::from("/mnt/nasa");
+        let joined =
+            fetch_header_lines("de441", "d", &root, Some(source.as_path()), &entries).join("\n");
+        assert!(
+            joined.contains("Reusing existing mirror") && joined.contains("/mnt/nasa"),
+            "header must announce the CoW source: {joined}"
+        );
     }
 }

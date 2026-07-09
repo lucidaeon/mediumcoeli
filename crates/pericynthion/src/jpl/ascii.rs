@@ -232,7 +232,7 @@ pub(crate) fn index_chunks(
                     "ASCII chunk {} start_jd {} is not granule-aligned to grid origin {} \
                      (granule {} days, {granules} granules) — record_for_jd may mis-select \
                      near a chunk seam",
-                    c.path.display(),
+                    crate::display_path(&c.path),
                     c.start_jd,
                     grid_origin,
                     granule,

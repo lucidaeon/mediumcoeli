@@ -124,13 +124,27 @@ pub struct VerifyReport {
 #[must_use]
 pub fn verify_entry(root: &Path, entry: &OracleEntry) -> VerifyReport {
     let full = root.join(&entry.path);
-    let status = match std::fs::metadata(&full) {
+    VerifyReport {
+        path: entry.path.clone(),
+        status: verify_file(&full, entry),
+    }
+}
+
+/// Verify a specific file on disk against an oracle entry's size and BLAKE3.
+///
+/// Unlike [`verify_entry`], which joins `entry.path` under a mirror root, this
+/// checks the file *at `path` exactly* — useful when the file was located by a
+/// layout-agnostic walk (a flat drop-folder) rather than the canonical mirror
+/// layout. Size is checked first (fast fail), then the hash.
+#[must_use]
+pub fn verify_file(path: &Path, entry: &OracleEntry) -> VerifyStatus {
+    match std::fs::metadata(path) {
         Err(_) => VerifyStatus::Missing,
         Ok(m) if m.len() != entry.size => VerifyStatus::SizeMismatch {
             expected: entry.size,
             actual: m.len(),
         },
-        Ok(_) => match hash_file(&full) {
+        Ok(_) => match hash_file(path) {
             Ok(actual) if actual == entry.blake3_hex => VerifyStatus::Ok,
             Ok(actual) => VerifyStatus::HashMismatch {
                 expected: entry.blake3_hex,
@@ -138,10 +152,6 @@ pub fn verify_entry(root: &Path, entry: &OracleEntry) -> VerifyReport {
             },
             Err(_) => VerifyStatus::Missing,
         },
-    };
-    VerifyReport {
-        path: entry.path.clone(),
-        status,
     }
 }
 
@@ -247,11 +257,99 @@ pub fn mirror_root_from(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Normalize a user-supplied start path to the mirror *root* — the directory
+/// that contains (or will contain) `ssd.jpl.nasa.gov/` — for WRITE/fetch use,
+/// where the mirror may not exist yet. Unlike [`mirror_root_from`], never
+/// returns `None`: if no existing mirror is found by walking up, and the path
+/// descends through an `ssd.jpl.nasa.gov` component, the parent of that
+/// component is used (so `root.join(entry.path)` never doubles the segment);
+/// otherwise the path is returned as the root to create the mirror under.
+/// Lexical only — the second/third cases never touch the filesystem.
+#[must_use]
+pub fn mirror_root_for_write(start: &Path) -> PathBuf {
+    // 1. An existing mirror wins.
+    if let Some(root) = mirror_root_from(start) {
+        return root;
+    }
+    // 2. Descends through an `ssd.jpl.nasa.gov` component: take everything
+    //    before it, so `root.join(entry.path)` does not double the segment.
+    let comps: Vec<std::path::Component> = start.components().collect();
+    if let Some(idx) = comps
+        .iter()
+        .position(|c| c.as_os_str() == "ssd.jpl.nasa.gov")
+    {
+        return comps[..idx].iter().collect();
+    }
+    // 3. No mirror, no ssd component: create the mirror under `start` as-is.
+    display_path_buf(start)
+}
+
+/// Render a filesystem path for display, collapsing repeated separators and
+/// normalizing `.` components. Lexical only — never touches the filesystem
+/// (safe for paths that don't exist yet; unlike `canonicalize`).
+#[must_use]
+pub fn display_path(p: &Path) -> String {
+    display_path_buf(p).display().to_string()
+}
+
+/// Lexically tidy a path (collapse repeated separators, drop `.` components)
+/// as a [`PathBuf`], for storing a clean value rather than only displaying it.
+#[must_use]
+fn display_path_buf(p: &Path) -> PathBuf {
+    p.components().collect::<PathBuf>()
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     /// BLAKE3 of `"hello world\n"` — shared with A1/A3 tests.
     pub(super) const TEST_HELLO_HASH: &str =
         "dc5a4edb8240b018124052c330270696f96771a63b45250a5c17d3000e823355";
+
+    #[test]
+    fn mirror_root_for_write_uses_existing_mirror() {
+        let tmp = tempdir::TempDir::new("oracle-write-existing").unwrap();
+        // Build <tmp>/nasa/ssd.jpl.nasa.gov and point start at the ssd dir.
+        let nasa = tmp.path().join("nasa");
+        let ssd = nasa.join("ssd.jpl.nasa.gov");
+        std::fs::create_dir_all(&ssd).unwrap();
+        // start pointing *into* the mirror resolves up to the mirror root.
+        assert_eq!(super::mirror_root_for_write(&ssd), nasa);
+    }
+
+    #[test]
+    fn mirror_root_for_write_strips_ssd_component_when_absent() {
+        // Nonexistent path descending through an ssd.jpl.nasa.gov component:
+        // the parent of that component is the mirror root.
+        assert_eq!(
+            super::mirror_root_for_write(Path::new("/x/ssd.jpl.nasa.gov")),
+            PathBuf::from("/x")
+        );
+        // Deep, still nonexistent — same answer.
+        assert_eq!(
+            super::mirror_root_for_write(Path::new("/x/ssd.jpl.nasa.gov/ftp/eph")),
+            PathBuf::from("/x")
+        );
+    }
+
+    #[test]
+    fn mirror_root_for_write_returns_path_as_is_without_ssd_component() {
+        assert_eq!(
+            super::mirror_root_for_write(Path::new("/x/data")),
+            PathBuf::from("/x/data")
+        );
+    }
+
+    #[test]
+    fn display_path_collapses_repeated_separators() {
+        assert_eq!(super::display_path(Path::new("/a//b/")), "/a/b");
+        assert_eq!(super::display_path(Path::new("a//b")), "a/b");
+        // Root-only stays root.
+        assert_eq!(super::display_path(Path::new("/")), "/");
+        // Relative dot component is normalized away.
+        assert_eq!(super::display_path(Path::new("a/./b")), "a/b");
+    }
 
     #[test]
     fn verify_entry_reports_ok_missing_and_mismatch() {

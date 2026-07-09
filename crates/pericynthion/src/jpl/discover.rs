@@ -217,13 +217,32 @@ pub fn locate(start: &Path) -> Result<DatasetLocation, PericynthionError> {
             path: start.to_path_buf(),
             source: std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("{} is not a directory", start.display()),
+                format!("{} is not a directory", crate::display_path(start)),
             ),
         });
     };
 
     let mut candidates: Vec<Candidate> = Vec::new();
     collect_candidates(&start, 8, &mut candidates);
+
+    // Fallback for layouts deeper than the recursive cap (or otherwise missed):
+    // locate any `header.<digits>` file with the layout-agnostic tree walker and
+    // classify its parent directory. This resolves a flat drop-folder no matter
+    // how deep it sits under `start`.
+    if candidates.is_empty()
+        && let Some(header) = crate::locate_jpl_file_matching(&start, is_de_header_name)
+        && let Some(parent) = header.parent()
+    {
+        if let Ok(paths) = discover(parent) {
+            candidates.push(Candidate::Binary(paths));
+        } else if let Some((hdr, denum)) = discover_ascii(parent) {
+            candidates.push(Candidate::Ascii {
+                header: hdr,
+                dir: parent.to_path_buf(),
+                denum,
+            });
+        }
+    }
 
     candidates
         .into_iter()
@@ -240,7 +259,7 @@ pub fn locate(start: &Path) -> Result<DatasetLocation, PericynthionError> {
                 std::io::ErrorKind::NotFound,
                 format!(
                     "no DE dataset (binary or ASCII) found under {}",
-                    start.display()
+                    crate::display_path(&start)
                 ),
             ),
         })
@@ -257,6 +276,14 @@ pub struct JplDataPaths {
     pub denum: u32,
 }
 
+/// True when `name` is a DE-series ASCII header file name: `header.` followed
+/// by one or more ASCII digits (e.g. `header.441`). Used by the walker fallback
+/// in [`locate`] to find a dataset directory in any layout.
+fn is_de_header_name(name: &str) -> bool {
+    name.strip_prefix("header.")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Discover the highest-numbered ephemeris in `dir`, returning the
 /// header/binary pair.
 ///
@@ -271,7 +298,7 @@ pub fn discover(dir: &Path) -> Result<JplDataPaths, PericynthionError> {
             path: dir.to_path_buf(),
             source: std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("{} is not a directory", dir.display()),
+                format!("{} is not a directory", crate::display_path(dir)),
             ),
         });
     }
@@ -310,7 +337,7 @@ pub fn discover(dir: &Path) -> Result<JplDataPaths, PericynthionError> {
                 std::io::ErrorKind::NotFound,
                 format!(
                     "no `header.NNN` file in {}. Contains: {}",
-                    dir.display(),
+                    crate::display_path(dir),
                     listing.join(", ")
                 ),
             ),
@@ -340,7 +367,7 @@ pub fn discover(dir: &Path) -> Result<JplDataPaths, PericynthionError> {
             format!(
                 "found header(s) {:?} in {} but no matching `linux_*.NNN` or `xnp_*.NNN` binary",
                 header_list,
-                dir.display()
+                crate::display_path(dir)
             ),
         ),
     })
@@ -522,6 +549,57 @@ mod tests {
         write_file(&de, "linux_m13000p17000.441", 8144 * 3);
         let loc = super::locate(tmp.path()).unwrap();
         assert!(matches!(loc, super::DatasetLocation::Binary(_)));
+    }
+
+    #[test]
+    fn locate_finds_binary_in_flat_folder() {
+        // A normal user dropped header.441 + linux_*.441 into one flat folder
+        // (no ssd.jpl.nasa.gov mirror tree). locate must still resolve it.
+        let tmp = make_dir();
+        write_file(tmp.path(), "header.441", 22_802);
+        let bin = write_file(tmp.path(), "linux_m13000p17000.441", 8144 * 3);
+        let loc = super::locate(tmp.path()).unwrap();
+        match loc {
+            super::DatasetLocation::Binary(p) => {
+                assert_eq!(p.denum, 441);
+                assert_eq!(p.binary, bin);
+            }
+            l @ super::DatasetLocation::Ascii { .. } => panic!("expected Binary, got {l:?}"),
+        }
+    }
+
+    #[test]
+    fn locate_finds_binary_in_flat_folder_nested_below_start() {
+        // The flat folder is nested a few levels below the pointed-at root.
+        let tmp = make_dir();
+        let de = tmp.path().join("a/b/de441_flat");
+        std::fs::create_dir_all(&de).unwrap();
+        write_file(&de, "header.441", 22_802);
+        let bin = write_file(&de, "linux_m13000p17000.441", 8144 * 3);
+        let loc = super::locate(tmp.path()).unwrap();
+        match loc {
+            super::DatasetLocation::Binary(p) => assert_eq!(p.binary, bin),
+            l @ super::DatasetLocation::Ascii { .. } => panic!("expected Binary, got {l:?}"),
+        }
+    }
+
+    #[test]
+    fn locate_finds_binary_flat_folder_deeper_than_recursion_cap() {
+        // Nest the dataset dir 12 levels deep — past the depth-8 recursive cap —
+        // so only the walker fallback in `locate` can find it.
+        let tmp = make_dir();
+        let mut de = tmp.path().to_path_buf();
+        for i in 0..12 {
+            de = de.join(format!("lvl{i}"));
+        }
+        std::fs::create_dir_all(&de).unwrap();
+        write_file(&de, "header.441", 22_802);
+        let bin = write_file(&de, "linux_m13000p17000.441", 8144 * 3);
+        let loc = super::locate(tmp.path()).unwrap();
+        match loc {
+            super::DatasetLocation::Binary(p) => assert_eq!(p.binary, bin),
+            l @ super::DatasetLocation::Ascii { .. } => panic!("expected Binary, got {l:?}"),
+        }
     }
 
     #[test]
