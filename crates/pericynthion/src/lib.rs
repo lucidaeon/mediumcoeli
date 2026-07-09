@@ -132,6 +132,7 @@ pub mod lots;
 pub mod manifest;
 pub mod placements;
 pub mod provenance;
+pub mod se1;
 #[cfg(feature = "sidereal")]
 pub mod sidereal;
 pub mod spk;
