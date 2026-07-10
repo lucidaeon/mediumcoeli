@@ -1,0 +1,92 @@
+name: Docker release (ghcr + Docker Hub)
+
+on:
+  push:
+    tags:
+      - "starcat/*"
+      - "blackmoon/*"
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: "Crate (matches scripts/Dockerfile.<crate>), e.g. starcat"
+        required: true
+      version:
+        description: "Version to publish, e.g. 0.10.0"
+        required: true
+
+permissions:
+  contents: read
+  packages: write   # push to ghcr under this repo
+
+concurrency:
+  group: docker-${{ github.ref }}-${{ github.event.inputs.crate }}
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Derive crate + version + Dockerfile
+        id: id
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            crate="${{ github.event.inputs.crate }}"
+            version="${{ github.event.inputs.version }}"
+          else
+            ref="${GITHUB_REF#refs/tags/}"   # e.g. starcat/0.10.0
+            crate="${ref%%/*}"
+            version="${ref##*/}"
+          fi
+          dockerfile="scripts/Dockerfile.${crate}"
+          if [[ ! -f "$dockerfile" ]]; then
+            echo "::error::no ${dockerfile} — nothing to build for '${crate}'"
+            exit 1
+          fi
+          {
+            echo "crate=${crate}"
+            echo "version=${version}"
+            echo "dockerfile=${dockerfile}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: lucidaeon
+          password: ${{ secrets.DOCKERHUB_PERSONAL_ACCESS }}
+
+      - name: Tags + OCI labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/lucidaeon/${{ steps.id.outputs.crate }}
+            docker.io/lucidaeon/${{ steps.id.outputs.crate }}
+          tags: |
+            type=raw,value=${{ steps.id.outputs.version }}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/lucidaeon/mediumcoeli
+
+      - name: Build + push (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.id.outputs.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false   # no unknown/unknown attestation manifest cluttering the package

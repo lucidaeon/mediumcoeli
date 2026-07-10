@@ -1,6 +1,6 @@
 [package]
 name = "starcat"
-version = "0.10.0"
+version = "0.11.0"
 description = "A tribute to UNIX `cat`: Command-line astrological ephemeris and natal-chart calculator built on pericynthion"
 keywords = ["astrology", "divination", "ephemeris"]
 categories = ["command-line-utilities", "science"]

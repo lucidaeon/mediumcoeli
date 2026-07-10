@@ -43,12 +43,22 @@
 //!     [--helio]                          # heliocentric \
 //!     [--bodies sun,moon,mercury,...] \
 //!     [--house whole-sign,equal-from-asc,placidus,regiomontanus,porphyry,alcabitius,morinus] \
-//!     [--dd | --dms | --ddm | --dm]      # coord format (page: --dm; text: --dd) \
+//!     [--dd --dms --ddm --dm --d]        # coord format; priority dd > dms > ddm > dm > d (default: text dd, page dm) \
 //!     [--jpl-data PATH] \
-//!     [--text | --page]                  # output style (default = jzod)
+//!     [--jzod --text --page]             # output style; priority jzod > text > page (default jzod)
 //!     [--asteroids ceres,vesta,...]      # asteroid apparent positions (all output modes)
 //!     [--spk PATH]                       # explicit BSP file; auto-discovered when omitted
 //! ```
+//!
+//! Every `compute` flag also reads from a `STARCAT_<FLAG>` environment
+//! variable (e.g. `--date` ↔ `STARCAT_DATE`, `--house` ↔ `STARCAT_HOUSE`),
+//! so a chart can be driven entirely from the environment; a flag passed on
+//! the command line always overrides its env var. The coord-format and
+//! output-style flags are no longer mutually exclusive — when several are
+//! set the highest-priority one wins (the orderings shown above), and a CLI
+//! flag beats an env var. Boolean flags read `true`/`false` from the
+//! environment (e.g. `STARCAT_HELIO=true`); `--jpl-data` keeps resolving via
+//! `$STARCAT_JPL_DATA` as described below.
 //!
 //! # JPL data resolution
 //!
@@ -92,6 +102,7 @@
 #![allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
 
 use anyhow::{Context, Result, bail};
+use clap::parser::ValueSource;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use pericynthion::body::Body;
 use pericynthion::chart::{ChartRequest, ComputedChart, ModeRequest};
@@ -401,12 +412,12 @@ enum VerifyScope {
 struct ComputeArgs {
     /// Date in YYYY-MM-DD form (proleptic; negative years allowed for BCE).
     /// Required to compute a chart.
-    #[arg(long)]
+    #[arg(long, env = "STARCAT_DATE")]
     date: Option<String>,
 
     /// Time in `HH:MM[:SS]` form, in the zone specified by `--tz` or `--lmt`.
     /// Required to compute a chart.
-    #[arg(long)]
+    #[arg(long, env = "STARCAT_TIME")]
     time: Option<String>,
 
     /// Which calendar the date is recorded in. Optional for dates before
@@ -414,12 +425,12 @@ struct ComputeArgs {
     /// cutover, Gregorian after). REQUIRED for 1582-1927 dates, where the
     /// recorded calendar is jurisdiction-dependent (errors if omitted); pass
     /// julian|gregorian.
-    #[arg(long)]
+    #[arg(long, env = "STARCAT_CALENDAR")]
     calendar: Option<CalendarArg>,
 
     /// UT offset for the recorded time, as ±HH:MM (e.g. -05:00). Mutually
     /// exclusive with `--lmt`.
-    #[arg(long, conflicts_with = "lmt")]
+    #[arg(long, conflicts_with = "lmt", env = "STARCAT_TZ")]
     tz: Option<String>,
 
     /// Optional human-readable timezone name (e.g. `PST`, `CET`) — used only
@@ -431,47 +442,47 @@ struct ComputeArgs {
 
     /// Use Local Mean Time derived from `--lon`. Mutually exclusive with
     /// `--tz`. For pre-railway / ancient charts with no civil zone.
-    #[arg(long, requires = "lon")]
+    #[arg(long, requires = "lon", env = "STARCAT_LMT")]
     lmt: bool,
 
     /// Geographic latitude — any format: decimal degrees (`34.14`),
     /// DMS (`39° 44' 28" N`), or DDM (`39° 44.477' N`). Required for
     /// topocentric positions and the Ac/Vx angles.
-    #[arg(long)]
+    #[arg(long, env = "STARCAT_LAT")]
     lat: Option<String>,
 
     /// Geographic longitude — any format: decimal degrees (`36.157`),
     /// DMS (`36° 9' 25" E`), or DDM (`36° 9.417' E`). Required by `--lmt`;
     /// when paired with `--lat`, positions are computed topocentric.
-    #[arg(long)]
+    #[arg(long, env = "STARCAT_LON")]
     lon: Option<String>,
 
     /// Compute heliocentric ecliptic positions (Sun-centred) instead of
     /// geocentric. Earth replaces the Sun in the default body list.
-    #[arg(long)]
+    #[arg(long, env = "STARCAT_HELIO")]
     helio: bool,
 
     /// Comma-separated bodies to compute. Defaults to all ten classical
     /// bodies (sun,moon,mercury,venus,mars,jupiter,saturn,uranus,neptune,pluto).
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', env = "STARCAT_BODIES")]
     bodies: Option<Vec<BodyArg>>,
 
     /// Comma-separated house system(s) to emit. Defaults to all seven
     /// always-on systems (whole-sign,equal-from-asc,placidus,regiomontanus,porphyry,alcabitius,morinus).
-    #[arg(long = "house", value_delimiter = ',')]
+    #[arg(long = "house", value_delimiter = ',', env = "STARCAT_HOUSE")]
     houses: Option<Vec<HouseArg>>,
 
     /// Lunar-node computation mode: `mean` (Meeus polynomial; aliases:
     /// `average`) or `true` (osculating from Moon state; aliases:
     /// `apparent`, `osculating`). Default: `true`.
-    #[arg(long = "nodes", default_value = "true")]
+    #[arg(long = "nodes", default_value = "true", env = "STARCAT_NODES")]
     nodes: NodesMode,
 
     /// Black Moon Lilith computation mode: `mean` (polynomial; alias:
     /// `average`) or `true` (osculating apogee from Moon state; aliases:
     /// `apparent`, `osculating`). Default: `true`.
     // https://web.archive.org/web/20260603210459/https://www.chani.com/astro-education/how-to-work-with-black-moon-lilith
-    #[arg(long = "lilith", default_value = "true")]
+    #[arg(long = "lilith", default_value = "true", env = "STARCAT_LILITH")]
     lilith: LilithMode,
 
     /// Any directory in the JPL mirror hierarchy: the de441 dir itself,
@@ -483,46 +494,46 @@ struct ComputeArgs {
     jpl_data: Option<PathBuf>,
 
     /// Emit JZOD-format JSON (default). Explicit flag; no-op when neither
-    /// `--text` nor `--page` is given. Mutually exclusive with `--text` / `--page`.
-    #[arg(long, visible_alias = "json", group = "output_mode")]
+    /// `--text` nor `--page` is given. When several output modes are set, the winner is chosen by priority (jzod > text > page); a CLI flag beats an env var.
+    #[arg(long, visible_alias = "json", env = "STARCAT_JZOD")]
     jzod: bool,
 
     /// Emit plain text (banner + placements list). Defaults to `--dd` coord
-    /// format. Mutually exclusive with `--page` / `--jzod`.
-    #[arg(long, group = "output_mode")]
+    /// format. See `--jzod` for how multiple output modes resolve.
+    #[arg(long, env = "STARCAT_TEXT")]
     text: bool,
 
     /// Emit the page renderer (banner + 4-column placements table sorted in
     /// zodiacal order from H1). Defaults to `--dm` coord format.
     /// No-op when built without the `page` feature.
-    /// Mutually exclusive with `--text` / `--jzod`.
-    #[arg(long, group = "output_mode")]
+    /// See `--jzod` for how multiple output modes resolve.
+    #[arg(long, env = "STARCAT_PAGE")]
     page: bool,
 
     /// Format longitudes/latitudes as decimal degrees (default).
-    /// e.g. `10.5042° Sco`. Mutually exclusive with `--dms` / `--ddm` / `--dm` / `--d`.
-    #[arg(long, group = "coord_format")]
+    /// e.g. `10.5042° Sco`. When several coord formats are set, priority is dd > dms > ddm > dm > d; a CLI flag beats an env var.
+    #[arg(long, env = "STARCAT_DD")]
     dd: bool,
 
     /// Format longitudes/latitudes as degrees-minutes-seconds (seconds truncated).
-    /// e.g. `10°30'15" Sco`. Mutually exclusive with `--dd` / `--ddm` / `--dm` / `--d`.
-    #[arg(long, group = "coord_format")]
+    /// e.g. `10°30'15" Sco`. See `--dd` for how multiple coord formats resolve.
+    #[arg(long, env = "STARCAT_DMS")]
     dms: bool,
 
     /// Format longitudes/latitudes as degrees and decimal minutes.
-    /// e.g. `10°30.252' Sco`. Mutually exclusive with `--dd` / `--dms` / `--dm` / `--d`.
-    #[arg(long, group = "coord_format")]
+    /// e.g. `10°30.252' Sco`. See `--dd` for how multiple coord formats resolve.
+    #[arg(long, env = "STARCAT_DDM")]
     ddm: bool,
 
     /// Format longitudes/latitudes as degrees-minutes (arcseconds truncated).
-    /// e.g. `10°30' Sco`. Mutually exclusive with `--dd` / `--dms` / `--ddm` / `--d`.
-    #[arg(long, group = "coord_format")]
+    /// e.g. `10°30' Sco`. See `--dd` for how multiple coord formats resolve.
+    #[arg(long, env = "STARCAT_DM")]
     dm: bool,
 
     /// Format longitudes/latitudes as integer degrees only (arcminutes and
     /// arcseconds truncated). e.g. `10° Sco`.
-    /// Mutually exclusive with `--dd` / `--dms` / `--ddm` / `--dm`.
-    #[arg(long = "d", group = "coord_format")]
+    /// See `--dd` for how multiple coord formats resolve.
+    #[arg(long = "d", env = "STARCAT_D")]
     d: bool,
 
     /// Comma-separated body slugs (catalog names, case-insensitive) to compute
@@ -531,14 +542,14 @@ struct ComputeArgs {
     /// `--asteroids ceres,chiron,eris`. Bundled bodies (Ceres, Pallas, Juno,
     /// Vesta, Hygiea) are available from the JPL mirror; all others must be
     /// fetched first with `starcat horizons <class>`.
-    #[arg(long = "asteroids", value_delimiter = ',')]
+    #[arg(long = "asteroids", value_delimiter = ',', env = "STARCAT_ASTEROIDS")]
     asteroids: Vec<String>,
 
     /// Explicit path to a DAF/SPK file (e.g. `sb441-n16.bsp`), opened in
     /// addition to the auto-discovered sb441 bundle and any `.bsp` files in
     /// `$STARCAT_HORIZONS_DATA`. A body is computed from whichever opened SPK
     /// covers its NAIF id.
-    #[arg(long = "spk")]
+    #[arg(long = "spk", env = "STARCAT_SPK")]
     spk: Option<PathBuf>,
 
     /// Compute and render a chart containing every body starcat currently
@@ -548,7 +559,7 @@ struct ComputeArgs {
     ///
     /// For just the list of supported points and bodies (no chart, no inputs),
     /// see `starcat catalogue`.
-    #[arg(long = "omniscient")]
+    #[arg(long = "omniscient", env = "STARCAT_OMNISCIENT")]
     omniscient: bool,
 
     /// Comma-separated fixed star names to include in the chart. Accepts common
@@ -564,7 +575,8 @@ struct ComputeArgs {
         value_delimiter = ',',
         num_args = 0..=1,
         default_missing_value = "notable",
-        add = clap_complete::ArgValueCandidates::new(star_candidates)
+        add = clap_complete::ArgValueCandidates::new(star_candidates),
+        env = "STARCAT_STARS"
     )]
     stars: Vec<String>,
 
@@ -573,32 +585,32 @@ struct ComputeArgs {
     /// Each body's antiscion reflects across the Cancer/Capricorn (solstice)
     /// axis; the contra-antiscion reflects across the Aries/Libra (equinox) axis.
     /// No-op in `--page` mode.
-    #[arg(long = "antiscia")]
+    #[arg(long = "antiscia", env = "STARCAT_ANTISCIA")]
     antiscia: bool,
 
     /// Re-project all longitudes into the draconic zodiac (0° = Moon's mean
     /// North Node) before rendering. Applies to the default JZOD output (the
     /// chart `zodiac` becomes `draconic`) and to `--text`. The node variant is
     /// controlled by `--nodes`. No-op in `--page` mode.
-    #[arg(long = "draconic")]
+    #[arg(long = "draconic", env = "STARCAT_DRACONIC")]
     draconic: bool,
 
     /// Zodiac frame. Default `tropical`. `sidereal` subtracts the chosen
     /// ayanamsha (see `--ayanamsha`); `draconic` is equivalent to `--draconic`.
     /// Sidereal rotates placements (bodies, angles, nodes, Lilith, lots, stars)
     /// but leaves house cusps in tropical longitudes.
-    #[arg(long = "zodiac", value_enum, default_value_t = ZodiacArg::Tropical)]
+    #[arg(long = "zodiac", value_enum, default_value_t = ZodiacArg::Tropical, env = "STARCAT_ZODIAC")]
     zodiac: ZodiacArg,
 
     /// Ayanamsha slug for `--zodiac sidereal` (default `lahiri`; also
     /// `fagan_bradley`, `raman`). Ignored unless `--zodiac sidereal`.
-    #[arg(long = "ayanamsha")]
+    #[arg(long = "ayanamsha", env = "STARCAT_AYANAMSHA")]
     ayanamsha: Option<String>,
 
     /// Ayanāṃśa reduction frame for `--zodiac sidereal`. Absent = the chosen
     /// ayanāṃśa's intrinsic default (Lahiri true; Fagan-Bradley and Raman mean). Override
     /// for research: `mean` = precession only, `true` = precession + nutation.
-    #[arg(long = "ayanamsha-frame", value_enum)]
+    #[arg(long = "ayanamsha-frame", value_enum, env = "STARCAT_AYANAMSHA_FRAME")]
     ayanamsha_frame: Option<FrameArg>,
 }
 
@@ -617,24 +629,55 @@ enum CoordFormat {
     D,
 }
 
-impl CoordFormat {
-    fn from_args(args: &ComputeArgs) -> Self {
-        if args.dms {
-            Self::Dms
-        } else if args.ddm {
-            Self::Ddm
-        } else if args.dm {
-            Self::Dm
-        } else if args.d {
-            Self::D
-        } else {
-            // Page rendering defaults to --dm to match the banner's coord style;
-            // text and jzod default to --dd.
-            #[cfg(feature = "page")]
-            if args.page {
-                return Self::Dm;
+/// Which renderer `compute` emits. Resolved bail-free from the mutually
+/// non-exclusive `--jzod/--text/--page` flags: a flag set on the command line
+/// beats one set via env; within a tier the priority is jzod > text > page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputMode {
+    Jzod,
+    Text,
+    Page,
+}
+
+impl OutputMode {
+    fn resolve(m: &clap::ArgMatches) -> Self {
+        const CANDIDATES: [(&str, OutputMode); 3] = [
+            ("jzod", OutputMode::Jzod),
+            ("text", OutputMode::Text),
+            ("page", OutputMode::Page),
+        ];
+        for want in [ValueSource::CommandLine, ValueSource::EnvVariable] {
+            for (id, mode) in CANDIDATES {
+                if m.value_source(id) == Some(want) && m.get_flag(id) {
+                    return mode;
+                }
             }
-            Self::Dd
+        }
+        OutputMode::Jzod
+    }
+}
+
+impl CoordFormat {
+    /// Same two-tier resolution as `OutputMode`, priority dd > dms > ddm > dm > d.
+    /// When nothing is set, page renders in `dm`, everything else in `dd`.
+    fn resolve(m: &clap::ArgMatches, output: OutputMode) -> Self {
+        const CANDIDATES: [(&str, CoordFormat); 5] = [
+            ("dd", CoordFormat::Dd),
+            ("dms", CoordFormat::Dms),
+            ("ddm", CoordFormat::Ddm),
+            ("dm", CoordFormat::Dm),
+            ("d", CoordFormat::D),
+        ];
+        for want in [ValueSource::CommandLine, ValueSource::EnvVariable] {
+            for (id, fmt) in CANDIDATES {
+                if m.value_source(id) == Some(want) && m.get_flag(id) {
+                    return fmt;
+                }
+            }
+        }
+        match output {
+            OutputMode::Page => Self::Dm,
+            _ => Self::Dd,
         }
     }
 }
@@ -873,11 +916,19 @@ fn dataset_candidates() -> Vec<clap_complete::CompletionCandidate> {
 }
 
 fn main() -> Result<()> {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, FromArgMatches};
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).expect("clap validated the matches");
     match cli.command {
-        Command::Compute(args) => cmd_compute(args),
+        Command::Compute(args) => {
+            let m = matches
+                .subcommand_matches("compute")
+                .expect("compute subcommand matches present");
+            let output = OutputMode::resolve(m);
+            let coord = CoordFormat::resolve(m, output);
+            cmd_compute(args, output, coord)
+        }
         Command::Catalogue {
             bodies,
             points,
@@ -1149,9 +1200,9 @@ fn resolve_calendar_arg(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn cmd_compute(args: ComputeArgs) -> Result<()> {
+fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Result<()> {
     // === Output format (read before any partial moves of `args`) ===
-    let fmt = CoordFormat::from_args(&args);
+    let fmt = coord;
 
     // Fast-fail on I/O-free input validation (required-check, date parse,
     // calendar resolution) BEFORE resolving/opening the JPL ephemeris, so a bad
@@ -1248,7 +1299,7 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
         .map(|list| list.into_iter().map(Body::from).collect());
 
     // === House systems ===
-    let is_jzod = !args.text && !args.page;
+    let is_jzod = output == OutputMode::Jzod;
     let house_systems: Vec<HouseSystem> = if is_jzod {
         HouseSystem::DEFAULT_SET.to_vec()
     } else {
@@ -1402,7 +1453,7 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
             "{}",
             jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart]))
         );
-    } else if args.page {
+    } else if output == OutputMode::Page {
         #[cfg(feature = "page")]
         {
             let page_house_count = args
@@ -4361,5 +4412,128 @@ mod tests {
             joined.contains("Reusing existing mirror") && joined.contains("/mnt/nasa"),
             "header must announce the CoW source: {joined}"
         );
+    }
+
+    mod env_surface_tests {
+        use super::*;
+        use clap::CommandFactory;
+
+        /// Look up the env var bound to a `compute` arg by its clap id (field name).
+        fn compute_env_of(id: &str) -> Option<String> {
+            let cmd = Cli::command();
+            let compute = cmd
+                .find_subcommand("compute")
+                .expect("compute subcommand exists");
+            compute
+                .get_arguments()
+                .find(|a| a.get_id() == id)
+                .and_then(|a| a.get_env())
+                .map(|e| e.to_string_lossy().into_owned())
+        }
+
+        #[test]
+        fn compute_simple_flags_expose_starcat_env_vars() {
+            for (id, var) in [
+                ("date", "STARCAT_DATE"),
+                ("time", "STARCAT_TIME"),
+                ("calendar", "STARCAT_CALENDAR"),
+                ("tz", "STARCAT_TZ"),
+                ("lmt", "STARCAT_LMT"),
+                ("lat", "STARCAT_LAT"),
+                ("lon", "STARCAT_LON"),
+                ("helio", "STARCAT_HELIO"),
+                ("bodies", "STARCAT_BODIES"),
+                ("houses", "STARCAT_HOUSE"),
+                ("nodes", "STARCAT_NODES"),
+                ("lilith", "STARCAT_LILITH"),
+                ("asteroids", "STARCAT_ASTEROIDS"),
+                ("spk", "STARCAT_SPK"),
+                ("stars", "STARCAT_STARS"),
+                ("antiscia", "STARCAT_ANTISCIA"),
+                ("draconic", "STARCAT_DRACONIC"),
+                ("omniscient", "STARCAT_OMNISCIENT"),
+                ("zodiac", "STARCAT_ZODIAC"),
+                ("ayanamsha", "STARCAT_AYANAMSHA"),
+                ("ayanamsha_frame", "STARCAT_AYANAMSHA_FRAME"),
+            ] {
+                assert_eq!(compute_env_of(id).as_deref(), Some(var), "arg id: {id}");
+            }
+        }
+
+        #[test]
+        fn jpl_data_stays_hand_rolled_no_clap_env() {
+            // STARCAT_JPL_DATA is resolved in code, not via clap env.
+            assert_eq!(compute_env_of("jpl_data"), None);
+        }
+
+        fn compute_matches(argv: &[&str]) -> clap::ArgMatches {
+            let mut full = vec!["starcat", "compute"];
+            full.extend_from_slice(argv);
+            Cli::command()
+                .get_matches_from(full)
+                .subcommand_matches("compute")
+                .expect("compute submatches")
+                .clone()
+        }
+
+        #[test]
+        fn output_mode_priority_within_cli_tier() {
+            // All three set on the CLI (group removed): jzod > text > page.
+            let m = compute_matches(&["--jzod", "--text", "--page"]);
+            assert_eq!(OutputMode::resolve(&m), OutputMode::Jzod);
+            let m = compute_matches(&["--text", "--page"]);
+            assert_eq!(OutputMode::resolve(&m), OutputMode::Text);
+            let m = compute_matches(&["--page"]);
+            assert_eq!(OutputMode::resolve(&m), OutputMode::Page);
+        }
+
+        #[test]
+        fn output_mode_defaults_to_jzod_when_none_set() {
+            let m = compute_matches(&[]);
+            assert_eq!(OutputMode::resolve(&m), OutputMode::Jzod);
+        }
+
+        #[test]
+        fn coord_priority_and_defaults() {
+            // dd > dms > ddm > dm > d within the CLI tier.
+            let m = compute_matches(&["--dd", "--dms", "--ddm", "--dm", "--d"]);
+            assert_eq!(CoordFormat::resolve(&m, OutputMode::Jzod), CoordFormat::Dd);
+            let m = compute_matches(&["--dms", "--ddm"]);
+            assert_eq!(CoordFormat::resolve(&m, OutputMode::Jzod), CoordFormat::Dms);
+            // Nothing set: jzod/text default to dd, page defaults to dm.
+            let m = compute_matches(&[]);
+            assert_eq!(CoordFormat::resolve(&m, OutputMode::Jzod), CoordFormat::Dd);
+            assert_eq!(CoordFormat::resolve(&m, OutputMode::Page), CoordFormat::Dm);
+        }
+
+        #[test]
+        fn cli_flag_beats_env_var() {
+            // env sets the highest-priority mode, but a typed CLI flag must win.
+            // env is process-global; keep this in one test and clean up.
+            unsafe {
+                std::env::set_var("STARCAT_JZOD", "true");
+            }
+            let m = compute_matches(&["--page"]);
+            assert_eq!(OutputMode::resolve(&m), OutputMode::Page);
+            unsafe {
+                std::env::remove_var("STARCAT_JZOD");
+            }
+        }
+
+        #[test]
+        fn presentation_flags_expose_env_vars() {
+            for (id, var) in [
+                ("jzod", "STARCAT_JZOD"),
+                ("text", "STARCAT_TEXT"),
+                ("page", "STARCAT_PAGE"),
+                ("dd", "STARCAT_DD"),
+                ("dms", "STARCAT_DMS"),
+                ("ddm", "STARCAT_DDM"),
+                ("dm", "STARCAT_DM"),
+                ("d", "STARCAT_D"),
+            ] {
+                assert_eq!(compute_env_of(id).as_deref(), Some(var), "arg id: {id}");
+            }
+        }
     }
 }

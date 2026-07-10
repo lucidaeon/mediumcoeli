@@ -5,7 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/35429fa3bead501b7b82ccabced12c402f75edc8...main), [pericynthion/0.12.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.12.0), [starcat/0.10.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.10.0), [wristband/0.1.4](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.4), 2026.07.09
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/8cc6ea68d6332aa407985bc976350dd24c39ac08...main), [blackmoon/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.5.0), [starcat/0.11.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.11.0), 2026.07.10
+
+This cycle makes both CLIs drivable from the environment: every `starcat compute`
+input and every `blackmoon` file-conversion flag now also reads a matching
+`STARCAT_*` / `BLACKMOON_*` variable (a command-line flag still overrides its
+variable). It also turns starcat's previously mutually-exclusive output and
+coord-format flags into a bail-free priority resolution, adds format-slug
+tab-completion to blackmoon, and ships `starcat` / `blackmoon` container images to
+GHCR and Docker Hub on release tags.
+
+### Added — starcat
+
+- **Environment-variable configuration.** Every `compute` input flag now also
+  reads a flat `STARCAT_<FLAG>` variable (`--date` ↔ `STARCAT_DATE`, `--house` ↔
+  `STARCAT_HOUSE`, and so on), so a chart can be driven entirely from the
+  environment. A flag passed on the command line always overrides its variable;
+  boolean flags take `true`/`false`. `--jpl-data` keeps its existing
+  `$STARCAT_JPL_DATA` resolution.
+
+### Added — blackmoon
+
+- **Environment-variable configuration** for the file-conversion flags
+  (`BLACKMOON_INPUTS`, `_OUTPUT`, `_TO`, `_TARGET`, `_NORMALIZE`, `_STRICT`,
+  `_FILL_HOUSE` / `_FILL_ZODIAC` / `_FILL_LOCUS`, `_VERBOSE`); `BLACKMOON_INPUTS`
+  is comma-split for multiple inputs. Web-only, destructive, and consent flags are
+  intentionally excluded; the credential variables are unchanged.
+- **Format-slug tab-completion.** `--from` / `--to` / `--target` expose every
+  format-registry slug as a clap possible value, so shells tab-complete them and
+  `--help` lists them; unknown values surface clap's did-you-mean suggestions.
+  `FORMATS` stays the single source of truth.
+
+### Changed — starcat
+
+- **Output and coord-format flags no longer conflict.** `--jzod` / `--text` /
+  `--page` and `--dd` / `--dms` / `--ddm` / `--dm` / `--d` used to error when
+  combined; they now resolve to a single winner — a command-line flag beats an
+  environment variable, and within a source tier priority is `jzod > text > page`
+  and `dd > dms > ddm > dm > d`.
+
+### Added — ci / docker
+
+- Build and push `starcat` and `blackmoon` container images to GHCR and Docker Hub
+  on release tags; images carry OCI source / description / license labels for
+  registry linkage.
+
+### Changed — docs
+
+- README shell-completion section leads with clap's dynamic registration for
+  `starcat` (`source <(COMPLETE=bash starcat)`), documenting `generate-completion`
+  as the static fallback; `blackmoon` ships a static completion script.
+
+## [8cc6ea6](https://github.com/lucidaeon/mediumcoeli/compare/35429fa3bead501b7b82ccabced12c402f75edc8...8cc6ea68d6332aa407985bc976350dd24c39ac08), [pericynthion/0.12.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.12.0), [starcat/0.10.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.10.0), [wristband/0.1.4](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.4), 2026.07.09
 
 This cycle replaces the code-generated JPL **oracle** with a hand-edited
 `oracle.json` parsed at load, adds **entourages** (`starcat data fetch <series>`,

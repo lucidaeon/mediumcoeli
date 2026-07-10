@@ -32,6 +32,9 @@ RUN touch crates/astrogram/src/lib.rs \
  && cargo build --release --locked --bin blackmoon
 
 FROM alpine:latest
+LABEL org.opencontainers.image.source="https://github.com/lucidaeon/mediumcoeli"
+LABEL org.opencontainers.image.description="Command-line astrology data-format converter built on astrogram"
+LABEL org.opencontainers.image.licenses="CC0-1.0"
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /build/target/release/blackmoon /usr/local/bin/blackmoon
 ENTRYPOINT ["blackmoon"]

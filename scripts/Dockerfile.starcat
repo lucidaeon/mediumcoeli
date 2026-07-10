@@ -31,6 +31,9 @@ RUN touch crates/pericynthion/src/lib.rs \
  && cargo build --release --locked --bin starcat
 
 FROM alpine:latest
+LABEL org.opencontainers.image.source="https://github.com/lucidaeon/mediumcoeli"
+LABEL org.opencontainers.image.description="Command-line astrological ephemeris and natal-chart calculator built on pericynthion"
+LABEL org.opencontainers.image.licenses="CC0-1.0"
 COPY --from=builder /build/target/release/starcat /usr/local/bin/starcat
 VOLUME ["/jpl"]
 ENV STARCAT_JPL_DATA=/jpl

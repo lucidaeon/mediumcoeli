@@ -29,14 +29,18 @@ use providers::WebProvider;
 
 // ── format value parser ───────────────────────────────────────────────────────
 
-fn parse_format(s: &str) -> Result<Target, String> {
-    Format::from_slug(s).ok_or_else(|| {
-        let slugs: Vec<&str> = Format::all().iter().map(|spec| spec.slug).collect();
-        format!(
-            "unknown format '{s}'; expected one of: {}",
-            slugs.join(", ")
-        )
-    })
+/// Value parser for `--from`/`--to`/`--target`: validates against the format
+/// registry and exposes every slug as a clap *possible value*, so shells
+/// tab-complete them (and `--help` lists them). `FORMATS` stays the single
+/// source of truth — the candidate set is read from it at command-build time,
+/// so a newly registered format completes with no further wiring.
+fn format_parser() -> impl clap::builder::TypedValueParser {
+    use clap::builder::{PossibleValuesParser, TypedValueParser as _};
+    let slugs: Vec<&'static str> = Format::all().iter().map(|spec| spec.slug).collect();
+    // The parser only yields values already validated against `slugs`, so
+    // `from_slug` cannot miss.
+    PossibleValuesParser::new(slugs)
+        .map(|s| Format::from_slug(&s).expect("possible value is a registered slug"))
 }
 
 // ── cookie-import: browser value parser + grant-decision types ────────────────
@@ -209,32 +213,33 @@ Examples:
 struct Cli {
     /// Input files (.SFcht, .zdb, .xml, .aaf, .jhd), or directories containing them.
     /// Omit when --from a web endpoint.
+    #[arg(env = "BLACKMOON_INPUTS", value_delimiter = ',')]
     inputs: Vec<PathBuf>,
 
     /// Output file.  Target detected from extension; overridden by --to.
     /// Use `now.{ext}` to substitute the current UTC timestamp automatically
     /// (e.g. `--output now.SFcht`).  When --from a web endpoint and --output is omitted,
     /// defaults to `{timestamp}.SFcht`.
-    #[arg(short, long, alias = "out")]
+    #[arg(short, long, alias = "out", env = "BLACKMOON_OUTPUT")]
     output: Option<PathBuf>,
 
     /// Source target — required when the source is not a file (web endpoint).
-    #[arg(long, value_parser = parse_format)]
+    #[arg(long, value_parser = format_parser())]
     from: Option<Target>,
 
     /// Output target — overrides the extension of --output (or use for a web endpoint).
-    #[arg(long, value_parser = parse_format)]
+    #[arg(long, value_parser = format_parser(), env = "BLACKMOON_TO")]
     to: Option<Target>,
 
     /// Alias for --from / --to.  Used when both sides share the same target
     /// (e.g. `--target luna --normalize`) or as a shorthand for either
     /// direction when the other side is inferred from a file extension.
-    #[arg(long, value_parser = parse_format)]
+    #[arg(long, value_parser = format_parser(), env = "BLACKMOON_TARGET")]
     target: Option<Target>,
 
     /// Map non-cp1252 characters to ASCII equivalents in all text fields.
     /// Without --output, edits each input file in-place.
-    #[arg(long)]
+    #[arg(long, env = "BLACKMOON_NORMALIZE")]
     normalize: bool,
 
     /// LUNA® auth token (session cookie).  Required when --from luna or --to luna.
@@ -303,22 +308,22 @@ struct Cli {
 
     /// Refuse a conversion that would drop data the sink cannot store
     /// (exit non-zero) instead of warning and proceeding.
-    #[arg(long)]
+    #[arg(long, env = "BLACKMOON_STRICT")]
     strict: bool,
 
     /// Value to fill house_system with when writing to a format that requires it
     /// but the source did not provide one (e.g. placidus, koch, whole-sign).
-    #[arg(long)]
+    #[arg(long, env = "BLACKMOON_FILL_HOUSE")]
     fill_house: Option<String>,
     /// Value to fill zodiac with in the same situation (e.g. tropical, lahiri).
-    #[arg(long)]
+    #[arg(long, env = "BLACKMOON_FILL_ZODIAC")]
     fill_zodiac: Option<String>,
     /// Value to fill the locus (coordinate system) with: geocentric | heliocentric.
-    #[arg(long)]
+    #[arg(long, env = "BLACKMOON_FILL_LOCUS")]
     fill_locus: Option<String>,
 
     /// Print per-record detail (duplicate names, per-chart fetch status).
-    #[arg(long, short)]
+    #[arg(long, short, env = "BLACKMOON_VERBOSE")]
     verbose: bool,
 
     /// Import a session from a browser cookie store — the verb *grant* is the
@@ -1835,6 +1840,51 @@ mod credential_tests {
     }
 
     #[test]
+    fn file_only_convert_flags_expose_blackmoon_env_vars() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let env_of = |id: &str| -> Option<String> {
+            cmd.get_arguments()
+                .find(|a| a.get_id() == id)
+                .and_then(|a| a.get_env())
+                .map(|e| e.to_string_lossy().into_owned())
+        };
+
+        for (id, var) in [
+            ("inputs", "BLACKMOON_INPUTS"),
+            ("output", "BLACKMOON_OUTPUT"),
+            ("to", "BLACKMOON_TO"),
+            ("target", "BLACKMOON_TARGET"),
+            ("normalize", "BLACKMOON_NORMALIZE"),
+            ("strict", "BLACKMOON_STRICT"),
+            ("fill_house", "BLACKMOON_FILL_HOUSE"),
+            ("fill_zodiac", "BLACKMOON_FILL_ZODIAC"),
+            ("fill_locus", "BLACKMOON_FILL_LOCUS"),
+            ("verbose", "BLACKMOON_VERBOSE"),
+        ] {
+            assert_eq!(env_of(id).as_deref(), Some(var), "arg id: {id}");
+        }
+
+        // Web-only, destructive, meta, and consent flags stay OFF the env surface.
+        for id in [
+            "from",
+            "delay",
+            "luna_resume_from",
+            "no_verify",
+            "decision_log",
+            "clear",
+            "consolidate",
+            "generate_completion",
+            "capabilities",
+            "grant_cookie_access",
+            "cookies_profile",
+            "ua",
+        ] {
+            assert_eq!(env_of(id), None, "arg id must have no env: {id}");
+        }
+    }
+
+    #[test]
     fn cookie_only_chain_is_flagged() {
         assert!(only_cookie_source(&[SourceKind::Cookie]));
         assert!(!only_cookie_source(&[
@@ -2413,5 +2463,54 @@ mod convert_tests {
             without_output_file(vec![a.clone(), b.clone()], Some(&missing)),
             vec![a.clone(), b.clone()]
         );
+    }
+}
+
+#[cfg(test)]
+mod format_arg_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// The tab-completable possible values for a `--from`/`--to`/`--target`-style
+    /// arg, as clap sees them.
+    fn possible_values(arg_id: &str) -> Vec<String> {
+        let cmd = Cli::command();
+        let arg = cmd
+            .get_arguments()
+            .find(|a| a.get_id() == arg_id)
+            .unwrap_or_else(|| panic!("no --{arg_id} arg on Cli"));
+        arg.get_possible_values()
+            .iter()
+            .map(|pv| pv.get_name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn from_to_target_offer_every_format_slug_as_possible_value() {
+        // The completion surface must equal the format registry — the single
+        // source of truth — so newly registered formats appear automatically.
+        let expected: Vec<String> = Format::all().iter().map(|s| s.slug.to_string()).collect();
+        for arg_id in ["from", "to", "target"] {
+            assert_eq!(
+                possible_values(arg_id),
+                expected,
+                "--{arg_id} possible values must match FORMATS slugs"
+            );
+        }
+    }
+
+    #[test]
+    fn every_slug_parses_to_its_format() {
+        for spec in Format::all() {
+            let cli = Cli::try_parse_from(["blackmoon", "--from", spec.slug])
+                .unwrap_or_else(|e| panic!("--from {} should parse: {e}", spec.slug));
+            assert_eq!(cli.from, Some(spec.format), "slug {} round-trip", spec.slug);
+        }
+    }
+
+    #[test]
+    fn unknown_format_is_rejected() {
+        let result = Cli::try_parse_from(["blackmoon", "--from", "bogus"]);
+        assert!(result.is_err(), "unknown --from value must be rejected");
     }
 }

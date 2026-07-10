@@ -88,8 +88,29 @@ docker run --rm --pull always -v "$(pwd)":/workspace:rw lucidaeon/blackmoon /wor
 
 ## Shell completion
 
+`starcat` supports clap's dynamic completion engine, which calls back into the
+binary on each TAB so value candidates are always live — the DE-series slugs for
+`data fetch` (`de441`, `de440t`, …) and the fixed-star names for `--stars` appear
+as soon as they exist, with no re-install. Register it for your shell:
+
+```bash
+source <(COMPLETE=bash starcat)   # bash
+source <(COMPLETE=zsh starcat)    # zsh
+COMPLETE=fish starcat | source    # fish
 ```
+
+If you need a self-contained script instead (offline install, system packaging),
+`starcat generate-completion` still emits a static one — but it cannot carry the
+dynamic value candidates above, so `data fetch <TAB>` and `--stars <TAB>` fall
+back to flags only:
+
+```bash
 eval "$(starcat generate-completion)"
+```
+
+`blackmoon` has no dynamic candidates, so its static script is the full story:
+
+```bash
 eval "$(blackmoon --generate-completion)"
 ```
 
