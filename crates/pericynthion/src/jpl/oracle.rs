@@ -6,14 +6,19 @@
 //! local copy is bit-identical to the reference mirror, and detect silent
 //! corruption or truncated downloads.
 
-#[path = "oracle_data.rs"]
-mod oracle_data;
-
 use crate::error::PericynthionError;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// The sentinel `provides` value meaning "all fixed stars" (used by `catalog.gz`).
 pub const STAR_CLASS_ALL: &str = "@fixed-stars";
+
+/// The committed oracle manifest: every mirrored file's identity plus the
+/// entourage groupings. Hand-editable single source of truth — parsed once at
+/// first use (see [`loaded`]); there is no codegen step.
+const ORACLE_JSON: &str = include_str!("oracle.json");
 
 /// Which upstream family a manifest directory belongs to. Determines URL
 /// derivation and whether rows are integrity-pinned or presence-only.
@@ -65,6 +70,206 @@ pub struct OracleEntry {
     pub size: u64,
     /// Unkeyed BLAKE3, lowercase hex.
     pub blake3_hex: &'static str,
+}
+
+/// A named dataset grouping — a DE integration and its consistent perturber set
+/// (the "entourage" that always travels with a given DE release). Drives
+/// `starcat data fetch <slug>`: `planets` + `perturbers` are the default fetch;
+/// `optional` are heavier extras (e.g. the full `sb441-n373`) the user can add.
+///
+/// Each field holds full `https://` URLs; resolve them to integrity-checked
+/// [`OracleEntry`] values with [`entourage_entries`].
+#[derive(Debug, Clone, Copy)]
+pub struct Entourage {
+    /// Slug used on the CLI and for [`entourage`] lookup, e.g. `"de441"`.
+    pub slug: &'static str,
+    /// Human label, e.g. `"DE441"`.
+    pub label: &'static str,
+    /// The DE integration itself: header + full-span binary.
+    pub planets: &'static [&'static str],
+    /// The asteroid-perturber SPK(s) that ship with this DE release.
+    pub perturbers: &'static [&'static str],
+    /// Heavier optional extras (fetched only when explicitly requested).
+    pub optional: &'static [&'static str],
+}
+
+/// One row of the date-aware DE-selection preference: an entourage slug and the
+/// civil-year window over which its planetary binary is valid. [`de_preference`]
+/// returns these **sorted best-precision-first**, so a date-aware selector walks
+/// the list and takes the first entry that both [`covers`](DePreference::covers)
+/// the requested year and is present on disk.
+///
+/// Precision order (encoded by position): newer DE release generations first;
+/// within a generation the standard-window integration before its long-range
+/// sibling (e.g. `de440` before `de441` — the long-range file approximates
+/// lunar tidal dissipation for 30-millennia stability, so it is marginally less
+/// accurate in-window). The difference is astrologically negligible, but the
+/// ordering picks the smaller, higher-fidelity file when it covers the date.
+#[derive(Debug, Clone, Copy)]
+pub struct DePreference {
+    /// Entourage slug, e.g. `"de440"`. Always a valid [`entourage`] slug.
+    pub slug: &'static str,
+    /// First civil year the binary covers (negative for BCE).
+    pub from_year: i32,
+    /// Last civil year the binary covers.
+    pub to_year: i32,
+}
+
+impl DePreference {
+    /// True when `year` (civil, negative for BCE) falls within this window.
+    #[must_use]
+    pub fn covers(&self, year: i32) -> bool {
+        self.from_year <= year && year <= self.to_year
+    }
+}
+
+// --- JSON manifest (oracle.json) deserialization -------------------------------
+//
+// The committed `oracle.json` is a flat list of file objects plus a map of
+// entourage objects. It is parsed once and leaked to `'static` (the oracle
+// lives for the whole process, exactly as the former compiled-in table did), so
+// the public API keeps returning `&'static` references with zero churn.
+
+#[derive(Deserialize)]
+struct RawOracle {
+    files: Vec<RawFile>,
+    entourages: std::collections::BTreeMap<String, RawEntourage>,
+    #[serde(default)]
+    de_preference: Vec<RawDePref>,
+}
+
+#[derive(Deserialize)]
+struct RawDePref {
+    slug: String,
+    from_year: i32,
+    to_year: i32,
+    // `released` / `window` are human documentation in the JSON; ignored here.
+}
+
+#[derive(Deserialize)]
+struct RawFile {
+    url: String,
+    size: u64,
+    blake3: String,
+    #[serde(default)]
+    provides: Vec<String>,
+    #[serde(default)]
+    coverage: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RawEntourage {
+    label: String,
+    #[serde(default)]
+    planets: Vec<String>,
+    #[serde(default)]
+    perturbers: Vec<String>,
+    #[serde(default)]
+    optional: Vec<String>,
+}
+
+/// Everything parsed from `oracle.json`, leaked to `'static`.
+struct Loaded {
+    dirs: &'static [OracleDir],
+    entourages: &'static [Entourage],
+    de_preference: &'static [DePreference],
+}
+
+/// Leak a `String` to a `&'static str` (the oracle lives for the whole process).
+fn leak_str(s: String) -> &'static str {
+    Box::leak(s.into_boxed_str())
+}
+
+/// Leak a `Vec<String>` to a `&'static [&'static str]`.
+fn leak_strs(v: Vec<String>) -> &'static [&'static str] {
+    Box::leak(
+        v.into_iter()
+            .map(leak_str)
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    )
+}
+
+/// Parse `oracle.json` once and leak it. Panics only on a malformed committed
+/// manifest — a build-time invariant, not a runtime input.
+fn loaded() -> &'static Loaded {
+    static LOADED: OnceLock<Loaded> = OnceLock::new();
+    LOADED.get_or_init(|| {
+        let raw: RawOracle =
+            serde_json::from_str(ORACLE_JSON).expect("committed oracle.json is valid JSON");
+
+        // Group files into directories by their URL's parent path, preserving
+        // first-seen order so provenance output stays deterministic.
+        let mut order: Vec<String> = Vec::new();
+        let mut groups: HashMap<String, (SourceKind, Vec<OracleFile>)> = HashMap::new();
+        for f in raw.files {
+            let hostpath = f.url.strip_prefix("https://").unwrap_or(&f.url);
+            let (prefix, name) = match hostpath.rsplit_once('/') {
+                Some((p, n)) => (p.to_string(), n.to_string()),
+                None => (String::new(), hostpath.to_string()),
+            };
+            let kind = if hostpath.starts_with("ssd.jpl.nasa.gov/") {
+                SourceKind::JplMirror
+            } else {
+                SourceKind::CdsCatalog
+            };
+            let file = OracleFile {
+                name: leak_str(name),
+                size: f.size,
+                blake3_hex: leak_str(f.blake3),
+                provides: leak_strs(f.provides),
+                coverage: f.coverage.map(leak_str),
+            };
+            if let Some((_, files)) = groups.get_mut(&prefix) {
+                files.push(file);
+            } else {
+                order.push(prefix.clone());
+                groups.insert(prefix, (kind, vec![file]));
+            }
+        }
+        let dirs: Vec<OracleDir> = order
+            .into_iter()
+            .map(|prefix| {
+                let (kind, files) = groups.remove(&prefix).expect("prefix inserted above");
+                OracleDir {
+                    prefix: leak_str(prefix),
+                    kind,
+                    files: Box::leak(files.into_boxed_slice()),
+                }
+            })
+            .collect();
+        let dirs: &'static [OracleDir] = Box::leak(dirs.into_boxed_slice());
+
+        let entourages: Vec<Entourage> = raw
+            .entourages
+            .into_iter()
+            .map(|(slug, e)| Entourage {
+                slug: leak_str(slug),
+                label: leak_str(e.label),
+                planets: leak_strs(e.planets),
+                perturbers: leak_strs(e.perturbers),
+                optional: leak_strs(e.optional),
+            })
+            .collect();
+        let entourages: &'static [Entourage] = Box::leak(entourages.into_boxed_slice());
+
+        let de_preference: Vec<DePreference> = raw
+            .de_preference
+            .into_iter()
+            .map(|p| DePreference {
+                slug: leak_str(p.slug),
+                from_year: p.from_year,
+                to_year: p.to_year,
+            })
+            .collect();
+        let de_preference: &'static [DePreference] = Box::leak(de_preference.into_boxed_slice());
+
+        Loaded {
+            dirs,
+            entourages,
+            de_preference,
+        }
+    })
 }
 
 /// Compute the lowercase-hex unkeyed BLAKE3 of a file's bytes.
@@ -168,13 +373,93 @@ pub fn verify_against_root(root: &Path) -> Vec<VerifyReport> {
 /// All manifest directories (every [`SourceKind`]). Provenance reads this.
 #[must_use]
 pub fn manifest_dirs() -> &'static [OracleDir] {
-    oracle_data::DIRS
+    loaded().dirs
+}
+
+/// Every entourage (DE integration + its perturber set), for `data fetch`.
+#[must_use]
+pub fn entourages() -> &'static [Entourage] {
+    loaded().entourages
+}
+
+/// Look up a single entourage by slug (e.g. `"de441"`, `"de431"`).
+#[must_use]
+pub fn entourage(slug: &str) -> Option<&'static Entourage> {
+    loaded().entourages.iter().find(|e| e.slug == slug)
+}
+
+/// The date-aware DE-selection preference, **sorted best-precision-first**. A
+/// selector walks this and takes the first [`DePreference`] that both
+/// [`covers`](DePreference::covers) the requested year and is present on disk.
+#[must_use]
+pub fn de_preference() -> &'static [DePreference] {
+    loaded().de_preference
+}
+
+/// Resolve an entourage slug to its integrity-checked [`OracleEntry`] list.
+///
+/// Returns the planets + perturbers; when `include_optional` is set, the heavier
+/// optional extras are appended too. Any URL not present in the file oracle is
+/// skipped (the manifest is internally consistent, so this is belt-and-braces).
+/// Returns `None` when `slug` names no entourage.
+#[must_use]
+pub fn entourage_entries(slug: &str, include_optional: bool) -> Option<Vec<OracleEntry>> {
+    let ent = entourage(slug)?;
+    let all = entries();
+    let resolve = |url: &str| -> Option<OracleEntry> {
+        let path = url.strip_prefix("https://").unwrap_or(url);
+        all.iter().find(|e| e.path == path).cloned()
+    };
+    let mut out = Vec::new();
+    let optional = if include_optional {
+        ent.optional
+    } else {
+        &[][..]
+    };
+    for url in ent
+        .planets
+        .iter()
+        .chain(ent.perturbers.iter())
+        .chain(optional.iter())
+    {
+        if let Some(e) = resolve(url) {
+            out.push(e);
+        }
+    }
+    Some(out)
+}
+
+/// The deduplicated union of every entourage's files (planets + perturbers +
+/// optional), as integrity entries — the complete set of files starcat can
+/// *use*, across all DE series. Drives `data migrate`, which cherry-picks these
+/// out of whatever the user points at. First-seen order across entourages.
+#[must_use]
+pub fn all_entourage_entries() -> Vec<OracleEntry> {
+    let all = entries();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for ent in entourages() {
+        for url in ent
+            .planets
+            .iter()
+            .chain(ent.perturbers.iter())
+            .chain(ent.optional.iter())
+        {
+            let path = url.strip_prefix("https://").unwrap_or(url);
+            if seen.insert(path)
+                && let Some(e) = all.iter().find(|e| e.path == path)
+            {
+                out.push(e.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Number of JPL-mirror files in the oracle (the integrity surface).
 #[must_use]
 pub fn file_count() -> usize {
-    oracle_data::DIRS
+    manifest_dirs()
         .iter()
         .filter(|d| matches!(d.kind, SourceKind::JplMirror))
         .map(|d| d.files.len())
@@ -187,7 +472,7 @@ pub fn file_count() -> usize {
 /// with the [`OracleFile::name`] via `/`.
 #[must_use]
 pub fn entries() -> Vec<OracleEntry> {
-    oracle_data::DIRS
+    manifest_dirs()
         .iter()
         .filter(|d| matches!(d.kind, SourceKind::JplMirror))
         .flat_map(|d| {
@@ -552,5 +837,139 @@ mod tests {
         assert!(by_name("sb441-n373.bsp").provides.contains(&"Sedna"));
         // Albion is Horizons-only — must NOT be claimed by n373.
         assert!(!by_name("sb441-n373.bsp").provides.contains(&"Albion"));
+    }
+
+    #[test]
+    fn de441_entourage_resolves_to_integrity_entries() {
+        let ent = super::entourage("de441").expect("de441 entourage present");
+        assert_eq!(ent.label, "DE441");
+        // The DE integration itself: header + full-span binary.
+        assert_eq!(ent.planets.len(), 2);
+        assert!(!ent.perturbers.is_empty());
+
+        // Default fetch (no optional) resolves to real, hash-pinned entries.
+        let entries = super::entourage_entries("de441", false).expect("resolves");
+        assert!(!entries.is_empty());
+        assert!(entries.iter().all(|e| e.blake3_hex.len() == 64));
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.path.ends_with("Linux/de441/linux_m13000p17000.441"))
+        );
+        // Optional adds the heavy full sb441-n373 bundle.
+        let with_opt = super::entourage_entries("de441", true).expect("resolves");
+        assert!(with_opt.len() > entries.len());
+        assert!(with_opt.iter().any(|e| e.path.ends_with("sb441-n373.bsp")));
+    }
+
+    #[test]
+    fn all_entourage_entries_span_series_and_dedup_shared_files() {
+        let all = super::all_entourage_entries();
+        assert!(!all.is_empty());
+        // Dedup: sb441-n16 is shared by de440 and de441 but appears once.
+        let n16 = all
+            .iter()
+            .filter(|e| e.path.ends_with("sb441-n16.bsp"))
+            .count();
+        assert_eq!(n16, 1, "shared perturber must be de-duplicated");
+        // Spans multiple series: both a DE441 and a DE431 binary are present.
+        assert!(
+            all.iter()
+                .any(|e| e.path.ends_with("linux_m13000p17000.441"))
+        );
+        assert!(all.iter().any(|e| e.path.ends_with("lnxm13000p17000.431")));
+        // Every hash is well-formed and every path is under the mirror.
+        assert!(all.iter().all(|e| e.blake3_hex.len() == 64));
+        assert!(all.iter().all(|e| e.path.starts_with("ssd.jpl.nasa.gov/")));
+    }
+
+    #[test]
+    fn de_preference_slugs_are_all_valid_entourages() {
+        let prefs = super::de_preference();
+        assert!(!prefs.is_empty(), "preference list must be populated");
+        for p in prefs {
+            assert!(
+                super::entourage(p.slug).is_some(),
+                "de_preference references unknown entourage: {}",
+                p.slug
+            );
+            assert!(p.from_year <= p.to_year, "bad window for {}", p.slug);
+        }
+    }
+
+    #[test]
+    fn de_preference_ranks_de440_above_de441_and_both_cover_today() {
+        let prefs = super::de_preference();
+        let pos = |slug: &str| prefs.iter().position(|p| p.slug == slug);
+        let (i440, i441) = (pos("de440").unwrap(), pos("de441").unwrap());
+        assert!(
+            i440 < i441,
+            "de440 must outrank de441 (more precise in-window)"
+        );
+        // For a modern year, walking the list top-down reaches de440 first.
+        let year = 2026;
+        let first_covering = prefs.iter().find(|p| p.covers(year)).unwrap();
+        assert_eq!(
+            first_covering.slug, "de440",
+            "the most-preferred covering DE for {year} is de440"
+        );
+        // de441's deep-time window also covers it (the fallback when de440 absent).
+        assert!(prefs[i441].covers(year));
+    }
+
+    #[test]
+    fn de_preference_covers_boundaries_and_bce() {
+        let p = super::de_preference()
+            .iter()
+            .find(|p| p.slug == "de441")
+            .unwrap();
+        assert!(p.covers(p.from_year) && p.covers(p.to_year)); // inclusive
+        assert!(p.covers(-5000)); // deep BCE inside DE441
+        assert!(!p.covers(p.to_year + 1)); // just past the end
+    }
+
+    #[test]
+    fn entourage_files_have_globally_unique_basenames() {
+        // No two usable files share a base name, so flattening the entourage set
+        // never collides and the migrator's per-file location is unambiguous.
+        // (Cross-layout twins like `ascii/header.NNN` live outside this set and
+        // are handled by content-verified location in `migrate_scan`.)
+        let mut seen = std::collections::HashSet::new();
+        for e in super::all_entourage_entries() {
+            let base = e.path.rsplit('/').next().unwrap().to_string();
+            assert!(
+                seen.insert(base.clone()),
+                "duplicate entourage basename: {base}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_entourage_slug_is_none() {
+        assert!(super::entourage("de999").is_none());
+        assert!(super::entourage_entries("de999", false).is_none());
+    }
+
+    #[test]
+    fn every_entourage_url_resolves_in_the_file_oracle() {
+        // Integrity closure: no entourage may reference a URL absent from the
+        // file oracle (guards against a typo'd path in oracle.json).
+        let paths: std::collections::HashSet<String> =
+            super::entries().into_iter().map(|e| e.path).collect();
+        for ent in super::entourages() {
+            for url in ent
+                .planets
+                .iter()
+                .chain(ent.perturbers.iter())
+                .chain(ent.optional.iter())
+            {
+                let path = url.strip_prefix("https://").unwrap_or(url);
+                assert!(
+                    paths.contains(path),
+                    "entourage {} references unknown oracle path: {url}",
+                    ent.slug
+                );
+            }
+        }
     }
 }

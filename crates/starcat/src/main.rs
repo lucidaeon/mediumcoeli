@@ -241,16 +241,24 @@ enum DataCmd {
     /// Report every catalogued body + the fixed stars: their data file(s),
     /// source URL, and whether each is cached locally. Read-only; no network.
     Provenance(ProvenanceArgs),
-    /// Download a dataset (default `de441`, ~2.8 GB) into the platform data
+    /// Download a dataset (default `de441`, ~4.1 GB) into the platform data
     /// directory, resumably, and verify it. See `data fetch --list`.
     Fetch(FetchArgs),
+    /// Cherry-pick every usable ephemeris file out of an existing JPL data
+    /// location (any DE series, any layout) and bring it into the platform data
+    /// directory, verifying each file. Copy or move; see `--copy`/`--move`.
+    Migrate(MigrateArgs),
 }
 
 /// Arguments for `data fetch`.
 #[derive(Args, Debug)]
 struct FetchArgs {
-    /// Dataset slug to fetch. See `data fetch --list`.
-    #[arg(default_value = "de441")]
+    /// Dataset slug to fetch (`de441` default; `de431`, `de440`, … also
+    /// available — tab-complete to see them). See `data fetch --list`.
+    #[arg(
+        default_value = "de441",
+        add = clap_complete::ArgValueCandidates::new(dataset_candidates)
+    )]
     dataset: String,
     /// List available datasets and exit.
     #[arg(long)]
@@ -263,6 +271,34 @@ struct FetchArgs {
     /// data directory; this source is only ever read from, never modified.
     #[arg(long = "jpl-data")]
     jpl_data: Option<PathBuf>,
+}
+
+/// Arguments for `data migrate`.
+#[derive(Args, Debug)]
+struct MigrateArgs {
+    /// Your existing JPL data to bring usable files out of — a full
+    /// `ssd.jpl.nasa.gov/` mirror, a deep point inside one, or a flat download
+    /// folder. Falls back to `$STARCAT_JPL_DATA`. Every file found is verified
+    /// against the oracle before it is accepted (a truncated download is
+    /// reported and skipped, never migrated).
+    #[arg(long = "from-jpl")]
+    from_jpl: Option<PathBuf>,
+    /// Your existing Horizons SPK directory (per-body `<naif>.bsp` files from
+    /// prior `starcat horizons` pulls) to bring into the platform Horizons dir.
+    /// Falls back to `$STARCAT_HORIZONS_DATA`. Each `.bsp` is validated by
+    /// opening it as an SPK; a truncated file is reported and skipped. At least
+    /// one of `--from-jpl` / `--from-horizons` (or their env vars) must resolve.
+    #[arg(long = "from-horizons")]
+    from_horizons: Option<PathBuf>,
+    /// Copy the files in, leaving your originals in place. On a copy-on-write
+    /// filesystem this uses no additional disk. Mutually exclusive with
+    /// `--move`; if neither is given you are prompted.
+    #[arg(long, conflicts_with = "mv")]
+    copy: bool,
+    /// Move the files in, removing each original once its copy verifies.
+    /// Mutually exclusive with `--copy`.
+    #[arg(long = "move", conflicts_with = "copy")]
+    mv: bool,
 }
 
 /// Arguments for `data verify`.
@@ -826,6 +862,16 @@ fn star_candidates() -> Vec<clap_complete::CompletionCandidate> {
     out
 }
 
+/// Tab-completion candidates for `data fetch <slug>`: every entourage slug
+/// (`de441` default, `de431`, …) with its human description, drawn live from the
+/// oracle registry. Advisory only — the handler still validates the slug.
+fn dataset_candidates() -> Vec<clap_complete::CompletionCandidate> {
+    pericynthion::datasets()
+        .iter()
+        .map(|d| clap_complete::CompletionCandidate::new(d.slug).help(Some(d.description.into())))
+        .collect()
+}
+
 fn main() -> Result<()> {
     use clap::CommandFactory;
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
@@ -1171,7 +1217,10 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     // Resolved only after the I/O-free input checks above have passed.
     let dir = resolve_jpl_dir(args.jpl_data.as_deref())?;
 
-    let (header, source) = discover::open_dataset(&dir).with_context(|| {
+    // Date-aware selection: with several DE series on disk, prefer the smallest,
+    // most precise binary whose window covers the chart year (e.g. DE440 over
+    // DE441 for a modern date); falls back to highest-denum discovery.
+    let (header, source) = discover::open_dataset_for_year(&dir, year).with_context(|| {
         format!(
             "locate + open JPL ephemeris under {}",
             pericynthion::display_path(&dir)
@@ -1212,10 +1261,15 @@ fn cmd_compute(args: ComputeArgs) -> Result<()> {
     // === Calendar ===
     let calendar: Calendar = calendar_arg.into();
 
-    // === Open every available SPK: sb441 bundle + Horizons dir + explicit --spk ===
+    // === Open every available SPK: platform-dir/mirror bundle + Horizons dir + --spk ===
+    // The data location is "curated" when it is the platform data dir (every
+    // file there is intentional -> open them all); an external `--jpl-data`
+    // mirror is not (open only the named bundles, never the moons/spacecraft).
+    let curated = pericynthion::default_data_dir().is_some_and(|home| home == dir);
     let horizons_dir = resolve_horizons_dir(None).ok();
     let spk_files = pericynthion::spk::open_all_sources(
         Some(&dir),
+        curated,
         horizons_dir.as_deref(),
         args.spk.as_deref(),
     )
@@ -1402,7 +1456,7 @@ fn resolve_jpl_dir(data_dir_arg: Option<&std::path::Path>) -> Result<PathBuf> {
     }
     bail!(
         "no ephemeris data found. Run `starcat data fetch` to download it \
-         (~2.8 GB, one time), or pass --jpl-data PATH / set $STARCAT_JPL_DATA \
+         (~4.1 GB, one time), or pass --jpl-data PATH / set $STARCAT_JPL_DATA \
          to an existing JPL mirror."
     );
 }
@@ -1433,7 +1487,7 @@ fn resolve_mirror_root(root_arg: Option<&std::path::Path>) -> Result<PathBuf> {
     }
     bail!(
         "no ephemeris data found. Run `starcat data fetch` to download it \
-         (~2.8 GB, one time), or pass --root PATH / set $STARCAT_JPL_DATA."
+         (~4.1 GB, one time), or pass --root PATH / set $STARCAT_JPL_DATA."
     )
 }
 
@@ -1453,6 +1507,7 @@ fn cmd_data(args: &DataArgs) -> Result<()> {
         DataCmd::Prod(p) => cmd_data_prod(p),
         DataCmd::Provenance(p) => cmd_data_provenance(p),
         DataCmd::Fetch(f) => cmd_data_fetch(f),
+        DataCmd::Migrate(m) => cmd_data_migrate(m),
     }
 }
 
@@ -1780,6 +1835,232 @@ fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
     print!("\n{}", pericynthion::render_capabilities(&report));
 
     verified
+}
+
+/// `data migrate`: cherry-pick usable ephemeris files out of an existing JPL
+/// data location into the platform data directory, verifying each, by copy or
+/// move.
+///
+/// # Errors
+/// Returns an error if no source is configured, the destination cannot be
+/// determined, a filesystem operation fails, or any migrated file fails its
+/// post-migration verification.
+fn cmd_data_migrate(args: &MigrateArgs) -> Result<()> {
+    // Sources resolve like the fetch source (flag → env var), but accept ANY
+    // existing path — the scans are layout-agnostic. At least one is required.
+    // JPL: `--from-jpl` / `$STARCAT_JPL_DATA` → the mirror subtree.
+    // Horizons: `--from-horizons` / `$STARCAT_HORIZONS_DATA` → the Horizons dir.
+    let resolve = |arg: &Option<PathBuf>, env: &str| -> Option<PathBuf> {
+        arg.clone()
+            .or_else(|| std::env::var_os(env).map(PathBuf::from))
+            .filter(|p| p.exists())
+    };
+    let jpl_source = resolve(&args.from_jpl, "STARCAT_JPL_DATA");
+    let hz_source = resolve(&args.from_horizons, "STARCAT_HORIZONS_DATA");
+    if jpl_source.is_none() && hz_source.is_none() {
+        bail!(
+            "no source data found. Point me at your existing JPL data with \
+             --from-jpl PATH / $STARCAT_JPL_DATA, and/or your Horizons SPKs with \
+             --from-horizons PATH / $STARCAT_HORIZONS_DATA."
+        );
+    }
+
+    let root = resolve_fetch_dest()?;
+    let hz_dest = horizons_default_dir(pericynthion::default_data_dir());
+
+    // --- Scan both sources (no modification) ---
+    let jpl_plan = jpl_source.as_ref().map(|s| {
+        let entries = oracle::all_entourage_entries();
+        pericynthion::migrate_scan(&entries, s, &root)
+    });
+    // Horizons only when we have a destination and the source is not already it.
+    let hz_plan = match (&hz_source, &hz_dest) {
+        (Some(s), Some(d)) if s != d => Some(pericynthion::horizons_migrate_scan(s, d)),
+        _ => None,
+    };
+
+    // --- Report the scans ---
+    if let (Some(s), Some(plan)) = (&jpl_source, &jpl_plan) {
+        println!("JPL data — scanned {}.", pericynthion::display_path(s));
+        if !plan.skipped.is_empty() {
+            println!("  {} already present in the data dir", plan.skipped.len());
+        }
+        for bad in &plan.corrupt {
+            println!(
+                "  skipped (failed verification, e.g. a truncated download): {}",
+                pericynthion::display_path(bad)
+            );
+        }
+        for item in &plan.migrate {
+            println!(
+                "  + {}  ({})",
+                file_name_of(&item.source_path),
+                indicatif::HumanBytes(item.entry.size)
+            );
+        }
+    }
+    if let (Some(s), Some(plan)) = (&hz_source, &hz_plan) {
+        println!("Horizons SPKs — scanned {}.", pericynthion::display_path(s));
+        if !plan.skipped.is_empty() {
+            println!(
+                "  {} already present in the Horizons dir",
+                plan.skipped.len()
+            );
+        }
+        for bad in &plan.invalid {
+            println!(
+                "  skipped (not a valid SPK, e.g. a truncated download): {}",
+                pericynthion::display_path(bad)
+            );
+        }
+        for item in &plan.migrate {
+            println!(
+                "  + {}  ({})",
+                file_name_of(&item.source_path),
+                indicatif::HumanBytes(item.size)
+            );
+        }
+    }
+
+    let jpl_todo = jpl_plan.as_ref().is_some_and(|p| !p.migrate.is_empty());
+    let hz_todo = hz_plan.as_ref().is_some_and(|p| !p.migrate.is_empty());
+    if !jpl_todo && !hz_todo {
+        println!("Nothing to migrate.");
+        return Ok(());
+    }
+
+    // --- Decide copy vs move once (probe CoW with any queued file) ---
+    let probe_sample = jpl_plan
+        .as_ref()
+        .and_then(|p| p.migrate.first().map(|i| i.source_path.clone()))
+        .or_else(|| {
+            hz_plan
+                .as_ref()
+                .and_then(|p| p.migrate.first().map(|i| i.source_path.clone()))
+        });
+    let Some(mode) = resolve_migrate_mode(args, probe_sample.as_deref(), &root)? else {
+        println!("Migration cancelled — nothing was changed.");
+        return Ok(());
+    };
+
+    let mut failed = 0usize;
+
+    // --- Apply JPL ---
+    if let Some(plan) = jpl_plan.as_ref().filter(|p| !p.migrate.is_empty()) {
+        let summary = pericynthion::migrate_apply(plan, &root, mode, |i, total, item| {
+            println!(
+                "  [{}/{}] {} -> {}",
+                i + 1,
+                total,
+                file_name_of(&item.source_path),
+                pericynthion::display_path(&root.join(&item.entry.path))
+            );
+        })
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!(
+            "JPL: {} cloned (no extra disk), {} copied, {} moved{}",
+            summary.reflinked.len(),
+            summary.copied.len(),
+            summary.moved.len(),
+            migrate_fail_note(summary.failed.len())
+        );
+        failed += summary.failed.len();
+    }
+
+    // --- Apply Horizons ---
+    if let (Some(plan), Some(d)) = (
+        hz_plan.as_ref().filter(|p| !p.migrate.is_empty()),
+        hz_dest.as_ref(),
+    ) {
+        let summary = pericynthion::horizons_migrate_apply(plan, d, mode, |i, total, item| {
+            println!(
+                "  [{}/{}] {} -> {}",
+                i + 1,
+                total,
+                file_name_of(&item.source_path),
+                pericynthion::display_path(d)
+            );
+        })
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!(
+            "Horizons: {} cloned (no extra disk), {} copied, {} moved{}",
+            summary.reflinked.len(),
+            summary.copied.len(),
+            summary.moved.len(),
+            migrate_fail_note(summary.failed.len())
+        );
+        failed += summary.failed.len();
+    }
+
+    // Capabilities now on disk (self-updating; reads the catalog + the files).
+    let horizons_dir = resolve_horizons_dir(None).ok();
+    let report = pericynthion::assess(Some(&root), horizons_dir.as_deref());
+    print!("\n{}", pericynthion::render_capabilities(&report));
+
+    if failed == 0 {
+        Ok(())
+    } else {
+        bail!("{failed} file(s) failed verification after migration")
+    }
+}
+
+/// A trailing "; N FAILED …" note for a migration summary line, or empty.
+fn migrate_fail_note(failed: usize) -> String {
+    if failed == 0 {
+        String::new()
+    } else {
+        format!("; {failed} FAILED verification and were removed")
+    }
+}
+
+/// Decide copy vs move: the `--copy`/`--move` flags win; otherwise prompt on a
+/// TTY (noting the copy-on-write "no extra space" case), or error when there is
+/// no terminal to prompt on. `Ok(None)` means the user chose to quit — the
+/// caller should abort the migration cleanly.
+fn resolve_migrate_mode(
+    args: &MigrateArgs,
+    probe_sample: Option<&std::path::Path>,
+    root: &std::path::Path,
+) -> Result<Option<pericynthion::MigrateMode>> {
+    use pericynthion::MigrateMode;
+    if args.copy {
+        return Ok(Some(MigrateMode::Copy));
+    }
+    if args.mv {
+        return Ok(Some(MigrateMode::Move));
+    }
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        bail!("specify --copy or --move (no interactive terminal to prompt on).");
+    }
+    // Probe copy-on-write from the source filesystem into the data dir, using a
+    // queued file as the sample, so the prompt's disk-cost note is honest.
+    let cow = probe_sample.is_some_and(|s| pericynthion::probe_cow(s, root));
+    if cow {
+        println!(
+            "\nYou're on a copy-on-write filesystem: Copy clones these files and uses \
+             no additional disk space."
+        );
+    } else {
+        println!(
+            "\nCopy duplicates the files (using the space above); Move relocates them \
+             (freeing your originals)."
+        );
+    }
+    print!("Copy, Move, or Quit? [c/m/q] ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    match line.trim().to_ascii_lowercase().as_str() {
+        "c" | "copy" => Ok(Some(MigrateMode::Copy)),
+        "m" | "move" => Ok(Some(MigrateMode::Move)),
+        "q" | "quit" => Ok(None),
+        // An empty line (bare Enter) or EOF is treated as quit — the safe default.
+        "" => Ok(None),
+        other => bail!("expected 'c' (copy), 'm' (move), or 'q' (quit), got {other:?}"),
+    }
 }
 
 /// List the data files needed to package starcat's supported placements,

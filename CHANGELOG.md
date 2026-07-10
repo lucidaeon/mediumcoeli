@@ -5,7 +5,70 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/a53f13a2ef1de7f8d2066fc0acfc75a9b448a4e9...main), [blackmoon/0.4.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.3), [pericynthion/0.11.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.11.0), [starcat/0.9.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.9.0), [wristband/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.3), 2026.07.09
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/35429fa3bead501b7b82ccabced12c402f75edc8...main), [pericynthion/0.12.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.12.0), [starcat/0.10.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.10.0), [wristband/0.1.4](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.4), 2026.07.09
+
+This cycle replaces the code-generated JPL **oracle** with a hand-edited
+`oracle.json` parsed at load, adds **entourages** (`starcat data fetch <series>`,
+`de441` default, slug autocomplete) and a new **`data migrate`** command that
+cherry-picks usable JPL and Horizons files out of an existing data location into
+the platform data directory by copy or move, and makes DE selection
+**date-aware** — preferring the smallest, most precise integration whose window
+covers the chart year.
+
+### Added — starcat
+
+- **`data migrate`.** Brings usable ephemeris files out of an existing JPL data
+  location (`--from-jpl` / `$STARCAT_JPL_DATA`) and Horizons SPKs
+  (`--from-horizons` / `$STARCAT_HORIZONS_DATA`) into the platform data
+  directory. Copy or move (`--copy` / `--move`, else a `c`/`m`/`q` TTY prompt),
+  with a copy-on-write probe so the copy path uses no extra disk on CoW
+  filesystems. Each JPL file is BLAKE3-verified against the oracle and each
+  Horizons `.bsp` is validated by opening it as an SPK; truncated files are
+  reported and skipped, never migrated.
+- **Entourages:** `data fetch <series>` (`de441` default) with live slug
+  autocomplete drawn from the oracle registry; the `de441` default rolls in the
+  dwarf-perturber SPK bundle.
+
+### Added — pericynthion
+
+- Public data-migration engine: `MigrateItem` / `MigrateMode` / `MigratePlan` /
+  `MigrateSummary` with `migrate_scan` / `migrate_apply`, the Horizons variants
+  (`HorizonsMigrate*`, `horizons_migrate_scan` / `horizons_migrate_apply`), and
+  a `probe_cow` copy-on-write capability probe.
+- Content-verified data locators — `find_under_accepting` /
+  `locate_jpl_file_accepting` — that skip a wrong-content basename twin.
+- **Date-aware DE selection:** prefer the smallest, most precise DE whose window
+  covers the chart year (`de_preference` in `oracle.json`), opening the exact
+  entourage header + binary (handles `header.NNN_572`). The dwarf SPK bundle is
+  auto-loaded at compute time; the curated platform dir loads every `.bsp`, an
+  external mirror only its named bundles.
+
+### Changed
+
+- **pericynthion** oracle is now a hand-edited `oracle.json` parsed at load
+  rather than a code-generated Rust table; `serde` / `serde_json` become
+  non-optional core dependencies (the `serde` feature is retained as a no-op),
+  and `horizons` no longer pulls `serde_json` separately.
+- **pericynthion** provenance ranks the DE441 family (the DE441 integration and
+  its `asteroids_de441` perturbers) first, so it is reported as the primary
+  source with older integrations following as selectable alternates.
+- **ci** GitHub Actions moved off deprecated Node 20 (`actions/checkout` v4→v7,
+  `softprops/action-gh-release` v2→v3, both on Node 24); lint/build/test now run
+  on every branch push.
+
+### Removed
+
+- **pericynthion** retired the Python oracle codegen and its CI drift job:
+  `scripts/gen_oracle.py`, `scripts/oracle_manifest.tsv`, and the generated
+  `oracle_data.rs` are gone, superseded by the committed `oracle.json`.
+
+### Fixed
+
+- **wristband** Windows `RawRow` import is gated to Windows so it is not an
+  unused import (a `-D warnings` failure) on macOS/Linux; DPAPI doc comments
+  backtick `CurrentUser` (clippy `doc_markdown`).
+
+## [35429fa](https://github.com/lucidaeon/mediumcoeli/compare/a53f13a2ef1de7f8d2066fc0acfc75a9b448a4e9...35429fa3bead501b7b82ccabced12c402f75edc8), [blackmoon/0.4.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.4.3), [pericynthion/0.11.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.11.0), [starcat/0.9.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.9.0), [wristband/0.1.3](https://github.com/lucidaeon/mediumcoeli/releases/tag/wristband/0.1.3), 2026.07.09
 
 This cycle hardens the JPL **fetch-and-locate** layer and the historical-calendar
 contract. `starcat data fetch` now lands in the platform data directory and

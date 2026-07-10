@@ -28,6 +28,11 @@ jobs:
       - name: Set up Homebrew
         uses: Homebrew/actions/setup-homebrew@main
 
+      - name: Configure git identity for the tap commit
+        run: |
+          git config --global user.email "lucidaeon@users.noreply.github.com"
+          git config --global user.name "lucidaeon"
+
       - name: Open formula-bump PR in the tap
         env:
           HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

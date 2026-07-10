@@ -50,15 +50,11 @@ placements-dry-run:
 	cargo run --release -q -p starcat -- placements --verify --dry-run
 	cargo run --release -q -p starcat -- placements
 
-# Regenerate crates/pericynthion/src/jpl/oracle_data.rs from the manifest and
-# immediately run cargo fmt so the committed file is the generate-then-fmt fixed point.
+# Validate the hand-edited oracle manifest (crates/pericynthion/src/jpl/oracle.json):
+# parses, file_count/hashes hold, and every entourage URL resolves to a real file.
 [group('build')]
-oracle-regen:
-	#!/usr/bin/env bash
-	set -euo pipefail
-	python3 scripts/gen_oracle.py scripts/oracle_manifest.tsv \
-	    > crates/pericynthion/src/jpl/oracle_data.rs
-	cargo fmt -p pericynthion
+oracle-check:
+	cargo test -p pericynthion --lib jpl::oracle::tests -- --nocapture
 
 # Type-check without producing binaries (or one CRATE).
 [group('build')]

@@ -140,7 +140,10 @@ pub mod spk;
 pub use datafetch::{Dataset, dataset_from_slug, datasets, default_data_dir};
 #[cfg(feature = "data-fetch")]
 pub use datafetch::{
-    FetchError, FetchProgress, FetchSummary, entry_url, fetch_dataset, fetch_entries, part_path,
+    FetchError, FetchProgress, FetchSummary, HorizonsMigrateItem, HorizonsMigratePlan,
+    HorizonsMigrateSummary, MigrateItem, MigrateMode, MigratePlan, MigrateSummary, entry_url,
+    fetch_dataset, fetch_entries, horizons_migrate_apply, horizons_migrate_scan, migrate_apply,
+    migrate_scan, part_path, probe_cow,
 };
 pub mod stars;
 pub mod time;
@@ -149,8 +152,8 @@ pub use capability::{
     BodyStatus, CapabilityReport, assess, render_capabilities, source_label, what_gets_you_what,
 };
 pub use datafiles::{
-    find_under, find_under_matching, locate_jpl_file, locate_jpl_file_matching,
-    production_file_paths, provider_cached,
+    find_under, find_under_accepting, find_under_matching, locate_jpl_file,
+    locate_jpl_file_accepting, locate_jpl_file_matching, production_file_paths, provider_cached,
 };
 pub use jpl::oracle::display_path;
 pub use placements::{BodyResolveError, omniscient_body_ids, resolve_body_id};

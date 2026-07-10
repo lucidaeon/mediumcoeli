@@ -207,34 +207,132 @@ pub fn locate_default_bsp(start: &Path) -> Option<PathBuf> {
 }
 
 /// Open every SPK a chart computation should consult, in priority order:
-/// an explicit file (error is fatal), the auto-located default sb441 bundle
-/// under `jpl_start` (best-effort — a missing/invalid bundle is skipped), and
-/// every valid `*.bsp` directly inside `horizons_dir` (best-effort).
 ///
-/// `None` for any input skips that source. This is the single SPK-opening
-/// entry point a GUI or the CLI shares.
+/// 1. `explicit` — an explicit `--spk` file (a failure here is fatal).
+/// 2. `jpl_start`, interpreted by `jpl_curated`:
+///    - **curated** (the platform data dir, where every file is intentional):
+///      *every* `.bsp` under it is opened ([`collect_bsp_paths`]) — so the
+///      default main-belt + dwarf bundles fetched by `data fetch de441`, and any
+///      SPK the user hand-dropped, all work without being named here.
+///    - **not curated** (a bulk external mirror): only the named bundles are
+///      opened — `sb441-n16.bsp` then `sb441-n373s.bsp`/`sb441-n373.bsp` — never
+///      the mirror's `satellites/`/`spacecraft/` `.bsp`s.
+/// 3. `horizons_dir` — every `.bsp` in the (curated) Horizons output dir.
+///
+/// Opened files are de-duplicated by canonical path, so a curated tree that
+/// contains the Horizons dir does not open the same file twice. All SPK opens
+/// are mmap-backed (a missing-page-only read), so opening even the large
+/// `sb441-n373.bsp` is cheap. `None` for `jpl_start`/`horizons_dir`/`explicit`
+/// skips that source. This is the single SPK-opening entry point a GUI or the
+/// CLI shares.
 ///
 /// # Errors
 /// [`PericynthionError`] if `explicit` is `Some` and cannot be opened.
 pub fn open_all_sources(
     jpl_start: Option<&Path>,
+    jpl_curated: bool,
     horizons_dir: Option<&Path>,
     explicit: Option<&Path>,
 ) -> Result<Vec<SpkEphemeris>, crate::error::PericynthionError> {
-    let mut spk_files: Vec<SpkEphemeris> = Vec::new();
-    if let Some(p) = explicit {
-        spk_files.push(SpkEphemeris::open(p)?);
-    }
-    if let Some(start) = jpl_start
-        && let Some(bsp) = locate_default_bsp(start)
-        && let Ok(s) = SpkEphemeris::open(&bsp)
+    use std::collections::HashSet;
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<SpkEphemeris> = Vec::new();
+    // Dedup by canonical path so a curated tree that *contains* the Horizons dir
+    // does not open the same `.bsp` twice.
+    let key = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+
+    // Explicit --spk: highest priority, and a failure here is fatal.
+    if let Some(p) = explicit
+        && seen.insert(key(p))
     {
-        spk_files.push(s);
+        out.push(SpkEphemeris::open(p)?);
     }
+
+    // The JPL location.
+    if let Some(start) = jpl_start {
+        if jpl_curated {
+            // A curated location (the platform data dir): every `.bsp` in it was
+            // put there intentionally by `data fetch`/`data migrate` or by hand —
+            // open them all, so hand-added SPKs work without being named here.
+            for path in collect_bsp_paths(start) {
+                if seen.insert(key(&path))
+                    && let Ok(s) = SpkEphemeris::open(&path)
+                {
+                    out.push(s);
+                }
+            }
+        } else {
+            // A bulk external mirror: open only the named bundles we want, never
+            // the moons/spacecraft. Main belt (`sb441-n16`) before the dwarfs
+            // (`sb441-n373s`/`n373`) so the belt is never shadowed.
+            let locators: [fn(&Path) -> Option<PathBuf>; 2] =
+                [locate_default_bsp, locate_dwarf_bsp];
+            for locate in locators {
+                if let Some(bsp) = locate(start)
+                    && seen.insert(key(&bsp))
+                    && let Ok(s) = SpkEphemeris::open(&bsp)
+                {
+                    out.push(s);
+                }
+            }
+        }
+    }
+
+    // The Horizons dir is itself curated — open every `.bsp` in it.
     if let Some(hz) = horizons_dir {
-        spk_files.extend(open_dir(hz));
+        for path in collect_bsp_paths(hz) {
+            if seen.insert(key(&path))
+                && let Ok(s) = SpkEphemeris::open(&path)
+            {
+                out.push(s);
+            }
+        }
     }
-    Ok(spk_files)
+    Ok(out)
+}
+
+/// Recursively collect every `*.bsp` path under `dir`, in deterministic
+/// (sorted) order. Bounded depth, does not follow symlinks. Best-effort: an
+/// unreadable directory yields nothing rather than an error. For **curated**
+/// locations only — never point this at a bulk government mirror whose
+/// `satellites/`/`spacecraft/` trees hold tens of thousands of `.bsp`s.
+#[must_use]
+pub fn collect_bsp_paths(dir: &Path) -> Vec<PathBuf> {
+    fn rec(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
+        if depth >= 64 {
+            return;
+        }
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in read.flatten() {
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if meta.file_type().is_file() {
+                if path.extension().and_then(|e| e.to_str()) == Some("bsp") {
+                    out.push(path);
+                }
+            } else if meta.file_type().is_dir() {
+                rec(&path, out, depth + 1);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(dir, &mut out, 0);
+    out.sort();
+    out
+}
+
+/// Locate the dwarf-planet SPK bundle from `start`, **preferring** the compact
+/// DE440-window subset `sb441-n373s.bsp` over the full deep-time
+/// `sb441-n373.bsp`. Layout-agnostic (mirror-root hoist, then walk), like the
+/// other locators; returns `None` if neither is present.
+#[must_use]
+pub fn locate_dwarf_bsp(start: &Path) -> Option<PathBuf> {
+    crate::locate_jpl_file(start, "sb441-n373s.bsp")
+        .or_else(|| crate::locate_jpl_file(start, "sb441-n373.bsp"))
 }
 
 /// Locate `sb441-n373.bsp` from `start`.
@@ -253,23 +351,130 @@ mod open_all_tests {
     use super::*;
     use std::path::Path;
 
+    /// Write a minimal valid DAF/SPK (file record + empty summary record) at
+    /// `path`, creating parents. Zero segments — opens fine, covers nothing.
+    fn write_minimal_spk(path: &Path) {
+        use std::io::Write;
+        let mut file_rec = [0u8; 1024];
+        file_rec[0..8].copy_from_slice(b"DAF/SPK ");
+        file_rec[8..12].copy_from_slice(&2i32.to_le_bytes());
+        file_rec[12..16].copy_from_slice(&6i32.to_le_bytes());
+        file_rec[76..80].copy_from_slice(&2i32.to_le_bytes()); // FWARD=2
+        file_rec[88..96].copy_from_slice(b"LTL-IEEE");
+        let sum_rec = [0u8; 1024]; // NSUM=0
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(&file_rec).unwrap();
+        f.write_all(&sum_rec).unwrap();
+    }
+
     #[test]
     fn open_all_sources_empty_when_nothing_supplied() {
-        let v = open_all_sources(None, None, None).expect("empty is ok");
+        let v = open_all_sources(None, false, None, None).expect("empty is ok");
         assert!(v.is_empty());
     }
 
     #[test]
     fn open_all_sources_empty_horizons_dir_yields_none() {
         let tmp = tempdir::TempDir::new("spk_empty").unwrap();
-        let v = open_all_sources(None, Some(tmp.path()), None).expect("empty dir ok");
+        let v = open_all_sources(None, false, Some(tmp.path()), None).expect("empty dir ok");
         assert!(v.is_empty());
     }
 
     #[test]
     fn open_all_sources_propagates_explicit_open_error() {
         let bogus = Path::new("/no/such/file.bsp");
-        assert!(open_all_sources(None, None, Some(bogus)).is_err());
+        assert!(open_all_sources(None, false, None, Some(bogus)).is_err());
+    }
+
+    #[test]
+    fn curated_source_opens_every_bsp_in_the_tree() {
+        // A curated platform data dir: two `.bsp`s in different nested subdirs
+        // (as the fetched main-belt + dwarf bundles land) are BOTH opened,
+        // without being named — that is the whole point of "curated = load all".
+        let tmp = tempdir::TempDir::new("spk_curated").unwrap();
+        let root = tmp.path();
+        write_minimal_spk(
+            &root.join("ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp"),
+        );
+        write_minimal_spk(
+            &root.join("ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n373s.bsp"),
+        );
+        std::fs::write(root.join("stray.txt"), b"ignored").unwrap();
+
+        let v = open_all_sources(Some(root), true, None, None).expect("curated open");
+        assert_eq!(v.len(), 2, "both nested bundles open under a curated dir");
+    }
+
+    #[test]
+    fn mirror_source_opens_only_named_bundles_not_arbitrary_bsps() {
+        // A non-curated (bulk mirror) source: an arbitrary `.bsp` that is NOT a
+        // named bundle must be ignored (this is the moons/spacecraft guard).
+        let tmp = tempdir::TempDir::new("spk_mirror").unwrap();
+        let root = tmp.path();
+        write_minimal_spk(&root.join("ssd.jpl.nasa.gov/ftp/eph/satellites/jup365.bsp"));
+        write_minimal_spk(
+            &root.join("ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp"),
+        );
+
+        let v = open_all_sources(Some(root), false, None, None).expect("mirror open");
+        assert_eq!(
+            v.len(),
+            1,
+            "only the named sb441-n16 bundle, not the moon SPK"
+        );
+    }
+
+    #[test]
+    fn curated_and_horizons_overlap_is_deduped() {
+        // If the curated tree *contains* the Horizons dir, the same `.bsp` must
+        // not be opened twice.
+        let tmp = tempdir::TempDir::new("spk_dedup").unwrap();
+        let root = tmp.path();
+        let hz = root.join("horizons");
+        write_minimal_spk(&hz.join("2060.bsp"));
+
+        let v = open_all_sources(Some(root), true, Some(&hz), None).expect("dedup open");
+        assert_eq!(v.len(), 1, "the shared Horizons .bsp opens exactly once");
+    }
+
+    #[test]
+    fn locate_dwarf_bsp_prefers_n373s_over_full_n373() {
+        let tmp = tempdir::TempDir::new("dwarf").unwrap();
+        let dir = tmp
+            .path()
+            .join("ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("sb441-n373.bsp"), b"x").unwrap();
+        std::fs::write(dir.join("sb441-n373s.bsp"), b"x").unwrap();
+        assert!(
+            super::locate_dwarf_bsp(tmp.path())
+                .unwrap()
+                .ends_with("sb441-n373s.bsp")
+        );
+        // Falls back to the full bundle when the compact subset is absent.
+        std::fs::remove_file(dir.join("sb441-n373s.bsp")).unwrap();
+        assert!(
+            super::locate_dwarf_bsp(tmp.path())
+                .unwrap()
+                .ends_with("sb441-n373.bsp")
+        );
+    }
+
+    #[test]
+    fn collect_bsp_paths_is_recursive_sorted_and_bsp_only() {
+        let tmp = tempdir::TempDir::new("collect").unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/z.bsp"), b"x").unwrap();
+        std::fs::write(root.join("a/b/c.bsp"), b"x").unwrap();
+        std::fs::write(root.join("a/notes.txt"), b"x").unwrap();
+        let got = super::collect_bsp_paths(root);
+        assert_eq!(got.len(), 2, "both nested .bsp, no .txt");
+        assert!(
+            got[0].ends_with("a/b/c.bsp") && got[1].ends_with("a/z.bsp"),
+            "sorted"
+        );
     }
 }
 

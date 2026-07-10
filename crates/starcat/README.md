@@ -43,7 +43,16 @@ paths. This is two things from the *same survey, version 441* — planets and
 asteroids:
 
 - the **DE441 planetary ephemeris** (Sun, Moon, Mercury..Pluto barycenters), and
-- the **DE441 small-body bundles** — `sb441-n16.bsp` and `sb441-n373.bsp`.
+- the **DE441 small-body bundles** — `sb441-n16.bsp` (the main-belt asteroids)
+  and `sb441-n373s.bsp` (the dwarf planets; the DE440-window subset of the full
+  `sb441-n373.bsp`, which is a fetchable optional extra).
+
+`de441` is the **default**, but it is one of several **entourages** — a DE
+integration bundled with the asteroid perturbers that travel with it. Any series
+is selectable: `starcat data fetch <slug>` (tab-complete to see them — `de441`,
+`de431`, `de440`, `de430`, …), and `starcat data fetch --list` prints them all
+with sizes. The rest of this section describes `de441`; the others behave the
+same way.
 
 They ship as pre-built files at fixed URLs, so a fetch is a plain mirrored
 download (resumable and self-verifying by BLAKE3). The command prints the
@@ -88,9 +97,10 @@ drifts):
   the lots, etc.) that come free with the planetary binary.
 - **`sb441-n16.bsp`** (bundled with the DE441 fetch) — Ceres, Pallas, Juno,
   Vesta, and Hygiea.
-- **`sb441-n373.bsp`** (bundled with the DE441 fetch) — the extended small-body
-  set: Eris, Haumea, Makemake, Quaoar, Orcus, Ixion, Varuna, Sedna, and
-  Gonggong.
+- **`sb441-n373s.bsp`** (bundled with the DE441 fetch) — the dwarf planets:
+  Eris, Haumea, Makemake, Quaoar, Orcus, Ixion, Varuna, Sedna, and Gonggong.
+  (The fuller `sb441-n373.bsp`, same bodies over the deep-time window, is a
+  fetchable optional extra rather than part of the default.)
 - **HORIZONS on-demand** (not part of the DE441 fetch) — the centaurs Chiron,
   Pholus, Nessus, Chariklo, and Asbolus via `starcat horizons cent`, and the KBO
   Albion via `starcat horizons kbo`.
@@ -98,6 +108,48 @@ drifts):
 After a `data fetch`, starcat prints a **capabilities readout** showing which of
 these groups are actually on disk right now (marked `[have]` / `[need]`), with a
 hint for the `starcat horizons` commands that would supply any absent group.
+
+### `starcat data migrate` — bring existing files into the data dir
+
+If you already have JPL ephemeris files somewhere — a full `ssd.jpl.nasa.gov/`
+mirror, a deep point inside one, or just a **flat folder of downloads** — `data
+migrate` cherry-picks every **usable** file out of it (across *all* DE series and
+their asteroid companions, in any layout) and brings it into the default data
+directory.
+
+```
+starcat data migrate --from-jpl /path/to/your/files   # or set $STARCAT_JPL_DATA
+```
+
+It also migrates your **Horizons SPKs** — the per-body `<naif>.bsp` files from
+prior `starcat horizons` pulls — from `--from-horizons PATH` (or
+`$STARCAT_HORIZONS_DATA`) into the platform Horizons dir, as if freshly pulled.
+Those have no BLAKE3 oracle entry (they are generated on demand), so each is
+validated by opening it as an SPK (a truncated file fails and is skipped). At
+least one of `--from-jpl` / `--from-horizons` (or their env vars) must resolve;
+you can run either or both in one invocation:
+
+```
+starcat data migrate --from-jpl /mnt/nasa --from-horizons ~/old-horizons --move
+```
+
+It scans first and reports before touching anything: which files are already
+present, which are usable and queued, and which **failed verification** (e.g. a
+truncated download) and are therefore skipped — JPL candidates are checked
+against the BLAKE3 oracle (size then hash), Horizons SPKs by opening them, so a
+half-downloaded file is never accepted. Then it asks whether to **copy** or
+**move**:
+
+- **Copy** (`--copy`) leaves your originals in place. On a copy-on-write
+  filesystem (APFS / btrfs / XFS / ReFS) it clones the files and uses **no
+  additional disk space**; starcat probes for this and tells you so at the
+  prompt. Off copy-on-write, it is a full byte copy.
+- **Move** (`--move`) relocates each file, removing the original once its copy
+  verifies.
+
+Passing `--copy` or `--move` runs non-interactively (useful in scripts); with
+neither, and no terminal to prompt on, it asks you to pass one. Afterward it
+prints the same capabilities readout as `data fetch`.
 
 ### On-demand SPKs: `starcat horizons <class>`
 
@@ -130,6 +182,12 @@ Resolution order per command:
   overridable). `--jpl-data` → `$STARCAT_JPL_DATA` names an *existing mirror* to
   copy-on-write clone from instead of re-downloading; if neither is set or no
   mirror is found there, the fetch is network-only.
+- **`data migrate`** — destinations are **always** the platform data dir (the
+  mirror subtree for JPL files, `…/starcat/horizons/` for Horizons SPKs). JPL
+  source is `--from-jpl` → `$STARCAT_JPL_DATA`; Horizons source is `--from-horizons`
+  → `$STARCAT_HORIZONS_DATA`. Unlike `data fetch`, either source may be any
+  existing path (a mirror *or* a flat folder — no `ssd.jpl.nasa.gov/` layout
+  required).
 - **`horizons`** — `--out` → `$STARCAT_HORIZONS_DATA` → `…/starcat/horizons/`.
 
 ### `starcat data provenance`

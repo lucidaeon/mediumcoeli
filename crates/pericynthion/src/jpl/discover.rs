@@ -5,6 +5,13 @@
 //! walk up to 8 levels deep to find the best available dataset. Binary is
 //! preferred over ASCII at equal DE numbers; the highest-numbered series wins.
 //!
+//! [`open_dataset_for_year`] is the **date-aware** entry point the CLI uses: it
+//! honours the oracle's precision-ordered preference and opens the smallest,
+//! most accurate DE whose window covers the chart year (e.g. DE440 over DE441
+//! for a modern date), falling back to `open_dataset` when nothing preferred is
+//! present. Because it opens each entourage's *exact* header + binary by name,
+//! it also handles layouts the convention-based `locate` cannot (see below).
+//!
 //! The same `PATH` value works for `--jpl-data` / `$STARCAT_JPL_DATA`
 //! regardless of whether the user points at the `de441/` leaf or the
 //! top-level `ssd.jpl.nasa.gov` mirror root.
@@ -68,8 +75,11 @@
 //!
 //! **Naming quirk (DE430/431 and older):** older releases use `lnx*` (not
 //! `linux_*`) for binaries and `header.NNN_572` (not `header.NNN`) for the
-//! extended-constant header. This discover module only recognises `linux_*`
-//! and plain `header.NNN`, so DE430/431 need symlinks to work as-is.
+//! extended-constant header. The convention-based [`locate`]/[`open_dataset`]
+//! only recognise `linux_*` + plain `header.NNN`, so they skip DE430/431. The
+//! date-aware [`open_dataset_for_year`] does not have this limitation: it opens
+//! the entourage's exact `header.NNN_572`/`lnx*` pair by name, so those series
+//! work on the CLI compute path with no symlinks.
 
 use crate::error::PericynthionError;
 use crate::jpl::ascii::AsciiEphemeris;
@@ -424,18 +434,7 @@ fn find_binary_for_denum(entries: &[PathBuf], denum: u32) -> Option<PathBuf> {
 /// - the backing store (binary mmap or ASCII chunk index) cannot be opened.
 pub fn open_dataset(start: &Path) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
     match locate(start)? {
-        DatasetLocation::Binary(paths) => {
-            let source =
-                std::fs::read_to_string(&paths.header).map_err(|e| PericynthionError::Io {
-                    path: paths.header.clone(),
-                    source: e,
-                })?;
-            // Propagate the structured HeaderError via `?`/From<HeaderError>
-            // rather than flattening it into an opaque Io(InvalidData).
-            let header = header::parse(&source)?;
-            let file = EphemerisFile::open(&paths.binary, &header)?;
-            Ok((header, Box::new(file)))
-        }
+        DatasetLocation::Binary(paths) => open_binary_pair(&paths.header, &paths.binary),
         DatasetLocation::Ascii {
             header: hdr_path,
             dir,
@@ -452,6 +451,99 @@ pub fn open_dataset(start: &Path) -> Result<(Header, Box<dyn RecordSource>), Per
             Ok((header, Box::new(ascii)))
         }
     }
+}
+
+/// Open a specific located `header.NNN` + binary pair into a ready dataset,
+/// bypassing filename-convention discovery.
+///
+/// The date-aware selector knows *exactly* which header pairs with which binary
+/// (from the oracle entourage), so it opens them directly — which also works for
+/// the `header.NNN_572` (DE430/431) headers that [`locate`] cannot classify by
+/// name.
+///
+/// # Errors
+/// [`PericynthionError::Io`] if the header cannot be read, or the header/binary
+/// fail to parse/open.
+pub fn open_binary_pair(
+    header_path: &Path,
+    binary_path: &Path,
+) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
+    let source = std::fs::read_to_string(header_path).map_err(|e| PericynthionError::Io {
+        path: header_path.to_path_buf(),
+        source: e,
+    })?;
+    let header = header::parse(&source)?;
+    let file = EphemerisFile::open(binary_path, &header)?;
+    Ok((header, Box::new(file)))
+}
+
+/// The (header basename, binary basename) of an entourage's planetary dataset —
+/// the header is the `planets` file whose name starts `header.`, the binary is
+/// the other. `None` if the entourage lacks one of them.
+fn entourage_de_files(ent: &crate::jpl::oracle::Entourage) -> Option<(&'static str, &'static str)> {
+    let base = |url: &'static str| url.rsplit('/').next().unwrap_or(url);
+    let mut header = None;
+    let mut binary = None;
+    for &url in ent.planets {
+        let b = base(url);
+        if b.starts_with("header.") {
+            header = Some(b);
+        } else {
+            binary = Some(b);
+        }
+    }
+    Some((header?, binary?))
+}
+
+/// Locate + open the best DE dataset for `year`, honoring the oracle's
+/// precision-ordered [`de_preference`](crate::jpl::oracle::de_preference).
+///
+/// Walks the preference list (best-precision first) and opens the first entry
+/// whose window [`covers`](crate::jpl::oracle::DePreference::covers) `year` AND
+/// whose header + binary are both present under `start`. So with both DE440 and
+/// DE441 on disk, a modern date resolves to the smaller, marginally more
+/// accurate DE440; a deep-time date falls through to DE441.
+///
+/// Falls back to [`open_dataset`] (highest-denum, date-blind) when no
+/// preferred+present dataset covers `year`, preserving behavior for custom or
+/// unrecognized data layouts.
+///
+/// # Errors
+/// [`PericynthionError`] if the chosen (or fallback) dataset cannot be opened.
+pub fn open_dataset_for_year(
+    start: &Path,
+    year: i32,
+) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
+    if let Some((header, binary)) = select_de_pair_for_year(start, year) {
+        return open_binary_pair(&header, &binary);
+    }
+    // Nothing preferred is present for this year — fall back to discovery.
+    open_dataset(start)
+}
+
+/// The (header path, binary path) of the best DE covering `year` that is present
+/// under `start`, per the oracle's precision-ordered
+/// [`de_preference`](crate::jpl::oracle::de_preference); `None` if no preferred
+/// dataset covering `year` is on disk. Pure locate — opens nothing.
+#[must_use]
+pub fn select_de_pair_for_year(start: &Path, year: i32) -> Option<(PathBuf, PathBuf)> {
+    for pref in crate::jpl::oracle::de_preference() {
+        if !pref.covers(year) {
+            continue;
+        }
+        let Some(ent) = crate::jpl::oracle::entourage(pref.slug) else {
+            continue;
+        };
+        let Some((header_name, binary_name)) = entourage_de_files(ent) else {
+            continue;
+        };
+        if let Some(header) = crate::locate_jpl_file(start, header_name)
+            && let Some(binary) = crate::locate_jpl_file(start, binary_name)
+        {
+            return Some((header, binary));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -664,5 +756,56 @@ mod tests {
             "DE-series granule size must be ≈ 32 days; got {}",
             source.granule_days()
         );
+    }
+
+    /// Lay down presence-only `header.NNN` + binary files for a DE series under a
+    /// synthetic mirror. Content is not parsed by `select_de_pair_for_year`.
+    fn place_de(root: &Path, subdir: &str, header: &str, binary: &str) {
+        let dir = root
+            .join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux")
+            .join(subdir);
+        fs::create_dir_all(&dir).unwrap();
+        write_file(&dir, header, 8);
+        write_file(&dir, binary, 8);
+    }
+
+    #[test]
+    fn select_de_pair_prefers_de440_over_de441_for_a_modern_year() {
+        let tmp = make_dir();
+        let root = tmp.path();
+        place_de(root, "de440", "header.440", "linux_p1550p2650.440");
+        place_de(root, "de441", "header.441", "linux_m13000p17000.441");
+
+        // Modern date: DE440 (smaller, marginally more precise) wins over DE441.
+        let (h, b) = super::select_de_pair_for_year(root, 2026).expect("a pair");
+        assert!(h.ends_with("de440/header.440"), "{h:?}");
+        assert!(b.ends_with("de440/linux_p1550p2650.440"), "{b:?}");
+
+        // Deep-time date: DE440's window excludes it, so it falls to DE441.
+        let (h, b) = super::select_de_pair_for_year(root, -5000).expect("a pair");
+        assert!(h.ends_with("de441/header.441"), "{h:?}");
+        assert!(b.ends_with("de441/linux_m13000p17000.441"), "{b:?}");
+    }
+
+    #[test]
+    fn select_de_pair_falls_to_de441_when_de440_absent() {
+        let tmp = make_dir();
+        let root = tmp.path();
+        place_de(root, "de441", "header.441", "linux_m13000p17000.441");
+        // A modern date still resolves — DE441 is the preferred one present.
+        let (h, _) = super::select_de_pair_for_year(root, 2026).expect("de441 covers 2026");
+        assert!(h.ends_with("de441/header.441"), "{h:?}");
+    }
+
+    #[test]
+    fn select_de_pair_is_none_when_nothing_present() {
+        let tmp = make_dir();
+        assert!(super::select_de_pair_for_year(tmp.path(), 2026).is_none());
+        // A half-present dataset (header without its binary) is not selectable.
+        let root = tmp.path();
+        let dir = root.join("ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de440");
+        fs::create_dir_all(&dir).unwrap();
+        write_file(&dir, "header.440", 8);
+        assert!(super::select_de_pair_for_year(root, 2026).is_none());
     }
 }

@@ -2,6 +2,7 @@
 //! resumable, self-verifying fetcher for the JPL production subset.
 
 use crate::jpl::oracle::{self, OracleEntry};
+use std::sync::OnceLock;
 
 /// The platform-native persistent **data** directory for starcat's ephemerides
 /// (not a cache dir — never subject to OS cache eviction).
@@ -25,32 +26,65 @@ pub struct Dataset {
 }
 
 impl Dataset {
-    /// The oracle entries this dataset comprises (URLs + hashes come from the
-    /// oracle).
+    /// The oracle entries this dataset comprises — the entourage's default set
+    /// (the DE integration plus its perturber SPKs). URLs + hashes come from the
+    /// oracle. The heavier `optional` extras are excluded here; a caller who
+    /// wants them uses [`oracle::entourage_entries`] with `include_optional`.
     #[must_use]
     pub fn entries(&self) -> Vec<OracleEntry> {
-        match self.slug {
-            "de441" => oracle::production_entries(),
-            _ => Vec::new(),
-        }
+        oracle::entourage_entries(self.slug, false).unwrap_or_default()
     }
 }
 
-static DATASETS: &[Dataset] = &[Dataset {
-    slug: "de441",
-    description: "DE441 production subset (planets + core small bodies), ~2.8 GB",
-}];
+/// Rough human byte size (binary GB/MB) for a dataset description.
+#[allow(clippy::cast_precision_loss)] // display-only; sub-byte precision irrelevant
+fn human_bytes(n: u64) -> String {
+    const GB: f64 = 1_073_741_824.0;
+    const MB: f64 = 1_048_576.0;
+    let f = n as f64;
+    if f >= GB {
+        format!("{:.1} GB", f / GB)
+    } else {
+        format!("{:.0} MB", f / MB)
+    }
+}
 
-/// The registered datasets. v1: exactly `de441`.
+/// Every fetchable dataset — one per oracle entourage (a DE integration and its
+/// perturber set). Derived from [`oracle::entourages`], so the committed JSON
+/// manifest is the single source of truth. `de441` is the default; `de431` and
+/// the older DE integrations are selectable by slug.
 #[must_use]
 pub fn datasets() -> &'static [Dataset] {
+    static DATASETS: OnceLock<Vec<Dataset>> = OnceLock::new();
     DATASETS
+        .get_or_init(|| {
+            oracle::entourages()
+                .iter()
+                .map(|e| {
+                    let bytes: u64 = oracle::entourage_entries(e.slug, false)
+                        .map_or(0, |v| v.iter().map(|x| x.size).sum());
+                    let description: &'static str = Box::leak(
+                        format!(
+                            "{} integration + perturbers (~{})",
+                            e.label,
+                            human_bytes(bytes)
+                        )
+                        .into_boxed_str(),
+                    );
+                    Dataset {
+                        slug: e.slug,
+                        description,
+                    }
+                })
+                .collect()
+        })
+        .as_slice()
 }
 
 /// Look up a dataset by slug.
 #[must_use]
 pub fn dataset_from_slug(slug: &str) -> Option<&'static Dataset> {
-    DATASETS.iter().find(|d| d.slug == slug)
+    datasets().iter().find(|d| d.slug == slug)
 }
 
 #[cfg(feature = "data-fetch")]
@@ -264,6 +298,329 @@ mod fetch {
         fetch_entries(&dataset.entries(), root, source, on_progress)
     }
 
+    // --- data migrate: cherry-pick usable files from a source into the data dir
+
+    /// How `data migrate` relocates each usable file it finds in the source.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MigrateMode {
+        /// Copy into the data dir — a copy-on-write clone where the filesystem
+        /// supports it (zero extra disk), otherwise a full byte copy. The source
+        /// is left in place.
+        Copy,
+        /// Move into the data dir — rename where possible, else copy then delete.
+        /// The source file is removed once the destination verifies.
+        Move,
+    }
+
+    /// One usable file located in the source, ready to migrate to `entry`'s
+    /// canonical path under the data dir.
+    #[derive(Debug, Clone)]
+    pub struct MigrateItem {
+        /// The oracle entry (canonical path + size + hash) this file satisfies.
+        pub entry: OracleEntry,
+        /// Where the matching file was found in the source tree.
+        pub source_path: PathBuf,
+    }
+
+    /// The result of scanning a source for usable files — computed WITHOUT
+    /// modifying anything, so the CLI can report and prompt before acting.
+    #[derive(Debug, Default)]
+    pub struct MigratePlan {
+        /// Verified usable files to migrate (base-name match + BLAKE3 `Ok`).
+        pub migrate: Vec<MigrateItem>,
+        /// Entries already present + valid in the data dir (nothing to do).
+        pub skipped: Vec<PathBuf>,
+        /// Files whose base name matched a usable entry but which FAILED the
+        /// size/hash check — e.g. a truncated download. Reported, never moved.
+        pub corrupt: Vec<PathBuf>,
+    }
+
+    impl MigratePlan {
+        /// Total bytes across the files queued to migrate.
+        #[must_use]
+        pub fn total_bytes(&self) -> u64 {
+            self.migrate.iter().map(|i| i.entry.size).sum()
+        }
+    }
+
+    /// What one migrated file became.
+    #[derive(Debug, Default)]
+    pub struct MigrateSummary {
+        /// Copy mode: copy-on-write clones (no additional disk used).
+        pub reflinked: Vec<PathBuf>,
+        /// Copy mode: full byte copies (off-CoW fallback).
+        pub copied: Vec<PathBuf>,
+        /// Move mode: relocated files (source removed).
+        pub moved: Vec<PathBuf>,
+        /// Files that landed but failed post-migration verification (removed).
+        pub failed: Vec<PathBuf>,
+    }
+
+    /// Scan `source` for every usable file in `entries`, WITHOUT modifying
+    /// anything. For each entry: already valid under `root` -> skipped; a source
+    /// file whose base name matches AND whose bytes verify -> queued to migrate;
+    /// a same-named file that fails size/hash (with none that verifies) ->
+    /// flagged corrupt; no name match at all -> ignored (a given source rarely
+    /// holds every series).
+    ///
+    /// Location is **content-verified**, not merely name-based: several usable
+    /// files share a base name with a byte-different file in another layout (a
+    /// DE-series `header.NNN` exists identically under `Linux/`, `ascii/`, and
+    /// `SunOS/` — but for DE406 and DE421 the `ascii/` copy differs by a byte).
+    /// The scan therefore walks past a wrong-content twin and keeps looking, so
+    /// the correct file is found regardless of traversal order, and a genuinely
+    /// truncated download is still reported rather than silently accepted.
+    #[must_use]
+    pub fn migrate_scan(entries: &[OracleEntry], source: &Path, root: &Path) -> MigratePlan {
+        let mut plan = MigratePlan::default();
+        for entry in entries {
+            if matches!(oracle::verify_entry(root, entry).status, VerifyStatus::Ok) {
+                plan.skipped.push(root.join(&entry.path));
+                continue;
+            }
+            let base = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+            // Prefer a source file that matches this entry by name AND content.
+            let verified = crate::locate_jpl_file_accepting(source, |p| {
+                p.file_name().and_then(|n| n.to_str()) == Some(base)
+                    && matches!(oracle::verify_file(p, entry), VerifyStatus::Ok)
+            });
+            if let Some(found) = verified {
+                plan.migrate.push(MigrateItem {
+                    entry: entry.clone(),
+                    source_path: found,
+                });
+            } else if let Some(any) = crate::locate_jpl_file(source, base) {
+                // A same-named file exists but nothing verified — e.g. a
+                // truncated download. Report it; never migrate it.
+                plan.corrupt.push(any);
+            }
+        }
+        plan
+    }
+
+    /// Best-effort probe of whether copy-on-write cloning works from the source
+    /// filesystem into `root`: reflinks `sample` (an existing source file) to a
+    /// throwaway in `root`. `true` only on a genuine reflink. Never writes to the
+    /// source, and always removes its probe file.
+    #[must_use]
+    pub fn probe_cow(sample: &Path, root: &Path) -> bool {
+        let _ = std::fs::create_dir_all(root);
+        let probe = root.join(".starcat-cow-probe");
+        let _ = std::fs::remove_file(&probe);
+        let is_reflink = matches!(reflink_copy::reflink_or_copy(sample, &probe), Ok(None));
+        let _ = std::fs::remove_file(&probe);
+        is_reflink
+    }
+
+    /// Apply a [`MigratePlan`] with the chosen [`MigrateMode`], returning what
+    /// each file became. `on_item(index, total, item)` fires as each file is
+    /// about to be processed (for progress reporting).
+    ///
+    /// # Errors
+    /// Returns [`FetchError::Io`] on a filesystem error during copy/move/clone.
+    pub fn migrate_apply(
+        plan: &MigratePlan,
+        root: &Path,
+        mode: MigrateMode,
+        mut on_item: impl FnMut(usize, usize, &MigrateItem),
+    ) -> Result<MigrateSummary, FetchError> {
+        let total = plan.migrate.len();
+        let mut summary = MigrateSummary::default();
+        for (i, item) in plan.migrate.iter().enumerate() {
+            on_item(i, total, item);
+            let target = root.join(&item.entry.path);
+            match mode {
+                MigrateMode::Copy => {
+                    match clone_entry(&item.source_path, root, &item.entry, &target)? {
+                        Some(true) => summary.reflinked.push(target),
+                        Some(false) => summary.copied.push(target),
+                        None => summary.failed.push(target),
+                    }
+                }
+                MigrateMode::Move => {
+                    if move_entry(&item.source_path, root, &item.entry, &target)? {
+                        summary.moved.push(target);
+                    } else {
+                        summary.failed.push(target);
+                    }
+                }
+            }
+        }
+        Ok(summary)
+    }
+
+    /// Move a source file to `target`, verifying the landed file. Rename first
+    /// (instant within a filesystem); on a cross-filesystem rename error, fall
+    /// back to copy + remove-source. Returns whether the landed file verified.
+    fn move_entry(
+        src: &Path,
+        root: &Path,
+        entry: &OracleEntry,
+        target: &Path,
+    ) -> Result<bool, FetchError> {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        let _ = std::fs::remove_file(target);
+        let _ = std::fs::remove_file(part_path(target));
+        if std::fs::rename(src, target).is_err() {
+            // Cross-filesystem: rename is not permitted, so copy then delete.
+            std::fs::copy(src, target).map_err(io(target))?;
+            std::fs::remove_file(src).map_err(io(src))?;
+        }
+        if matches!(oracle::verify_entry(root, entry).status, VerifyStatus::Ok) {
+            Ok(true)
+        } else {
+            let _ = std::fs::remove_file(target);
+            Ok(false)
+        }
+    }
+
+    // --- data migrate: Horizons per-body SPKs (no oracle hash; validated by
+    // opening as an SPK) from a source Horizons dir into the platform one.
+
+    /// What placing one file became.
+    enum Placed {
+        Reflinked,
+        Copied,
+        Moved,
+    }
+
+    /// Relocate one file into `dest` by [`MigrateMode`], with no verification
+    /// (the caller validates). Copy = copy-on-write clone (else full copy); move
+    /// = rename (instant within a filesystem), else copy + delete-source.
+    fn place_file(src: &Path, dest: &Path, mode: MigrateMode) -> Result<Placed, FetchError> {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        let _ = std::fs::remove_file(dest);
+        match mode {
+            MigrateMode::Copy => match reflink_copy::reflink_or_copy(src, dest) {
+                Ok(None) => Ok(Placed::Reflinked),
+                Ok(Some(_)) => Ok(Placed::Copied),
+                Err(source) => Err(FetchError::Io {
+                    path: dest.to_path_buf(),
+                    source,
+                }),
+            },
+            MigrateMode::Move => {
+                if std::fs::rename(src, dest).is_err() {
+                    std::fs::copy(src, dest).map_err(io(dest))?;
+                    std::fs::remove_file(src).map_err(io(src))?;
+                }
+                Ok(Placed::Moved)
+            }
+        }
+    }
+
+    /// One Horizons SPK located in the source, to migrate to the Horizons dir
+    /// under its own base name (`<naif>.bsp`).
+    #[derive(Debug, Clone)]
+    pub struct HorizonsMigrateItem {
+        /// Where the `.bsp` was found in the source.
+        pub source_path: PathBuf,
+        /// Its size in bytes.
+        pub size: u64,
+    }
+
+    /// The result of scanning a source Horizons dir — computed WITHOUT modifying
+    /// anything, so the CLI can report and prompt before acting.
+    #[derive(Debug, Default)]
+    pub struct HorizonsMigratePlan {
+        /// Valid `.bsp` SPKs to migrate.
+        pub migrate: Vec<HorizonsMigrateItem>,
+        /// Already present + valid in the destination Horizons dir.
+        pub skipped: Vec<PathBuf>,
+        /// Present in the source but not a valid SPK (e.g. a truncated download).
+        pub invalid: Vec<PathBuf>,
+    }
+
+    impl HorizonsMigratePlan {
+        /// Total bytes queued to migrate.
+        #[must_use]
+        pub fn total_bytes(&self) -> u64 {
+            self.migrate.iter().map(|i| i.size).sum()
+        }
+    }
+
+    /// What the Horizons migration did.
+    #[derive(Debug, Default)]
+    pub struct HorizonsMigrateSummary {
+        /// Copy mode: copy-on-write clones (no additional disk).
+        pub reflinked: Vec<PathBuf>,
+        /// Copy mode: full byte copies.
+        pub copied: Vec<PathBuf>,
+        /// Move mode: relocated files.
+        pub moved: Vec<PathBuf>,
+        /// Landed but failed to open as an SPK afterward (removed).
+        pub failed: Vec<PathBuf>,
+    }
+
+    /// Scan a source Horizons directory for per-body `.bsp` SPKs to bring into
+    /// `dest` (the platform Horizons dir), WITHOUT modifying anything.
+    ///
+    /// The source is a curated Horizons dir — every `.bsp` in it is a prior
+    /// `starcat horizons` pull — so all are candidates. Each is validated by
+    /// opening it as an SPK (guarding a truncated download); one already present
+    /// and valid in `dest` is skipped; one that fails to open is flagged invalid.
+    #[must_use]
+    pub fn horizons_migrate_scan(source: &Path, dest: &Path) -> HorizonsMigratePlan {
+        let mut plan = HorizonsMigratePlan::default();
+        for src_path in crate::spk::collect_bsp_paths(source) {
+            let Some(name) = src_path.file_name() else {
+                continue;
+            };
+            let dest_path = dest.join(name);
+            if dest_path.is_file() && crate::spk::SpkEphemeris::open(&dest_path).is_ok() {
+                plan.skipped.push(dest_path);
+                continue;
+            }
+            if crate::spk::SpkEphemeris::open(&src_path).is_ok() {
+                let size = std::fs::metadata(&src_path).map_or(0, |m| m.len());
+                plan.migrate.push(HorizonsMigrateItem {
+                    source_path: src_path,
+                    size,
+                });
+            } else {
+                plan.invalid.push(src_path);
+            }
+        }
+        plan
+    }
+
+    /// Apply a [`HorizonsMigratePlan`] into `dest` by copy or move, re-validating
+    /// each landed file opens as an SPK. `on_item(index, total, item)` fires as
+    /// each file is processed.
+    ///
+    /// # Errors
+    /// [`FetchError::Io`] on a filesystem error during copy/move.
+    pub fn horizons_migrate_apply(
+        plan: &HorizonsMigratePlan,
+        dest: &Path,
+        mode: MigrateMode,
+        mut on_item: impl FnMut(usize, usize, &HorizonsMigrateItem),
+    ) -> Result<HorizonsMigrateSummary, FetchError> {
+        let total = plan.migrate.len();
+        let mut summary = HorizonsMigrateSummary::default();
+        for (i, item) in plan.migrate.iter().enumerate() {
+            on_item(i, total, item);
+            let name = item.source_path.file_name().unwrap_or_default();
+            let target = dest.join(name);
+            let placed = place_file(&item.source_path, &target, mode)?;
+            if crate::spk::SpkEphemeris::open(&target).is_ok() {
+                match placed {
+                    Placed::Reflinked => summary.reflinked.push(target),
+                    Placed::Copied => summary.copied.push(target),
+                    Placed::Moved => summary.moved.push(target),
+                }
+            } else {
+                let _ = std::fs::remove_file(&target);
+                summary.failed.push(target);
+            }
+        }
+        Ok(summary)
+    }
+
     fn download_entry(
         client: &reqwest::blocking::Client,
         entry: &OracleEntry,
@@ -384,7 +741,10 @@ mod fetch {
 
 #[cfg(feature = "data-fetch")]
 pub use fetch::{
-    FetchError, FetchProgress, FetchSummary, entry_url, fetch_dataset, fetch_entries, part_path,
+    FetchError, FetchProgress, FetchSummary, HorizonsMigrateItem, HorizonsMigratePlan,
+    HorizonsMigrateSummary, MigrateItem, MigrateMode, MigratePlan, MigrateSummary, entry_url,
+    fetch_dataset, fetch_entries, horizons_migrate_apply, horizons_migrate_scan, migrate_apply,
+    migrate_scan, part_path, probe_cow,
 };
 
 #[cfg(test)]
@@ -399,17 +759,37 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_de441_and_rejects_unknown() {
+    fn registry_has_de441_de431_and_rejects_unknown() {
+        // The registry is derived from the oracle entourages (JSON manifest).
         assert!(dataset_from_slug("de441").is_some());
+        assert!(dataset_from_slug("de431").is_some());
         assert!(dataset_from_slug("nope").is_none());
-        assert_eq!(datasets().len(), 1);
+        assert_eq!(datasets().len(), oracle::entourages().len());
     }
 
     #[test]
-    fn de441_entries_are_the_production_subset() {
+    fn de441_dataset_is_the_entourage_default_superset_of_production() {
         let ds = dataset_from_slug("de441").unwrap();
-        assert_eq!(ds.entries(), oracle::production_entries());
-        assert!(!ds.entries().is_empty());
+        let entries = ds.entries();
+        assert!(!entries.is_empty());
+        // The DE integration binary and the headline small-body SPK are present.
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.path.ends_with("linux_m13000p17000.441"))
+        );
+        assert!(entries.iter().any(|e| e.path.ends_with("sb441-n16.bsp")));
+        // The entourage rolls in the dwarf-planet perturber so users don't end
+        // up without the dwarves — it is a strict superset of the narrower
+        // compute/verify `production_entries` subset.
+        assert!(entries.iter().any(|e| e.path.ends_with("sb441-n373s.bsp")));
+        for p in oracle::production_entries() {
+            assert!(
+                entries.iter().any(|e| e.path == p.path),
+                "production entry {} missing from de441 entourage",
+                p.path
+            );
+        }
     }
 
     #[test]
@@ -671,5 +1051,231 @@ mod tests {
         let s2 = super::fetch_entries(&entries, root, None, |_| {}).expect("second fetch");
         assert_eq!(s2.downloaded.len(), 0);
         assert_eq!(s2.skipped.len(), 1);
+    }
+
+    /// Synthetic oracle entry hashing to `bytes`, at `rel`.
+    #[cfg(feature = "data-fetch")]
+    fn synth_entry(rel: &str, bytes: &[u8]) -> OracleEntry {
+        OracleEntry {
+            path: rel.into(),
+            size: bytes.len() as u64,
+            blake3_hex: leak_hash(bytes),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn migrate_scan_classifies_skip_migrate_corrupt_and_ignores_absent() {
+        let src = tempdir::TempDir::new("mig-scan-src").unwrap();
+        let dst = tempdir::TempDir::new("mig-scan-dst").unwrap();
+
+        let skip = synth_entry("ssd.jpl.nasa.gov/ftp/eph/a/skip.bin", COW_BYTES);
+        let good = synth_entry("ssd.jpl.nasa.gov/ftp/eph/b/good.bin", COW_BYTES);
+        let bad = synth_entry("ssd.jpl.nasa.gov/ftp/eph/c/bad.bin", COW_BYTES);
+        let absent = synth_entry("ssd.jpl.nasa.gov/ftp/eph/d/gone.bin", COW_BYTES);
+
+        // `skip` already valid in the data dir; `good` valid in source; `bad`
+        // present in source but truncated (wrong bytes); `absent` nowhere.
+        place(dst.path(), &skip.path, COW_BYTES);
+        place(src.path(), &good.path, COW_BYTES);
+        place(src.path(), &bad.path, b"TRUNCATED");
+
+        let entries = [skip.clone(), good.clone(), bad, absent];
+        let plan = super::migrate_scan(&entries, src.path(), dst.path());
+
+        assert_eq!(plan.skipped, vec![dst.path().join(&skip.path)]);
+        assert_eq!(plan.migrate.len(), 1);
+        assert_eq!(plan.migrate[0].entry.path, good.path);
+        assert_eq!(
+            plan.corrupt.len(),
+            1,
+            "truncated file flagged, not migrated"
+        );
+        assert_eq!(plan.total_bytes(), COW_BYTES.len() as u64);
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn migrate_apply_copy_lands_valid_and_leaves_source() {
+        let src = tempdir::TempDir::new("mig-copy-src").unwrap();
+        let dst = tempdir::TempDir::new("mig-copy-dst").unwrap();
+        let e = synth_entry("ssd.jpl.nasa.gov/ftp/eph/x/de441.bin", COW_BYTES);
+        place(src.path(), &e.path, COW_BYTES);
+
+        let plan = super::migrate_scan(std::slice::from_ref(&e), src.path(), dst.path());
+        assert_eq!(plan.migrate.len(), 1);
+        let summary =
+            super::migrate_apply(&plan, dst.path(), super::MigrateMode::Copy, |_, _, _| {})
+                .expect("copy migrate");
+
+        // Landed at the canonical path and verifies; a reflink or a full copy.
+        assert!(matches!(
+            oracle::verify_entry(dst.path(), &e).status,
+            oracle::VerifyStatus::Ok
+        ));
+        assert_eq!(summary.reflinked.len() + summary.copied.len(), 1);
+        assert!(summary.moved.is_empty() && summary.failed.is_empty());
+        // Copy leaves the source in place.
+        assert!(src.path().join(&e.path).is_file());
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn migrate_apply_move_relocates_and_removes_source() {
+        let src = tempdir::TempDir::new("mig-move-src").unwrap();
+        let dst = tempdir::TempDir::new("mig-move-dst").unwrap();
+        let e = synth_entry("ssd.jpl.nasa.gov/ftp/eph/y/de431.bin", COW_BYTES);
+        let src_file = src.path().join(&e.path);
+        place(src.path(), &e.path, COW_BYTES);
+
+        let plan = super::migrate_scan(std::slice::from_ref(&e), src.path(), dst.path());
+        let summary =
+            super::migrate_apply(&plan, dst.path(), super::MigrateMode::Move, |_, _, _| {})
+                .expect("move migrate");
+
+        assert!(matches!(
+            oracle::verify_entry(dst.path(), &e).status,
+            oracle::VerifyStatus::Ok
+        ));
+        assert_eq!(summary.moved.len(), 1);
+        // Move removes the located source file.
+        assert!(!src_file.exists(), "source should be gone after a move");
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn migrate_scan_walks_past_wrong_content_twin_to_the_correct_file() {
+        // Two files share the base name `header.406` (as the real Linux/ascii
+        // twins do) but differ in content. The wrong one sorts first ("a_" <
+        // "z_"), so a name-only locate would hit it, fail verify, and give up.
+        // Content-verified location must skip it and find the correct file.
+        let src = tempdir::TempDir::new("mig-twin-src").unwrap();
+        let dst = tempdir::TempDir::new("mig-twin-dst").unwrap();
+        let e = synth_entry(
+            "ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de406/header.406",
+            COW_BYTES,
+        );
+        place(
+            src.path(),
+            "a_wrong/header.406",
+            b"a different header entirely",
+        );
+        place(src.path(), "z_right/header.406", COW_BYTES);
+
+        let plan = super::migrate_scan(std::slice::from_ref(&e), src.path(), dst.path());
+        assert_eq!(plan.migrate.len(), 1, "must find the content-matching twin");
+        assert!(
+            plan.migrate[0].source_path.ends_with("z_right/header.406"),
+            "expected the correct file, got {:?}",
+            plan.migrate[0].source_path
+        );
+        assert!(plan.corrupt.is_empty(), "a valid file was present");
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn migrate_scan_flags_corrupt_only_when_no_twin_verifies() {
+        // Only a wrong-content same-named file exists: nothing verifies, so the
+        // entry is reported corrupt (a truncated download), never migrated.
+        let src = tempdir::TempDir::new("mig-onlybad-src").unwrap();
+        let dst = tempdir::TempDir::new("mig-onlybad-dst").unwrap();
+        let e = synth_entry(
+            "ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de406/header.406",
+            COW_BYTES,
+        );
+        place(src.path(), "somewhere/header.406", b"truncated");
+
+        let plan = super::migrate_scan(std::slice::from_ref(&e), src.path(), dst.path());
+        assert!(plan.migrate.is_empty());
+        assert_eq!(plan.corrupt.len(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn probe_cow_leaves_no_residue() {
+        let src = tempdir::TempDir::new("probe-src").unwrap();
+        let dst = tempdir::TempDir::new("probe-dst").unwrap();
+        let sample = src.path().join("sample.bin");
+        std::fs::write(&sample, COW_BYTES).unwrap();
+        // Result is filesystem-dependent (true only on CoW); we only assert the
+        // probe cleans up after itself regardless of outcome.
+        let _ = super::probe_cow(&sample, dst.path());
+        assert!(!dst.path().join(".starcat-cow-probe").exists());
+    }
+
+    /// Write a minimal valid DAF/SPK (file record + empty summary record) at
+    /// `dir/name`. Opens as an SPK; carries no segments.
+    #[cfg(feature = "data-fetch")]
+    fn write_spk(dir: &std::path::Path, name: &str) {
+        use std::io::Write;
+        let mut file_rec = [0u8; 1024];
+        file_rec[0..8].copy_from_slice(b"DAF/SPK ");
+        file_rec[8..12].copy_from_slice(&2i32.to_le_bytes());
+        file_rec[12..16].copy_from_slice(&6i32.to_le_bytes());
+        file_rec[76..80].copy_from_slice(&2i32.to_le_bytes());
+        file_rec[88..96].copy_from_slice(b"LTL-IEEE");
+        let sum_rec = [0u8; 1024];
+        std::fs::create_dir_all(dir).unwrap();
+        let mut f = std::fs::File::create(dir.join(name)).unwrap();
+        f.write_all(&file_rec).unwrap();
+        f.write_all(&sum_rec).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn horizons_migrate_scan_classifies_migrate_skip_and_invalid() {
+        let src = tempdir::TempDir::new("hz-scan-src").unwrap();
+        let dst = tempdir::TempDir::new("hz-scan-dst").unwrap();
+        // Source: a new valid SPK, one already present in dest, one truncated.
+        write_spk(src.path(), "2060.bsp"); // Chiron — new
+        write_spk(src.path(), "2000001.bsp"); // already in dest
+        std::fs::write(src.path().join("bad.bsp"), b"NOPE").unwrap(); // truncated
+        write_spk(dst.path(), "2000001.bsp"); // present + valid in dest
+
+        let plan = super::horizons_migrate_scan(src.path(), dst.path());
+        assert_eq!(plan.migrate.len(), 1);
+        assert!(plan.migrate[0].source_path.ends_with("2060.bsp"));
+        assert_eq!(plan.skipped.len(), 1, "2000001 already valid in dest");
+        assert_eq!(plan.invalid.len(), 1, "truncated bad.bsp flagged");
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn horizons_migrate_apply_copy_lands_valid_and_leaves_source() {
+        let src = tempdir::TempDir::new("hz-copy-src").unwrap();
+        let dst = tempdir::TempDir::new("hz-copy-dst").unwrap();
+        write_spk(src.path(), "2060.bsp");
+        let plan = super::horizons_migrate_scan(src.path(), dst.path());
+        let summary = super::horizons_migrate_apply(
+            &plan,
+            dst.path(),
+            super::MigrateMode::Copy,
+            |_, _, _| {},
+        )
+        .expect("copy");
+        assert!(dst.path().join("2060.bsp").is_file());
+        assert!(crate::spk::SpkEphemeris::open(dst.path().join("2060.bsp")).is_ok());
+        assert_eq!(summary.reflinked.len() + summary.copied.len(), 1);
+        assert!(summary.failed.is_empty());
+        assert!(src.path().join("2060.bsp").is_file(), "copy leaves source");
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn horizons_migrate_apply_move_relocates_and_removes_source() {
+        let src = tempdir::TempDir::new("hz-move-src").unwrap();
+        let dst = tempdir::TempDir::new("hz-move-dst").unwrap();
+        write_spk(src.path(), "2060.bsp");
+        let plan = super::horizons_migrate_scan(src.path(), dst.path());
+        let summary = super::horizons_migrate_apply(
+            &plan,
+            dst.path(),
+            super::MigrateMode::Move,
+            |_, _, _| {},
+        )
+        .expect("move");
+        assert!(crate::spk::SpkEphemeris::open(dst.path().join("2060.bsp")).is_ok());
+        assert_eq!(summary.moved.len(), 1);
+        assert!(!src.path().join("2060.bsp").exists(), "move removes source");
     }
 }

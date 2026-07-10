@@ -38,6 +38,19 @@ pub fn locate_jpl_file_matching(
     find_under_matching(&root, matches)
 }
 
+/// Like [`locate_jpl_file`], but accepts a file only when `accept` (given the
+/// full path) returns true — the same mirror-root hoist, then
+/// [`find_under_accepting`]. Lets a caller require a **content** match, walking
+/// past a same-named file from another layout whose bytes differ.
+#[must_use]
+pub fn locate_jpl_file_accepting(
+    start: &Path,
+    accept: impl FnMut(&Path) -> bool,
+) -> Option<PathBuf> {
+    let root = oracle::mirror_root_from(start).unwrap_or_else(|| start.to_path_buf());
+    find_under_accepting(&root, accept)
+}
+
 /// Find the first file named `name` anywhere in the tree rooted at `root`.
 ///
 /// Layout-agnostic: works whether the user mirrored the full
@@ -60,14 +73,29 @@ pub fn find_under(root: &Path, name: &str) -> Option<PathBuf> {
 /// order, no symlink following, bounded depth, first match wins.
 #[must_use]
 pub fn find_under_matching(root: &Path, mut matches: impl FnMut(&str) -> bool) -> Option<PathBuf> {
-    // `root` itself being the named file counts as a match.
-    if let Some(name) = root.file_name().and_then(|n| n.to_str())
-        && matches(name)
-        && root.is_file()
-    {
+    find_under_accepting(root, |p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(&mut matches)
+    })
+}
+
+/// Like [`find_under_matching`], but the predicate sees the **full path**, so it
+/// can accept a file by *content* as well as name.
+///
+/// This is what lets a caller skip a same-named file from another layout whose
+/// bytes differ (e.g. a DE-series `header.NNN` under `ascii/` that is not the
+/// `Linux/` one it wants) and keep walking until a genuine match is found —
+/// rather than stopping at the first name match and rejecting it. Same traversal
+/// contract as [`find_under`]: deterministic lexicographic order, no symlink
+/// following, bounded depth, first accepted file wins.
+#[must_use]
+pub fn find_under_accepting(root: &Path, mut accept: impl FnMut(&Path) -> bool) -> Option<PathBuf> {
+    // `root` itself being an accepted file counts as a match.
+    if root.is_file() && accept(root) {
         return Some(root.to_path_buf());
     }
-    find_under_rec(root, &mut matches, 0)
+    find_under_rec(root, &mut accept, 0)
 }
 
 /// Depth-first search body. Uses `symlink_metadata` so symlinked directories are
@@ -75,7 +103,7 @@ pub fn find_under_matching(root: &Path, mut matches: impl FnMut(&str) -> bool) -
 /// file name for deterministic first-match ordering.
 fn find_under_rec(
     dir: &Path,
-    matches: &mut impl FnMut(&str) -> bool,
+    accept: &mut impl FnMut(&Path) -> bool,
     depth: usize,
 ) -> Option<PathBuf> {
     if depth >= MAX_WALK_DEPTH {
@@ -93,10 +121,7 @@ fn find_under_rec(
         let Ok(meta) = std::fs::symlink_metadata(entry) else {
             continue;
         };
-        if meta.file_type().is_file()
-            && let Some(name) = entry.file_name().and_then(|n| n.to_str())
-            && matches(name)
-        {
+        if meta.file_type().is_file() && accept(entry) {
             return Some(entry.clone());
         }
     }
@@ -106,7 +131,7 @@ fn find_under_rec(
             continue;
         };
         if meta.file_type().is_dir()
-            && let Some(hit) = find_under_rec(entry, matches, depth + 1)
+            && let Some(hit) = find_under_rec(entry, accept, depth + 1)
         {
             return Some(hit);
         }

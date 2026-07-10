@@ -66,6 +66,12 @@ use aes_gcm::{
 
 use crate::chromium::framing::{Key256, strip_hash};
 
+// `RawRow` is referenced only by the Windows-only decrypt fns below, so gate the
+// import to Windows — otherwise it is an unused import (a `-D warnings` failure)
+// on macOS/Linux. Lives in `crate::cookie` (see `decrypt_macos.rs` / `gate.rs`).
+#[cfg(target_os = "windows")]
+use crate::cookie::RawRow;
+
 // ---------------------------------------------------------------------------
 // Cross-platform: AES-256-GCM decryption (tested on macOS)
 // ---------------------------------------------------------------------------
@@ -145,7 +151,7 @@ pub(crate) fn decrypt_v10_gcm(
 // Windows-only: PowerShell DPAPI helpers + high-level dispatch
 // ---------------------------------------------------------------------------
 
-/// Invoke Windows DPAPI (`ProtectedData.Unprotect`, CurrentUser scope) via a
+/// Invoke Windows DPAPI (`ProtectedData.Unprotect`, `CurrentUser` scope) via a
 /// PowerShell subprocess, returning the decrypted bytes.
 ///
 /// The encrypted blob is passed via the `WB_IN` environment variable (base64)
@@ -266,7 +272,7 @@ pub(crate) fn master_key(
 
 /// Decrypt a legacy per-cookie DPAPI blob (pre-v10 Chromium Windows path).
 ///
-/// Calls `ProtectedData.Unprotect` (CurrentUser scope) on the raw
+/// Calls `ProtectedData.Unprotect` (`CurrentUser` scope) on the raw
 /// `encrypted_value` bytes and UTF-8-decodes the result.
 ///
 /// All failures return `None` (graceful degradation).

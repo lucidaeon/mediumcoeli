@@ -1,6 +1,6 @@
 [package]
 name = "pericynthion"
-version = "0.11.0"
+version = "0.12.0"
 description = "Astrological ephemeris computation library: pure-Rust NASA JPL Ephemerides reader"
 keywords = ["astrology", "chart", "de441", "ephemeris", "natal"]
 categories = ["algorithms", "date-and-time", "mathematics", "science"]
@@ -20,7 +20,10 @@ name = "pericynthion"
 
 [features]
 default = []
-serde = ["dep:serde"]
+# Vestigial: `serde`/`serde_json` are now non-optional core deps (the JPL oracle
+# parses its committed JSON manifest at load time). Kept as a no-op so downstream
+# `features = ["serde"]` references still resolve.
+serde = []
 # Unverified house systems (Koch, Campanus, Meridian, Equal-from-MC,
 # Horizontal, Topocentric/Polich-Page, Krusinski-Pisa-Goeldi, Sripati,
 # Vehlow Equal, Carter Poli-Equatorial, Pullen SD, Pullen SR).
@@ -36,7 +39,7 @@ jzod = ["dep:jzod", "sidereal"]
 # Pulls in an HTTP client (reqwest, rustls-tls) + JSON + base64. Default-off so
 # the numeric core stays network-free for library consumers; the starcat CLI
 # enables it. Matches the off-by-default pattern of jzod / serde / noref-houses.
-horizons = ["dep:reqwest", "dep:serde_json", "dep:base64"]
+horizons = ["dep:reqwest", "dep:base64"]
 # Sidereal-zodiac engine (the `sidereal` module): ayanamsha-at-date math plus a
 # compiled-in ayanamsha catalog. Default-off so the tropical numeric core stays
 # minimal for library consumers; no extra dependencies.
@@ -51,10 +54,10 @@ data-fetch = ["data-dir", "horizons", "dep:reflink-copy"]
 thiserror.workspace = true
 memmap2.workspace = true
 blake3.workspace = true
-serde = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
 jzod = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 directories = { workspace = true, optional = true }
 reflink-copy = { workspace = true, optional = true }

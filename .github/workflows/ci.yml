@@ -2,9 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ['**']          # every branch push — catch breakage pre-PR, pre-tag
   pull_request:
     branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,7 +18,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96
         with:
           components: rustfmt
@@ -27,7 +31,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96
         with:
           components: clippy
@@ -39,7 +43,7 @@ jobs:
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --document-private-items
@@ -47,25 +51,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96
       - uses: Swatinem/rust-cache@v2
       - name: Test (data-gated suites skip; STARCAT_JPL_DATA/ASTRO_* unset)
         run: cargo test --release --workspace
-
-  codegen-drift:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.96
-        with:
-          components: rustfmt
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Regenerate oracle_data.rs and assert no drift
-        run: |
-          python3 scripts/gen_oracle.py scripts/oracle_manifest.tsv \
-            > crates/pericynthion/src/jpl/oracle_data.rs
-          cargo fmt -p pericynthion
-          git diff --exit-code -- crates/pericynthion/src/jpl/oracle_data.rs

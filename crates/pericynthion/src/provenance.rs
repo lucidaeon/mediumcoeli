@@ -45,7 +45,21 @@ fn horizons_url(naif_id: i32) -> String {
     format!("{HORIZONS_API_URL}?format=json&EPHEM_TYPE=SPK&COMMAND={naif_id}")
 }
 
+/// True for a path in starcat's production default entourage (the DE441
+/// integration and its `asteroids_de441` perturber SPKs). Used only to rank
+/// providers: many DE integrations declare the same bodies, but starcat computes
+/// production placements from DE441, so it is reported as the primary source.
+fn is_de441_family(path: &str) -> bool {
+    path.contains("/de441/") || path.contains("/asteroids_de441/")
+}
+
 /// Manifest providers (JPL mirror + CDS) whose `provides` names this body.
+///
+/// Many DE integrations back the same body (every DE binary provides the ten
+/// planets; both the DE430 and DE441 asteroid companions carry the main belt).
+/// The production DE441 family is sorted first so it is the reported primary
+/// source; the older integrations follow as selectable alternates in mirror
+/// order. The sort is stable, so equal-rank rows keep their manifest order.
 fn manifest_providers(body: &str) -> Vec<Provider> {
     let mut out = Vec::new();
     for d in oracle::manifest_dirs() {
@@ -66,6 +80,7 @@ fn manifest_providers(body: &str) -> Vec<Provider> {
             }
         }
     }
+    out.sort_by_key(|p| u8::from(!is_de441_family(&p.rel_path)));
     out
 }
 
