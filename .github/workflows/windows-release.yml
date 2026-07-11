@@ -22,7 +22,7 @@ jobs:
         id: tag
         shell: bash
         run: |
-          ref="${GITHUB_REF#refs/tags/}"          # e.g. starcat/0.8.0
+          ref="${GITHUB_REF#refs/tags/}"          # e.g. starcat/0.11.0
           crate="${ref%%/*}"
           version="${ref##*/}"
           asset="${crate}-${version}-x86_64-pc-windows-msvc.zip"
@@ -30,6 +30,7 @@ jobs:
             echo "crate=$crate"
             echo "version=$version"
             echo "asset=$asset"
+            echo "ref=$ref"
             echo "url=https://github.com/lucidaeon/mediumcoeli/releases/download/${ref}/${asset}"
           } >> "$GITHUB_OUTPUT"
 
@@ -54,17 +55,18 @@ jobs:
 
       - name: Open manifest-bump PR in the scoop bucket
         env:
-          GH_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          GH_TOKEN: ${{ secrets.PACKAGE_PUBLISH }}
           CRATE: ${{ steps.tag.outputs.crate }}
           VERSION: ${{ steps.tag.outputs.version }}
           URL: ${{ steps.tag.outputs.url }}
           SHA: ${{ steps.pkg.outputs.sha256 }}
+          REF: ${{ steps.tag.outputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
           git clone "https://x-access-token:${GH_TOKEN}@github.com/lucidaeon/scoop-bucket.git" scoop-bucket
           cd scoop-bucket
-          branch="bump-${CRATE}-${VERSION}"
+          branch="bump-$(echo "$REF" | tr '/' '-')"
           git switch -c "$branch"
           manifest="bucket/${CRATE}.json"
           tmp="$(mktemp)"
@@ -76,7 +78,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "Bump ${CRATE} to ${VERSION}"
           git push -u origin "$branch"
-          gh pr create --repo lucidaeon/scoop-bucket \
+          pr_url="$(gh pr create --repo lucidaeon/scoop-bucket \
             --base main --head "$branch" \
             --title "Bump ${CRATE} to ${VERSION}" \
-            --body "Automated manifest bump from the ${CRATE}/${VERSION} GitHub Release. Verify the url + sha256, then squash-merge it with 'gh pr merge --squash' (GitHub signs the squash). main requires signed commits; the squash lands one signed commit instead of dragging this bot commit onto main."
+            --body "Automated manifest bump from the ${CRATE}/${VERSION} GitHub Release; squash-merged automatically (GitHub web-flow signs the squash).")"
+          gh pr merge "$pr_url" --repo lucidaeon/scoop-bucket --squash --delete-branch

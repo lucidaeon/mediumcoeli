@@ -123,11 +123,26 @@ publish DRY='--dry-run':
 	# Preflight: fail before any crate ships if docs have broken links.
 	# docs.rs builds permissively, so this is the last gate before they go public.
 	just doc
-	# One coordinated workspace publish (cargo's `package-workspace` feature):
-	# cargo orders the crates by dependency and resolves intra-workspace versions
-	# from the local tree, so a first-time cross-version bump — and its --dry-run —
-	# succeeds without each sibling already being on crates.io.
-	cargo publish --workspace {{DRY}}
+	# Read-before-write: skip any crate whose current version is already on
+	# crates.io, so a release that bumps only a subset doesn't abort on the
+	# unchanged siblings. cargo publish --workspace still orders the survivors by
+	# dependency and resolves intra-workspace versions from the local tree.
+	excludes=(); total=0
+	while IFS=$'\t' read -r name version; do
+	  total=$((total + 1))
+	  case ${#name} in
+	    1) path="1/${name}" ;;
+	    2) path="2/${name}" ;;
+	    3) path="3/${name:0:1}/${name}" ;;
+	    *) path="${name:0:2}/${name:2:2}/${name}" ;;
+	  esac
+	  if curl -fsSL "https://index.crates.io/${path}" | grep -qF "\"vers\":\"${version}\""; then
+	    echo "skip ${name}@${version} (already on crates.io)"
+	    excludes+=(--exclude "${name}")
+	  fi
+	done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.publish != []) | "\(.name)\t\(.version)"')
+	if [ $(( ${#excludes[@]} / 2 )) -ge "${total}" ]; then echo "Nothing to publish — all current versions already on crates.io."; exit 0; fi
+	cargo publish --workspace ${excludes[@]+"${excludes[@]}"} {{DRY}}
 
 # ── test corpora ──────────────────────────────────────────────────────────────
 

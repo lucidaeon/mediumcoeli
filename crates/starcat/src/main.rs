@@ -7,9 +7,9 @@
 //! geocentric (default), topocentric (`--lat` + `--lon`), heliocentric
 //! (`--helio`). Also emits the chart axes (Ac/Ds, Mc/Ic,
 //! Vx/Ax, Nn/Sn, Lil/Pri — see "Chart points" below), the eight
-//! Hermetic lots, and seven always-on house systems (Whole Sign,
+//! Hermetic lots, and eight always-on house systems (Whole Sign,
 //! Equal-from-Ac, Placidus, Regiomontanus, Porphyry, Alcabitius,
-//! Morinus). An additional twelve house systems (Koch, Campanus,
+//! Morinus, Koch). An additional eleven house systems (Campanus,
 //! Meridian, Equal-from-MC, Horizontal, Topocentric, Krusinski,
 //! Sripati, Vehlow Equal, Carter Poli-Equatorial, Pullen Sinusoidal
 //! Delta, Pullen Sinusoidal Ratio) are available with the
@@ -762,7 +762,6 @@ enum HouseArg {
     Regiomontanus,
     Porphyry,
     Alcabitius,
-    #[cfg(feature = "noref-houses")]
     Koch,
     #[cfg(feature = "noref-houses")]
     Campanus,
@@ -798,7 +797,6 @@ impl HouseArg {
             Self::Regiomontanus => HouseSystem::Regiomontanus,
             Self::Porphyry => HouseSystem::Porphyry,
             Self::Alcabitius => HouseSystem::Alcabitius,
-            #[cfg(feature = "noref-houses")]
             Self::Koch => HouseSystem::Koch,
             #[cfg(feature = "noref-houses")]
             Self::Campanus => HouseSystem::Campanus,

@@ -30,8 +30,8 @@ each division to the ecliptic. The division is geometric (space), not temporal.
 | Carter Poli-Equatorial | Celestial equator | 12 × 30° of RA from RA(Asc) | Great circles through the **celestial poles** (hour circles) | Asc | ≠ MC | Carter, *Essays on the Foundations of Astrology*, ISBN 0-7229-5132-9; North, *Horoscopes and History*, ISBN 978-0-85481-068-0 | Geometry = North's "Equatorial, moving boundaries" (group 5) |
 | Meridian (Axial Rotation / Zariel) | Celestial equator | 12 × 30° of RA from RAMC | Great circles through the **celestial poles** (hour circles) | East Point (EP) | MC | [Swiss Ephemeris Programmer's Guide §13](https://www.astro.com/swisseph/swephprg.htm) | Absent from North's typology (modern; uniform RA from RAMC, not from Asc) |
 | Morinus | Celestial equator | 12 × 30° of RA from RAMC | Great circles through the **ecliptic poles** (longitude circles) | ≠ Asc | ≠ MC | [Swiss Ephemeris Programmer's Guide §13](https://www.astro.com/swisseph/swephprg.htm) | Absent from North's typology (Morin, 17th c.; equator divided, ecliptic-pole projection) |
-| Regiomontanus | Celestial equator | 12 × 30° of RA from RAMC | Great circles through the **N/S horizon points** | Asc | MC | North, *Horoscopes and History*, ISBN 978-0-85481-068-0; [Swiss Ephemeris §13](https://www.astro.com/swisseph/swephprg.htm) | North's "Equatorial, fixed boundaries" (group 4) |
-| Campanus | Prime vertical | 12 × 30° from the East Point | Great circles through the **N/S horizon points** | Asc | MC | North, *Horoscopes and History*, ISBN 978-0-85481-068-0; [Swiss Ephemeris §13](https://www.astro.com/swisseph/swephprg.htm) | North's "Prime Vertical, fixed boundaries" (group 3) |
+| Regiomontanus | Celestial equator | 12 × 30° of RA from RAMC | Great circles through the **N/S horizon points** | Asc | MC | North, *Horoscopes and History*, ISBN 978-0-85481-068-0 | North's "Equatorial, fixed boundaries" (group 4) |
+| Campanus | Prime vertical | 12 × 30° from the East Point | Great circles through the **N/S horizon points** | Asc | MC | North, *Horoscopes and History*, ISBN 978-0-85481-068-0 | North's "Prime Vertical, fixed boundaries" (group 3) |
 | Horizon (Horizontal) | Horizon | 12 × 30° of azimuth from the East Point | Azimuth (vertical) circles ∩ ecliptic | Asc (EP) | the prime-vertical/ecliptic point | [Swiss Ephemeris §13](https://www.astro.com/swisseph/swephprg.htm) (system `H`) | — |
 | Krusinski–Pisa–Goeldi | Great circle through Asc and zenith | 12 × 30° from the Asc | Great circles through the poles of the Asc–zenith circle | Asc | MC | [Swiss Ephemeris §13](https://www.astro.com/swisseph/swephprg.htm) (system `U`) | — |
 
@@ -60,9 +60,9 @@ high latitude.
 | System | Quantity divided | Division method | 1st cusp | 10th cusp | Polar behaviour | Citations | Notes |
 |---|---|---|---|---|---|---|---|
 | Placidus | Diurnal & nocturnal **semi-arcs** of each ecliptic degree | Trisect each semi-arc in time | Asc | MC | Undefined above the polar circle (degrees that never rise/set) | [Skyscript: House Division](https://www.skyscript.co.uk/glossary/house-division/) | Semi-arc method; outside North's typology (he treats it as the later displacer) |
-| Koch (Birthplace / GOH) | Asc's diurnal **semi-arc** | Equal thirds; intermediate cusps share oblique ascension under the birthplace pole | Asc | MC | Undefined when MC degree is circumpolar | [Swiss Ephemeris §13](https://www.astro.com/swisseph/swephprg.htm) (system `K`) | — |
+| Koch (Birthplace / GOH) | **MC's** diurnal **semi-arc** | Equal thirds; intermediate cusps share oblique ascension under the birthplace pole | Asc | MC | Undefined when MC degree is circumpolar | Makransky, *Primary Directions* (1992) p. 69 | — |
 | Alcabitius | Asc → MC and Asc → IC **diurnal arcs** | Trisect each in time; cusps lie on the corresponding hour circles | Asc | MC | Undefined when the Asc is circumpolar | North, *Horoscopes and History*, ISBN 978-0-85481-068-0; Gansten, [doi:10.1163/25899201-12340029](https://doi.org/10.1163/25899201-12340029); Holden, "Ancient House Division," *J. Research AFA* 1.1 (1982) | North's "Standard method" (group 1); the name is a late ascription — Rhetorius gave a worked example c. AD 500, and Al-Qabisi (d. c. 967) merely explained it (Holden) |
-| Topocentric (Polich–Page) | — (closed-form **approximation** of Placidus) | Cusp "pole" from tan θ = (k/3)·tan φ, k = 1,2 | Asc | MC | Numerically stable at high latitude (unlike Placidus) | Polich & Page (1964); [Swiss Ephemeris §13](https://www.astro.com/swisseph/swephprg.htm) (system `T`) | — |
+| Topocentric (Polich–Page) | — (closed-form **approximation** of Placidus) | Cusp "pole" from tan θ = (k/3)·tan φ, k = 1,2 | Asc | MC | Numerically stable at high latitude (unlike Placidus) | Polich & Page (1964) | — |
 
 ---
 
@@ -95,10 +95,12 @@ Each entry states, tersely, how the cusps are obtained.
   azimuth from the East Point; each division's vertical (azimuth) circle is
   intersected with the ecliptic to give the cusp. H1 = Asc (East Point).
 
-- **Koch (Birthplace / GOH).** The Ascendant's diurnal semi-arc at the birth
-  latitude is split into equal thirds; the intermediate cusps are the ecliptic
-  degrees whose oblique ascension under the birthplace's pole matches those
-  fractional positions. H1 = Asc, H10 = MC. Fails when the MC degree is circumpolar.
+- **Koch (Birthplace / GOH).** The **MC's** diurnal semi-arc at the birth
+  latitude is split into equal thirds; cusp N is the ecliptic degree whose
+  oblique ascension equals that of the point at RA = RAMC + M·(DSA_MC)/3 carrying
+  the MC's declination (M = 1, 2, 4, 5 for cusps 11, 12, 2, 3). H1 = Asc,
+  H10 = MC. Fails when the MC degree is circumpolar. Formula: Makransky, *Primary
+  Directions: A Primer of Calculation* (1992), p. 69.
 
 - **Krusinski–Pisa–Goeldi.** The great circle passing through the Ascendant and the
   zenith is divided into twelve equal 30° arcs from the Ascendant; each is projected

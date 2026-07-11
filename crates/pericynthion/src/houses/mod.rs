@@ -7,12 +7,14 @@
 //! index 9 = house 10 cusp = MC, etc.).
 
 pub mod equal;
+pub mod koch;
 pub mod placidus;
 pub mod porphyry;
 pub mod regiomontanus;
 pub mod whole_sign;
 
 pub use equal::equal_as_rad;
+pub use koch::koch_rad;
 pub use placidus::placidus_rad;
 pub use porphyry::porphyry_rad;
 pub use regiomontanus::regiomontanus_rad;
@@ -26,11 +28,6 @@ pub use whole_sign::whole_sign_rad;
 // `noref-houses` Cargo feature is enabled. Default builds see nothing
 // here. As each system gets refchart-oracle coverage, its `#[cfg]`
 // attribute is removed in a focused promotion commit.
-
-#[cfg(feature = "noref-houses")]
-pub mod koch;
-#[cfg(feature = "noref-houses")]
-pub use koch::koch_rad;
 
 #[cfg(feature = "noref-houses")]
 pub mod campanus;
@@ -114,7 +111,6 @@ pub enum HouseSystem {
     Porphyry,
     Alcabitius,
     Morinus,
-    #[cfg(feature = "noref-houses")]
     Koch,
     #[cfg(feature = "noref-houses")]
     Campanus,
@@ -141,7 +137,7 @@ pub enum HouseSystem {
 }
 
 impl HouseSystem {
-    /// The seven always-on house systems in canonical presentation order.
+    /// The eight always-on house systems in canonical presentation order.
     pub const DEFAULT_SET: &'static [Self] = &[
         Self::WholeSign,
         Self::EqualFromAsc,
@@ -150,6 +146,7 @@ impl HouseSystem {
         Self::Porphyry,
         Self::Alcabitius,
         Self::Morinus,
+        Self::Koch,
     ];
 
     /// Human-readable display name for the house system.
@@ -163,7 +160,6 @@ impl HouseSystem {
             Self::Porphyry => "Porphyry",
             Self::Alcabitius => "Alcabitius",
             Self::Morinus => "Morinus",
-            #[cfg(feature = "noref-houses")]
             Self::Koch => "Koch",
             #[cfg(feature = "noref-houses")]
             Self::Campanus => "Campanus",
@@ -201,7 +197,6 @@ impl HouseSystem {
             Self::Porphyry => "porphyry",
             Self::Alcabitius => "alcabitius",
             Self::Morinus => "morinus",
-            #[cfg(feature = "noref-houses")]
             Self::Koch => "koch",
             #[cfg(feature = "noref-houses")]
             Self::Campanus => "campanus",
@@ -259,7 +254,6 @@ impl HouseSystem {
             )),
             Self::Alcabitius => alcabitius_rad(ramc_rad, obliquity_rad, lat_rad),
             Self::Morinus => morinus_rad(ramc_rad, obliquity_rad, lat_rad),
-            #[cfg(feature = "noref-houses")]
             Self::Koch => koch_rad(ramc_rad, obliquity_rad, lat_rad),
             #[cfg(feature = "noref-houses")]
             Self::Campanus => campanus_rad(ramc_rad, obliquity_rad, lat_rad),
@@ -334,7 +328,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn house_system_default_set_is_seven_in_order() {
+    fn house_system_default_set_is_eight_in_order() {
         use HouseSystem::*;
         assert_eq!(
             HouseSystem::DEFAULT_SET,
@@ -345,7 +339,8 @@ mod tests {
                 Regiomontanus,
                 Porphyry,
                 Alcabitius,
-                Morinus
+                Morinus,
+                Koch
             ]
         );
     }

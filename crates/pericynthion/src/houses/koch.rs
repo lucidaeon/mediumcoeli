@@ -1,8 +1,8 @@
-#![cfg(feature = "noref-houses")]
 #![allow(clippy::similar_names)]
 
-//! Koch (Birthplace) house system — gated behind `noref-houses` until a
-//! refchart oracle is captured.
+//! Koch (Birthplace) house system. Reference-verified against a Solar Fire
+//! chart (`skills/astrologer/fixtures/ref_alan_turing_koch.md`); see the
+//! `matches_koch_refchart_alan_turing` test below.
 
 use super::HouseCusps;
 use crate::coords::acds::ac_rad;
@@ -19,8 +19,6 @@ pub fn koch_rad(ramc_rad: f64, obliquity_rad: f64, lat_rad: f64) -> Option<House
     if lat_rad.abs() >= FRAC_PI_2 {
         return None;
     }
-    let eps_cos = obliquity_rad.cos();
-    let eps_sin = obliquity_rad.sin();
     let lat_tan = lat_rad.tan();
 
     let mc = mc_rad(ramc_rad, obliquity_rad);
@@ -29,29 +27,31 @@ pub fn koch_rad(ramc_rad: f64, obliquity_rad: f64, lat_rad: f64) -> Option<House
     let ds = (ac + PI).rem_euclid(TAU);
 
     // Declination of the MC point and its ascensional difference.
-    let sin_delta_mc = (eps_sin * mc.sin()).clamp(-1.0, 1.0);
-    let delta_mc = sin_delta_mc.asin();
+    let delta_mc = (obliquity_rad.sin() * mc.sin()).clamp(-1.0, 1.0).asin();
     let ad_arg = lat_tan * delta_mc.tan();
     if ad_arg.abs() >= 1.0 {
         return None; // MC point is circumpolar — Koch undefined at this lat.
     }
     let ad_mc = ad_arg.asin();
 
-    // Koch's published per-cusp offsets. The "correction" rotates RA in
-    // proportion to the MC's ascensional difference.
-    let deg30 = 30.0_f64.to_radians();
-    let cusp_for = |ra_offset_rad: f64, ad_fraction: f64| -> f64 {
-        let h = ra_offset_rad + ad_fraction * ad_mc;
-        let ra = (ramc_rad + h).rem_euclid(TAU);
-        let y = ra.sin();
-        let x = ra.cos() * eps_cos - lat_tan * eps_sin * h.sin();
-        y.atan2(x).rem_euclid(TAU)
+    // Trisect the MC's diurnal semi-arc (DSA_MC = π/2 + AD_MC): cusp N is the
+    // ecliptic degree sharing the oblique ascension of the point at
+    // RA = RAMC + M·DSA_MC/3, declination D_MC (M = 1, 2, 4, 5 for cusps 11, 12,
+    // 2, 3). In this crate's Ascendant convention the ecliptic point whose
+    // oblique ascension is θ is `ac_rad(θ − π/2)`. Source: Makransky, *Primary
+    // Directions: A Primer of Calculation* (1992), p. 69.
+    let dsa_mc = FRAC_PI_2 + ad_mc;
+    let cusp = |m: f64| {
+        ac_rad(
+            ramc_rad + m * dsa_mc / 3.0 - ad_mc - FRAC_PI_2,
+            obliquity_rad,
+            lat_rad,
+        )
     };
-
-    let h11 = cusp_for(deg30, 1.0 / 3.0);
-    let h12 = cusp_for(2.0 * deg30, 2.0 / 3.0);
-    let h2 = cusp_for(4.0 * deg30, -2.0 / 3.0);
-    let h3 = cusp_for(5.0 * deg30, -1.0 / 3.0);
+    let h11 = cusp(1.0)?;
+    let h12 = cusp(2.0)?;
+    let h2 = cusp(4.0)?;
+    let h3 = cusp(5.0)?;
     let h5 = (h11 + PI).rem_euclid(TAU);
     let h6 = (h12 + PI).rem_euclid(TAU);
     let h8 = (h2 + PI).rem_euclid(TAU);
@@ -116,5 +116,30 @@ mod tests {
             total += span;
         }
         assert_abs_diff_eq!(total, 360.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn matches_koch_refchart_alan_turing() {
+        // Oracle: skills/astrologer/fixtures/ref_alan_turing_koch.md
+        // (Solar Fire, Koch system). LST 20:17:52, ε 23°27′02″, lat 51°N30′.
+        // Formula: Makransky, Primary Directions (1992), p. 69.
+        let ramc = ((20.0 + 17.0 / 60.0 + 52.0 / 3600.0) * 15.0_f64).to_radians();
+        let eps = (23.0 + 27.0 / 60.0 + 2.0 / 3600.0_f64).to_radians();
+        let lat = 51.5_f64.to_radians();
+        let hc = koch_rad(ramc, eps, lat).unwrap();
+        // Fixture cusp longitudes H1..H12 (decimal degrees).
+        let want = [
+            65.6583, 88.7156, 106.5194, 122.2017, 161.8108, 210.5311, 245.6583, 268.7156, 286.5194,
+            302.2017, 341.8108, 30.5311,
+        ];
+        for (i, &w) in want.iter().enumerate() {
+            let got = hc.0[i].to_degrees();
+            let diff = (got - w + 180.0).rem_euclid(360.0) - 180.0;
+            assert!(
+                diff.abs() < 0.01,
+                "cusp {} = {got:.4}°, want {w:.4}° (Δ {diff:.4}°)",
+                i + 1
+            );
+        }
     }
 }

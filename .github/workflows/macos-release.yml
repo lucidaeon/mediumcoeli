@@ -1,0 +1,136 @@
+name: macOS release (bottle + formula bump)
+
+on:
+  push:
+    tags:
+      - "starcat/*"
+      - "blackmoon/*"
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: "starcat | blackmoon"
+        required: true
+      version:
+        description: "e.g. 0.10.0"
+        required: true
+      dry_run:
+        description: "build + print the bottle only; no upload / PR / merge"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write   # upload the bottle asset to the tag's Release
+
+jobs:
+  bottle:
+    runs-on: macos-26
+    steps:
+      - name: Derive crate, version, mode
+        id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            crate="${{ inputs.crate }}"; version="${{ inputs.version }}"; ref="${crate}/${version}"
+            publish="${{ inputs.dry_run == false }}"
+          else
+            ref="${GITHUB_REF#refs/tags/}"; crate="${ref%%/*}"; version="${ref##*/}"; publish="true"
+          fi
+          {
+            echo "crate=$crate"
+            echo "version=$version"
+            echo "ref=$ref"
+            echo "publish=$publish"
+            echo "url=https://github.com/lucidaeon/mediumcoeli/archive/refs/tags/${ref}.tar.gz"
+            echo "root=https://github.com/lucidaeon/mediumcoeli/releases/download/${ref}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@main
+
+      - name: Build bottle (and merge the block into the formula)
+        id: bottle
+        env:
+          CRATE: ${{ steps.tag.outputs.crate }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          URL: ${{ steps.tag.outputs.url }}
+          ROOT: ${{ steps.tag.outputs.root }}
+        run: |
+          set -euxo pipefail
+          brew tap lucidaeon/tap
+          formula="$(brew --repository lucidaeon/tap)/Formula/${CRATE}.rb"
+          src_sha="$(curl -fsSL "$URL" | shasum -a 256 | cut -d' ' -f1)"
+          ruby -e '
+            f, url, sha = ARGV
+            s = File.read(f)
+            s.sub!(/url ".*"/, %Q{url "#{url}"})
+            s.sub!(/^  sha256 "[0-9a-f]+"$/, %Q{  sha256 "#{sha}"})
+            s.sub!(/^  bottle do.*?^  end\n/m, "")
+            File.write(f, s)
+          ' "$formula" "$URL" "$src_sha"
+          brew install --build-bottle "lucidaeon/tap/${CRATE}"
+          brew bottle --json --no-rebuild --root-url="$ROOT" "lucidaeon/tap/${CRATE}"
+          brew bottle --merge --write --no-commit ${CRATE}--*.bottle.json
+          brew style --fix "lucidaeon/tap/${CRATE}"   # normalize formatting (e.g. stray blank lines)
+          built="$(ls ${CRATE}--*.bottle.tar.gz | head -1)"
+          json="$(ls ${CRATE}--*.bottle.json | head -1)"
+          tag="$(echo "$built" | sed -E 's/.*\.([a-z0-9_]+)\.bottle\.tar\.gz$/\1/')"
+          asset="${CRATE}-${VERSION}.${tag}.bottle.tar.gz"
+          mv "$built" "$asset"
+          sha="$(shasum -a 256 "$asset" | cut -d' ' -f1)"
+          {
+            echo "file=$asset"
+            echo "sha256=$sha"
+            echo "json=$json"
+            echo "formula=$formula"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summary (test / dry-run)
+        if: ${{ steps.tag.outputs.publish != 'true' }}
+        run: |
+          echo "bottle: ${{ steps.bottle.outputs.file }}"
+          echo "sha256: ${{ steps.bottle.outputs.sha256 }}"
+          echo "--- formula bottle block ---"
+          sed -n '/bottle do/,/end/p' "${{ steps.bottle.outputs.formula }}"
+
+      - name: Upload bottle to the Release
+        if: ${{ steps.tag.outputs.publish == 'true' }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.ref }}
+          files: ${{ steps.bottle.outputs.file }}
+
+      - name: Open formula-bump PR in the tap
+        id: pr
+        if: ${{ steps.tag.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_PUBLISH }}
+          CRATE: ${{ steps.tag.outputs.crate }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          REF: ${{ steps.tag.outputs.ref }}
+        run: |
+          set -euxo pipefail
+          tap="$(brew --repository lucidaeon/tap)"
+          cd "$tap"
+          branch="bump-${CRATE}-${VERSION}-$(echo "$REF" | tr '/' '-')"
+          git config user.name "lucidaeon"
+          git config user.email "lucidaeon@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "Formula/${CRATE}.rb"
+          git commit -m "Bump ${CRATE} to ${VERSION}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/lucidaeon/homebrew-tap.git"
+          git push -u origin "$branch"
+          pr_url="$(gh pr create --repo lucidaeon/homebrew-tap --base main --head "$branch" \
+            --title "Bump ${CRATE} to ${VERSION}" \
+            --body "Automated: source + arm64_tahoe bottle hosted on the mediumcoeli ${REF} Release.")"
+          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+
+      - name: Gate + squash-merge the formula PR
+        if: ${{ steps.tag.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_PUBLISH }}
+        run: |
+          set -euxo pipefail
+          pr="${{ steps.pr.outputs.url }}"
+          sleep 15                                    # let the install-gate check register
+          gh pr checks "$pr" --repo lucidaeon/homebrew-tap --watch --interval 20
+          gh pr merge "$pr" --repo lucidaeon/homebrew-tap --squash --delete-branch

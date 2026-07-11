@@ -5,7 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/8cc6ea68d6332aa407985bc976350dd24c39ac08...main), [blackmoon/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.5.0), [starcat/0.11.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.11.0), 2026.07.10
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/9627a5f3b29b4c3f6e151c4393a431412ee83f93...main), [pericynthion/0.13.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.13.0), [starcat/0.12.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.12.0), 2026.07.10
+
+This cycle promotes the Koch (Birthplace) house system from the unverified
+`noref-houses` gate to always-on, now that it carries a reference-chart oracle
+and a corrected formula, and it lands a production-ready cross-platform release
+pipeline: Homebrew bottles on macOS and a Scoop manifest on Windows, published
+and merged automatically from a release tag.
+
+### Added — pericynthion
+
+- **Koch (Birthplace) house system is now always-on.** Previously gated behind
+  the `noref-houses` "unverified" feature, Koch now ships in the default build:
+  the enum variant, label, slug, and compute arm are ungated, and Koch joins
+  `DEFAULT_SET` (seven always-on systems become eight). Its cusps are computed by
+  semi-arc trisection of the MC's diurnal semi-arc (Makransky, *Primary
+  Directions* (1992), p. 69) and reference-verified to within 0.01° against a
+  Solar Fire Koch chart (Alan Turing) via a new acceptance test.
+
+### Added — starcat
+
+- **`--house koch` in the default build.** Koch is now selectable without the
+  `noref-houses` feature and is reported among the always-on house systems; the
+  module docs now read eight always-on, eleven remaining behind `noref-houses`.
+
+### Changed — ci / release
+
+- **Cross-platform release pipeline is production-ready.** The release workflow is
+  reorganized into `macos-release` (builds and uploads a Homebrew bottle, then
+  opens and squash-merges the tap formula PR gated on an install check) and
+  `windows-release` (Scoop publish-path harness), both driven from a release tag
+  and consolidated on a single `PACKAGE_PUBLISH` token.
+- **`just publish` skips crates already on crates.io**, so a partial-bump release
+  no longer aborts on unchanged sibling crates.
+
+## [9627a5f](https://github.com/lucidaeon/mediumcoeli/compare/8cc6ea68d6332aa407985bc976350dd24c39ac08...9627a5f3b29b4c3f6e151c4393a431412ee83f93), [blackmoon/0.5.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.5.0), [starcat/0.11.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.11.0), 2026.07.10
 
 This cycle makes both CLIs drivable from the environment: every `starcat compute`
 input and every `blackmoon` file-conversion flag now also reads a matching
