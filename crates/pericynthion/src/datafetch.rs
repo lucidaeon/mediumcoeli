@@ -15,24 +15,59 @@ pub fn default_data_dir() -> Option<std::path::PathBuf> {
     directories::ProjectDirs::from("", "", "starcat").map(|d| d.data_dir().to_path_buf())
 }
 
+/// The default directory for Horizons-fetched SPKs: the `horizons/` subdirectory
+/// of [`default_data_dir`] (sibling to the JPL mirror under the same platform
+/// data dir). `None` when no platform data dir is available.
+///
+/// This encodes the `<data_dir>/horizons/` convention once so every consumer
+/// resolves the same location. Does not create the directory.
+#[cfg(feature = "data-dir")]
+#[must_use]
+pub fn default_horizons_dir() -> Option<std::path::PathBuf> {
+    default_data_dir().map(|d| d.join("horizons"))
+}
+
+/// How a dataset's files are sourced, so a single registry can carry both the
+/// DE integration entourages and the fixed-star catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatasetKind {
+    /// A DE integration entourage — the planetary binary plus its perturber
+    /// SPKs, drawn from the oracle mirror.
+    Entourage,
+    /// The BSC5 fixed-star catalogue (a single small CDS/Harvard mirror file).
+    FixedStars,
+}
+
 /// A named, fetchable bundle of oracle files. The registry
 /// ([`datasets`]) is the single extension point for "name a dataset to fetch".
 #[derive(Debug, Clone, Copy)]
 pub struct Dataset {
-    /// CLI slug, e.g. `"de441"`.
+    /// CLI slug, e.g. `"de441"` or `"bsc5"`.
     pub slug: &'static str,
     /// One-line human description.
     pub description: &'static str,
+    /// What kind of data this is, and hence how it is fetched.
+    pub kind: DatasetKind,
 }
 
 impl Dataset {
-    /// The oracle entries this dataset comprises — the entourage's default set
-    /// (the DE integration plus its perturber SPKs). URLs + hashes come from the
-    /// oracle. The heavier `optional` extras are excluded here; a caller who
-    /// wants them uses [`oracle::entourage_entries`] with `include_optional`.
+    /// The oracle entries this dataset comprises. For an [`Entourage`] that is
+    /// the entourage's default set (the DE integration plus its perturber SPKs,
+    /// `optional` extras excluded — a caller who wants them uses
+    /// [`oracle::entourage_entries`] with `include_optional`); for
+    /// [`FixedStars`] it is the fixed-star catalogue mirror set. URLs + hashes
+    /// come from the oracle.
+    ///
+    /// [`Entourage`]: DatasetKind::Entourage
+    /// [`FixedStars`]: DatasetKind::FixedStars
     #[must_use]
     pub fn entries(&self) -> Vec<OracleEntry> {
-        oracle::entourage_entries(self.slug, false).unwrap_or_default()
+        match self.kind {
+            DatasetKind::Entourage => {
+                oracle::entourage_entries(self.slug, false).unwrap_or_default()
+            }
+            DatasetKind::FixedStars => oracle::fixed_star_mirror_entries(),
+        }
     }
 }
 
@@ -49,16 +84,17 @@ fn human_bytes(n: u64) -> String {
     }
 }
 
-/// Every fetchable dataset — one per oracle entourage (a DE integration and its
-/// perturber set). Derived from [`oracle::entourages`], so the committed JSON
-/// manifest is the single source of truth. `de441` is the default; `de431` and
-/// the older DE integrations are selectable by slug.
+/// Every fetchable dataset: one per oracle entourage (a DE integration and its
+/// perturber set), plus the `bsc5` fixed-star catalogue. Derived from
+/// [`oracle::entourages`], so the committed JSON manifest is the single source
+/// of truth. `de441` is the default; `de431` and the older DE integrations are
+/// selectable by slug, and `bsc5` fetches the fixed-star catalogue.
 #[must_use]
 pub fn datasets() -> &'static [Dataset] {
     static DATASETS: OnceLock<Vec<Dataset>> = OnceLock::new();
     DATASETS
         .get_or_init(|| {
-            oracle::entourages()
+            let mut all: Vec<Dataset> = oracle::entourages()
                 .iter()
                 .map(|e| {
                     let bytes: u64 = oracle::entourage_entries(e.slug, false)
@@ -74,9 +110,16 @@ pub fn datasets() -> &'static [Dataset] {
                     Dataset {
                         slug: e.slug,
                         description,
+                        kind: DatasetKind::Entourage,
                     }
                 })
-                .collect()
+                .collect();
+            all.push(Dataset {
+                slug: "bsc5",
+                description: "fixed-star catalogue (BSC5, ~560 KB)",
+                kind: DatasetKind::FixedStars,
+            });
+            all
         })
         .as_slice()
 }
@@ -296,6 +339,131 @@ mod fetch {
         on_progress: impl FnMut(FetchProgress),
     ) -> Result<FetchSummary, FetchError> {
         fetch_entries(&dataset.entries(), root, source, on_progress)
+    }
+
+    // --- data fetch bsc5: try each fixed-star mirror in order until one lands
+
+    /// A single mirror attempt's outcome, for [`Bsc5FetchError::AllMirrorsFailed`].
+    #[derive(Debug)]
+    pub struct MirrorAttempt {
+        /// The mirror URL that was tried.
+        pub url: String,
+        /// Why it failed.
+        pub error: FetchError,
+    }
+
+    /// What a successful [`fetch_bsc5_with`] landed.
+    #[derive(Debug)]
+    pub struct Bsc5FetchOutcome {
+        /// The mirror URL that ultimately succeeded.
+        pub url_used: String,
+        /// Where the catalogue landed (`root.join("catalog.gz")`).
+        pub path: PathBuf,
+    }
+
+    /// `fetch_bsc5_with` failures.
+    #[derive(Debug, thiserror::Error)]
+    pub enum Bsc5FetchError {
+        /// Every mirror was tried and every one failed.
+        #[error(
+            "all BSC5 mirrors failed: {}",
+            .attempts.iter().map(|a| format!("{} ({})", a.url, a.error)).collect::<Vec<_>>().join("; ")
+        )]
+        AllMirrorsFailed {
+            /// One entry per mirror tried, in order.
+            attempts: Vec<MirrorAttempt>,
+        },
+    }
+
+    /// Try each fixed-star mirror `entries` in order, downloading via the
+    /// injected `download` fn and verifying the landed bytes against the
+    /// oracle's BLAKE3, until one succeeds. All mirrors are byte-identical (same
+    /// size + hash), so the result always lands at `root.join("catalog.gz")`
+    /// regardless of which mirror actually served it.
+    ///
+    /// `download(entry, dest)` is responsible for placing `entry`'s bytes at
+    /// `dest` (or returning a [`FetchError`]) — kept as an injected fn so tests
+    /// can drive mirror-selection and verification without any real network
+    /// traffic.
+    ///
+    /// # Errors
+    /// Returns [`Bsc5FetchError::AllMirrorsFailed`], naming every mirror tried
+    /// and why, when none of `entries` lands and verifies.
+    pub fn fetch_bsc5_with(
+        entries: &[OracleEntry],
+        root: &Path,
+        mut download: impl FnMut(&OracleEntry, &Path) -> Result<(), FetchError>,
+    ) -> Result<Bsc5FetchOutcome, Bsc5FetchError> {
+        let dest = root.join("catalog.gz");
+        let mut attempts = Vec::new();
+        for entry in entries {
+            let url = entry_url(entry);
+            match download(entry, &dest) {
+                Ok(()) => match oracle::verify_file(&dest, entry) {
+                    VerifyStatus::Ok => {
+                        return Ok(Bsc5FetchOutcome {
+                            url_used: url,
+                            path: dest,
+                        });
+                    }
+                    bad => {
+                        let _ = std::fs::remove_file(&dest);
+                        attempts.push(MirrorAttempt {
+                            url,
+                            error: FetchError::Verify {
+                                path: dest.clone(),
+                                expected: entry.blake3_hex,
+                                actual: format!("{bad:?}"),
+                            },
+                        });
+                    }
+                },
+                Err(error) => {
+                    let _ = std::fs::remove_file(&dest);
+                    attempts.push(MirrorAttempt { url, error });
+                }
+            }
+        }
+        Err(Bsc5FetchError::AllMirrorsFailed { attempts })
+    }
+
+    /// Fetch the BSC5 fixed-star catalogue into `root` (the platform data-dir
+    /// root), trying the CDS mirror first and the Harvard mirror on failure, via
+    /// a real HTTP download. Lands `root/catalog.gz`.
+    ///
+    /// # Errors
+    /// Returns [`Bsc5FetchError::AllMirrorsFailed`] when both mirrors fail.
+    pub fn fetch_bsc5(root: &Path) -> Result<Bsc5FetchOutcome, Bsc5FetchError> {
+        let client = reqwest::blocking::Client::new();
+        fetch_bsc5_with(&oracle::fixed_star_mirror_entries(), root, |entry, dest| {
+            download_whole(&client, entry, dest)
+        })
+    }
+
+    /// Download `entry`'s full URL straight to `dest` (no resume, no `.part`
+    /// sidecar — BSC5 is ~560 KB, a single small file, not the multi-GB DE
+    /// datasets [`fetch_entries`] streams).
+    fn download_whole(
+        client: &reqwest::blocking::Client,
+        entry: &OracleEntry,
+        dest: &Path,
+    ) -> Result<(), FetchError> {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(io(parent))?;
+        }
+        let url = entry_url(entry);
+        let mut resp = client
+            .get(&url)
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .map_err(|source| FetchError::Http {
+                url: url.clone(),
+                source,
+            })?;
+        let mut file = std::fs::File::create(dest).map_err(io(dest))?;
+        resp.copy_to(&mut file)
+            .map_err(|source| FetchError::Http { url, source })?;
+        Ok(())
     }
 
     // --- data migrate: cherry-pick usable files from a source into the data dir
@@ -741,10 +909,11 @@ mod fetch {
 
 #[cfg(feature = "data-fetch")]
 pub use fetch::{
-    FetchError, FetchProgress, FetchSummary, HorizonsMigrateItem, HorizonsMigratePlan,
-    HorizonsMigrateSummary, MigrateItem, MigrateMode, MigratePlan, MigrateSummary, entry_url,
-    fetch_dataset, fetch_entries, horizons_migrate_apply, horizons_migrate_scan, migrate_apply,
-    migrate_scan, part_path, probe_cow,
+    Bsc5FetchError, Bsc5FetchOutcome, FetchError, FetchProgress, FetchSummary, HorizonsMigrateItem,
+    HorizonsMigratePlan, HorizonsMigrateSummary, MigrateItem, MigrateMode, MigratePlan,
+    MigrateSummary, MirrorAttempt, entry_url, fetch_bsc5, fetch_bsc5_with, fetch_dataset,
+    fetch_entries, horizons_migrate_apply, horizons_migrate_scan, migrate_apply, migrate_scan,
+    part_path, probe_cow,
 };
 
 #[cfg(test)]
@@ -759,12 +928,40 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "data-dir")]
+    fn default_horizons_dir_is_horizons_child_of_data_dir() {
+        let hz = default_horizons_dir().expect("a platform data dir");
+        assert_eq!(hz.file_name().unwrap(), "horizons");
+        assert_eq!(hz, default_data_dir().unwrap().join("horizons"));
+    }
+
+    #[test]
     fn registry_has_de441_de431_and_rejects_unknown() {
-        // The registry is derived from the oracle entourages (JSON manifest).
+        // The registry is derived from the oracle entourages (JSON manifest)
+        // plus the one fixed-star catalogue row.
         assert!(dataset_from_slug("de441").is_some());
         assert!(dataset_from_slug("de431").is_some());
         assert!(dataset_from_slug("nope").is_none());
-        assert_eq!(datasets().len(), oracle::entourages().len());
+        assert_eq!(datasets().len(), oracle::entourages().len() + 1);
+    }
+
+    #[test]
+    fn bsc5_is_a_fixed_star_dataset_in_the_registry() {
+        // `bsc5` is a first-class registry slug, not a CLI special case — so it
+        // drives shell completion, `--list`, and slug validation like any DE.
+        let ds = dataset_from_slug("bsc5").expect("bsc5 in registry");
+        assert_eq!(ds.kind, DatasetKind::FixedStars);
+        // Its entries are the fixed-star mirror set, not an empty entourage.
+        assert_eq!(
+            ds.entries().len(),
+            oracle::fixed_star_mirror_entries().len()
+        );
+        assert!(!ds.entries().is_empty());
+        // Every DE entourage stays an Entourage-kind row.
+        assert_eq!(
+            dataset_from_slug("de441").unwrap().kind,
+            DatasetKind::Entourage
+        );
     }
 
     #[test]
@@ -814,6 +1011,135 @@ mod tests {
             super::part_path(p),
             std::path::PathBuf::from("/data/x/header.441.part")
         );
+    }
+
+    /// Two synthetic BSC5-style mirror entries (CDS first, Harvard second),
+    /// sharing the same bytes/hash — mirrors the real oracle shape without
+    /// touching the network.
+    #[cfg(feature = "data-fetch")]
+    fn synth_bsc5_mirrors() -> (Vec<OracleEntry>, &'static [u8]) {
+        const BYTES: &[u8] = b"bsc5 catalogue bytes\n";
+        let hash = leak_hash(BYTES);
+        (
+            vec![
+                OracleEntry {
+                    path: "cdsarc.cds.unistra.fr/ftp/cats/V/50/catalog.gz".into(),
+                    size: BYTES.len() as u64,
+                    blake3_hex: hash,
+                },
+                OracleEntry {
+                    path: "tdc-www.harvard.edu/catalogs/ybsc5.gz".into(),
+                    size: BYTES.len() as u64,
+                    blake3_hex: hash,
+                },
+            ],
+            BYTES,
+        )
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_bsc5_with_succeeds_on_first_mirror_without_touching_the_second() {
+        let (mirrors, bytes) = synth_bsc5_mirrors();
+        let dst = tempdir::TempDir::new("bsc5-cds-ok").unwrap();
+        let mut called: Vec<String> = Vec::new();
+
+        let outcome = super::fetch_bsc5_with(&mirrors, dst.path(), |entry, dest| {
+            called.push(super::entry_url(entry));
+            std::fs::write(dest, bytes).unwrap();
+            Ok(())
+        })
+        .expect("first mirror should succeed");
+
+        assert_eq!(called, vec![super::entry_url(&mirrors[0])]);
+        assert_eq!(outcome.url_used, super::entry_url(&mirrors[0]));
+        assert_eq!(outcome.path, dst.path().join("catalog.gz"));
+        assert_eq!(std::fs::read(&outcome.path).unwrap(), bytes);
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_bsc5_with_falls_back_to_harvard_when_cds_fails() {
+        let (mirrors, bytes) = synth_bsc5_mirrors();
+        let dst = tempdir::TempDir::new("bsc5-fallback").unwrap();
+        let mut called: Vec<String> = Vec::new();
+
+        let outcome = super::fetch_bsc5_with(&mirrors, dst.path(), |entry, dest| {
+            let url = super::entry_url(entry);
+            called.push(url.clone());
+            if url.contains("cdsarc") {
+                Err(FetchError::Io {
+                    path: dest.to_path_buf(),
+                    source: std::io::Error::other("simulated CDS mirror failure"),
+                })
+            } else {
+                std::fs::write(dest, bytes).unwrap();
+                Ok(())
+            }
+        })
+        .expect("Harvard fallback should succeed");
+
+        assert_eq!(
+            called,
+            vec![super::entry_url(&mirrors[0]), super::entry_url(&mirrors[1]),]
+        );
+        assert_eq!(outcome.url_used, super::entry_url(&mirrors[1]));
+        assert_eq!(std::fs::read(&outcome.path).unwrap(), bytes);
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_bsc5_with_reports_both_mirrors_when_both_fail() {
+        let (mirrors, _bytes) = synth_bsc5_mirrors();
+        let dst = tempdir::TempDir::new("bsc5-both-fail").unwrap();
+
+        let err = super::fetch_bsc5_with(&mirrors, dst.path(), |entry, dest| {
+            Err(FetchError::Io {
+                path: dest.to_path_buf(),
+                source: std::io::Error::other(format!(
+                    "simulated failure for {}",
+                    super::entry_url(entry)
+                )),
+            })
+        })
+        .expect_err("both mirrors fail");
+
+        let super::Bsc5FetchError::AllMirrorsFailed { attempts } = err;
+        assert_eq!(attempts.len(), 2, "one attempt entry per mirror");
+        assert_eq!(attempts[0].url, super::entry_url(&mirrors[0]));
+        assert_eq!(attempts[1].url, super::entry_url(&mirrors[1]));
+        // The destination is never left behind after every mirror fails.
+        assert!(!dst.path().join("catalog.gz").exists());
+    }
+
+    #[test]
+    #[cfg(feature = "data-fetch")]
+    fn fetch_bsc5_with_rejects_wrong_blake3_and_falls_through() {
+        let (mirrors, bytes) = synth_bsc5_mirrors();
+        let dst = tempdir::TempDir::new("bsc5-badhash").unwrap();
+        let mut called: Vec<String> = Vec::new();
+
+        let outcome = super::fetch_bsc5_with(&mirrors, dst.path(), |entry, dest| {
+            let url = super::entry_url(entry);
+            called.push(url.clone());
+            if url.contains("cdsarc") {
+                // Lands bytes that don't match the oracle hash.
+                std::fs::write(dest, b"corrupted download").unwrap();
+                Ok(())
+            } else {
+                std::fs::write(dest, bytes).unwrap();
+                Ok(())
+            }
+        })
+        .expect("Harvard mirror should still succeed after CDS hash rejection");
+
+        assert_eq!(
+            called.len(),
+            2,
+            "CDS hash mismatch must fall through to Harvard"
+        );
+        assert_eq!(outcome.url_used, super::entry_url(&mirrors[1]));
+        assert_eq!(std::fs::read(&outcome.path).unwrap(), bytes);
     }
 
     /// BLAKE3 of `b"cow bytes\n"` — used by the CoW-source tests below.

@@ -5,7 +5,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [main](https://github.com/lucidaeon/mediumcoeli/compare/9627a5f3b29b4c3f6e151c4393a431412ee83f93...main), [pericynthion/0.13.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.13.0), [starcat/0.12.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.12.0), 2026.07.10
+## [main](https://github.com/lucidaeon/mediumcoeli/compare/fc0eb42cecd5eac393bc66f1b938205d11443002...main), [astrogram/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/astrogram/0.6.0), [blackmoon/0.6.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/blackmoon/0.6.0), [jzod/0.7.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/jzod/0.7.0), [pericynthion/0.14.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.14.0), [starcat/0.13.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.13.0), 2026.07.15
+
+This cycle hardens both CLIs for scripting — a granular exit-code taxonomy,
+`--quiet` narration gating, strict machine-output stdout purity, and richer
+per-value shell completion — and threads data-source provenance from the
+ephemeris reader all the way into JZOD output. It adds `starcat data fetch
+bsc5`, and it relocates the remaining domain logic out of the CLIs into
+`astrogram` and `pericynthion`, so those libraries now expose everything a
+second consumer (a GUI, a test harness) needs without re-implementing it.
+
+### Added — pericynthion
+
+- **Observed data-source provenance.** `compute_with_spk` records which
+  ephemeris file actually backed each body; `provenance::observed_sources`
+  folds those into per-source rows (cached state + mirror URLs), and
+  `Ephemeris` / `SpkEphemeris` expose their `source_path`.
+- **JZOD generator + sources.** JZOD output now carries a `generator` string
+  and an `ephemeris.sources` map derived from that observed provenance.
+- **`bsc5` is a first-class fetchable dataset.** `datasets()` enumerates the
+  BSC5 fixed-star catalogue alongside the DE entourages (new `DatasetKind`),
+  and `default_horizons_dir()` resolves the `<data-dir>/horizons/` convention —
+  so completion, `--list`, and slug validation all derive from one registry.
+- **Placement detail and selection helpers.** `chart::Placement` /
+  `sorted_placements_detailed` carry the retrograde flag (with
+  `NodePoints::MEAN_RETROGRADE` / `LilithPoints::MEAN_RETROGRADE` as data),
+  plus `chart::north_node_deg`, `stars::expand_notable`,
+  `time::calendar::in_transition_era`, and `horizons::fetch_candidates`.
+- **`CARGO_PKG_VERSION` public const** for generator provenance.
+
+### Added — astrogram
+
+- **`auth` module.** Web-provider credential-chain assembly (cookie → token →
+  login), validation, and `WebProvider::authenticate` are library-owned;
+  `AstrotheorosCredential::parse_token_triple` parses the Clerk token triple.
+- **Convert and pipeline surface.** `convert::write_preserving` (preserves an
+  existing SFcht file's blocks on overwrite) and `convert::without_output_file`;
+  `pipeline::{record_sources, fill_fields_needed, FillSpec, accepted_slugs}`.
+- **`ChartError::MissingGenerator`** replaces a panic when a JZOD generator is
+  not supplied.
+
+### Added — jzod
+
+- **Generator provenance and an `ephemeris.sources` map** in the interchange
+  model (new types + schema fields).
+
+### Added — starcat
+
+- **`data fetch bsc5`** downloads the BSC5 fixed-star catalogue (both mirrors)
+  into the platform data root, and appears in `--list`, the bare-fetch
+  guidance, and shell completion.
+- **`--verbose` data-source provenance dump**, **`--ayanamsha` completion
+  candidates** wired from the sidereal registry, and **per-value completion
+  help** for house / zodiac / coordinate candidates.
+
+### Added — blackmoon
+
+- **Per-value shell-completion help** for `--from` / `--to` / `--capabilities`
+  / `--grant-cookie-access` / `--generate-completion`, and the `json` and `raw`
+  write-only sinks are now documented.
+
+### Changed
+
+- **Both CLIs are script-friendly.** Errors map through a granular exit-code
+  taxonomy via `classify` (input errors exit 3, integrity failures exit 5, …);
+  all human and diagnostic output goes to stderr, keeping stdout pure for
+  `--to json` / JZOD / table payloads; a non-interactive machine-output run
+  fails rather than prompting, and machine-mode failures list the valid values.
+- **`--quiet` gates narration** on both CLIs while always keeping data-affecting
+  disclosures and the result lines; for blackmoon it also suppresses the
+  per-file "N charts" counts, leaving only the summary and `wrote` line.
+- **starcat**: the `horizons` exit code reflects the fetch failure's root
+  cause; converted charts drop the ephemeris block; and body categories follow
+  the latest IAU designations (Pluto a dwarf planet; Quaoar/Orcus Kuiper-belt;
+  Sedna/Gonggong trans-Neptunian).
+- **blackmoon**: fill prompts are fully informed (they list accepted values);
+  credential sources fall through cookie → token → login with a disclosure of
+  which one authenticated; the README opens with the supported platforms.
+
+### Fixed
+
+- **starcat**: the named-BSC5P count reported by `catalogue` is 3,143 (it had
+  double-counted the 14 non-stellar catalogue objects).
+- **blackmoon**: a bad `--fill-*` value classifies as an input error (exit 3)
+  and, for a stdout sink on a TTY, prompts instead of failing.
+- **pericynthion**: de-duplicated the `locate()` walk in the ephemeris fallback.
+- **docs**: reconciled README/rustdoc with binary behavior (`--page` samples,
+  `data prod` Horizons-dir resolution, big-endian reader support, the
+  always-on house-system list) and fixed broken intra-doc links.
+
+## [fc0eb42](https://github.com/lucidaeon/mediumcoeli/compare/9627a5f3b29b4c3f6e151c4393a431412ee83f93...fc0eb42cecd5eac393bc66f1b938205d11443002), [pericynthion/0.13.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/pericynthion/0.13.0), [starcat/0.12.0](https://github.com/lucidaeon/mediumcoeli/releases/tag/starcat/0.12.0), 2026.07.10
 
 This cycle promotes the Koch (Birthplace) house system from the unverified
 `noref-houses` gate to always-on, now that it carries a reference-chart oracle

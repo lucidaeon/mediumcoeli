@@ -31,8 +31,27 @@
       "zodiac": { "name": "tropical" },
       "coordinate_system": "geocentric",
       "sect": "diurnal",
+      "generator": {
+        "name": "starcat",
+        "version": "0.12.0",
+        "components": [
+          { "name": "pericynthion", "version": "0.13.0" },
+          { "name": "jzod", "version": "0.6.0" }
+        ]
+      },
       "ephemeris": {
-        "source": "DE441",
+        "sources": {
+          "planets": {
+            "urls": ["https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441/linux_m13000p17000.441"],
+            "cached": "linux_m13000p17000.441"
+          },
+          "fixed_stars": {
+            "urls": [
+              "https://cdsarc.cds.unistra.fr/ftp/cats/V/50/catalog.gz",
+              "https://tdc-www.harvard.edu/catalogs/ybsc5.gz"
+            ]
+          }
+        },
         "calculated_at": "2026-06-08T20:45:18Z"
       },
       "placements": {

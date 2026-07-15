@@ -92,7 +92,7 @@ The "tol" columns above are sized as follows:
 | `pericynthion` | [`time_parse.rs`](../crates/pericynthion/tests/time_parse.rs) | Civil-date parser, calendar choice, UT/zone conversion, Unix-epoch round-trip. |
 | `astrogram` | various | Format parsing and round-tripping for chart-database files (SFcht, Zeus, ADB XML, Luna). Not ephemeris tests. |
 | `starcat` | [`cli_compute.rs`](../crates/starcat/tests/cli_compute.rs) | End-to-end CLI: spawn the binary, decode JSON output, compare against the refchart oracle. Exercises the *whole* surface — clap → civil-time + zone → `JD_UT` → ΔT → `JD_TT` → JPL discovery → ephemeris + house pipeline → JSON. |
-| `blackmoon` | inline unit tests only | No separate test files. |
+| `blackmoon` | [`exit_codes.rs`](../crates/blackmoon/tests/exit_codes.rs), [`streams.rs`](../crates/blackmoon/tests/streams.rs), [`dir_source.rs`](../crates/blackmoon/tests/dir_source.rs), [`quiet.rs`](../crates/blackmoon/tests/quiet.rs) | CLI integration: exit codes, stdin/stdout streaming, directory sources, quiet mode — plus inline unit tests. |
 
 ## Running
 

@@ -1,0 +1,58 @@
+name: GHCR cleanup (multi-arch safe)
+
+# Prunes stale container versions from ghcr.io/lucidaeon/{starcat,blackmoon}
+# WITHOUT breaking multi-arch pulls. dataaxiom/ghcr-cleanup-action is
+# manifest-list aware: an untagged per-architecture child that is still
+# referenced by a tagged image index is treated as in-use and kept. Only
+# genuinely dangling manifests (and versions older than the keep window) go.
+#
+# Defaults to dry-run: it logs exactly what it *would* delete and touches
+# nothing. Flip the `dry_run` input to false (or set DRY_RUN below) once the
+# plan looks right.
+
+on:
+  schedule:
+    - cron: "17 4 * * 0"        # Sundays 04:17 UTC — off-peak, low contention
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Log the deletion plan without deleting"
+        type: boolean
+        default: true
+
+permissions:
+  packages: write               # delete package versions under this repo
+  contents: read
+
+concurrency:
+  group: ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [starcat, blackmoon]
+    steps:
+      - name: Prune ${{ matrix.package }}
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          packages: ${{ matrix.package }}
+          # --- what to keep ---
+          keep-n-tagged: 10            # retain the 10 most recent tagged releases
+          exclude-tags: latest         # never touch the moving `latest` pointer
+          # --- what to remove ---
+          delete-untagged: true        # dangling manifests NOT referenced by any tag
+          delete-partial-images: true  # multi-arch children orphaned by a failed push
+          delete-orphaned-images: true # child manifests whose parent index is gone
+          older-than: 3 months         # only prune things past this age
+          # --- safety ---
+          validate: true               # after pruning, verify every surviving tagged
+                                       # index still resolves all its child manifests
+          dry-run: ${{ github.event_name == 'schedule' || inputs.dry_run }}
+          # GITHUB_TOKEN can delete versions of packages owned by THIS repo.
+          # If these packages live in the user namespace and deletes 403, swap
+          # in a PAT with delete:packages scope (as PACKAGE_PUBLISH already does
+          # for the tap/scoop bumps).
+          token: ${{ secrets.GITHUB_TOKEN }}

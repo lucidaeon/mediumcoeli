@@ -101,7 +101,7 @@
 // when T is small and Copy; we can't change the upstream API.
 #![allow(clippy::trivially_copy_pass_by_ref, clippy::ref_option)]
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::parser::ValueSource;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use pericynthion::body::Body;
@@ -118,6 +118,8 @@ use pericynthion::time::calendar::{Calendar, CivilDate};
 use pericynthion::time::zone::Zone;
 use pericynthion::time::{parse_date, parse_time, parse_tz};
 use std::path::PathBuf;
+
+mod exit;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -159,6 +161,33 @@ CHART POINTS EMITTED
   Derived  Antiscion / Contra-antiscion: solstice/equinox-axis reflections
            of every rendered longitude — appended when --antiscia is passed
 
+VERBOSITY
+  --verbose    Print extra diagnostic detail (e.g. the \"data sources\" section:
+               which on-disk file served each computed body, cached or fetched).
+               No effect in --jzod mode — see MACHINE OUTPUT below.
+  --quiet      Suppress non-essential output. Mutually exclusive with --verbose.
+  Both also read from $STARCAT_VERBOSE / $STARCAT_QUIET (a CLI flag wins over
+  either env var); a flag combining both on one invocation is a usage error.
+
+MACHINE OUTPUT
+  --jzod (the default `compute` output) writes only the JZOD JSON document to
+  stdout — no banner, no \"data sources\" detail, even with --verbose. Human-
+  readable diagnostics (warnings, fetch/data-source notes) go to stderr, or in
+  --text/--page mode may share stdout with the rendered chart since both are
+  prose meant for the same reader. Pipe/redirect stdout alone to capture a
+  clean JZOD document regardless of verbosity.
+
+EXIT CODES
+  0   success
+  1   internal error (unclassified)
+  2   usage error (bad flag/argument combination)
+  3   input error (invalid user-supplied value, e.g. unresolvable body slug)
+  4   not found (required local data — ephemeris/SPK — could not be located)
+  5   integrity error (present file failed size/BLAKE3 verification)
+  8   network error (Horizons fetch / mirror fetch failure)
+  11  I/O error
+  See `starcat data verify` for the integrity checks behind exit 5.
+
 Run 'starcat compute --help' for the full argument reference.",
     arg_required_else_help = true
 )]
@@ -179,7 +208,7 @@ enum Command {
     /// mathematical points (angles, nodes, Lilith, lots), `--stars` for named
     /// fixed stars, `--clusters` for open clusters, or `--all` for everything.
     /// `--verbose` expands the stars listing from the 33 common-name entries to
-    /// all 3,157 named BSC5P entries. At least one of the primary flags is required.
+    /// all 3,143 named BSC5P entries. At least one of the primary flags is required.
     /// For body availability (data present?) see `starcat placements`.
     Catalogue {
         /// List supported computation bodies (planets, dwarf planets, asteroids,
@@ -192,7 +221,7 @@ enum Command {
         #[arg(long)]
         points: bool,
         /// List named fixed stars. Default: 33 common-name stars (NOTABLE).
-        /// With --verbose: all 3,157 named BSC5P entries.
+        /// With --verbose: all 3,143 named BSC5P entries.
         #[arg(long)]
         stars: bool,
         /// List open clusters used as astrological fixed points
@@ -202,7 +231,7 @@ enum Command {
         /// Equivalent to --bodies --points --stars --clusters.
         #[arg(long)]
         all: bool,
-        /// Expand the stars listing to all 3,157 named BSC5P entries (Yale
+        /// Expand the stars listing to all 3,143 named BSC5P entries (Yale
         /// Bright Star Catalogue 5th edition). Default shows only the 33
         /// common-name stars. No effect on --bodies, --points, or --clusters.
         #[arg(long)]
@@ -252,8 +281,10 @@ enum DataCmd {
     /// Report every catalogued body + the fixed stars: their data file(s),
     /// source URL, and whether each is cached locally. Read-only; no network.
     Provenance(ProvenanceArgs),
-    /// Download a dataset (default `de441`, ~4.1 GB) into the platform data
-    /// directory, resumably, and verify it. See `data fetch --list`.
+    /// Download a dataset (`de441`, `de431`, …) or the `bsc5` fixed-star
+    /// catalogue into the platform data directory, resumably, and verify it.
+    /// Bare `data fetch` (no dataset) prints the dataset list and exits; it
+    /// never guesses a default. See `data fetch --list`.
     Fetch(FetchArgs),
     /// Cherry-pick every usable ephemeris file out of an existing JPL data
     /// location (any DE series, any layout) and bring it into the platform data
@@ -264,13 +295,12 @@ enum DataCmd {
 /// Arguments for `data fetch`.
 #[derive(Args, Debug)]
 struct FetchArgs {
-    /// Dataset slug to fetch (`de441` default; `de431`, `de440`, … also
-    /// available — tab-complete to see them). See `data fetch --list`.
-    #[arg(
-        default_value = "de441",
-        add = clap_complete::ArgValueCandidates::new(dataset_candidates)
-    )]
-    dataset: String,
+    /// Dataset slug to fetch: `de441`, `de431`, `de440`, … (tab-complete to
+    /// see them), or `bsc5` for the fixed-star catalogue. No default — a bare
+    /// `data fetch` prints the dataset list and exits rather than guessing.
+    /// See `data fetch --list`.
+    #[arg(add = clap_complete::ArgValueCandidates::new(dataset_candidates))]
+    dataset: Option<String>,
     /// List available datasets and exit.
     #[arg(long)]
     list: bool,
@@ -282,6 +312,42 @@ struct FetchArgs {
     /// data directory; this source is only ever read from, never modified.
     #[arg(long = "jpl-data")]
     jpl_data: Option<PathBuf>,
+}
+
+/// The dispatch decision `cmd_data_fetch` makes from [`FetchArgs`] — factored
+/// out as a pure function ([`fetch_action`]) so the "bare `data fetch` must
+/// make zero network calls" invariant is unit-testable without touching the
+/// filesystem or network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FetchAction {
+    /// No dataset slug and no `--list`/`--what`: print guidance + the dataset
+    /// list to stderr and exit with the usage code, without fetching.
+    Guide,
+    /// `--list`: print available datasets and exit 0.
+    List,
+    /// `--what`: print the dataset/body coverage table and exit 0.
+    What,
+    /// An explicit dataset slug — including `bsc5` — validated later against the
+    /// registry; how it is fetched follows from the resolved dataset's kind.
+    Fetch(String),
+}
+
+/// Decide what a `data fetch` invocation should do, from the parsed args
+/// alone — no I/O, no network. `--list`/`--what` take priority (checked
+/// first, matching `cmd_data_fetch`'s existing early-return order); a bare
+/// invocation with no dataset and neither flag set is [`FetchAction::Guide`],
+/// which never reaches the oracle or the network.
+fn fetch_action(args: &FetchArgs) -> FetchAction {
+    if args.what {
+        FetchAction::What
+    } else if args.list {
+        FetchAction::List
+    } else {
+        match args.dataset.as_deref() {
+            Some(slug) => FetchAction::Fetch(slug.to_string()),
+            None => FetchAction::Guide,
+        }
+    }
 }
 
 /// Arguments for `data migrate`.
@@ -604,7 +670,11 @@ struct ComputeArgs {
 
     /// Ayanamsha slug for `--zodiac sidereal` (default `lahiri`; also
     /// `fagan_bradley`, `raman`). Ignored unless `--zodiac sidereal`.
-    #[arg(long = "ayanamsha", env = "STARCAT_AYANAMSHA")]
+    #[arg(
+        long = "ayanamsha",
+        add = clap_complete::ArgValueCandidates::new(ayanamsha_candidates),
+        env = "STARCAT_AYANAMSHA"
+    )]
     ayanamsha: Option<String>,
 
     /// Ayanāṃśa reduction frame for `--zodiac sidereal`. Absent = the chosen
@@ -612,6 +682,49 @@ struct ComputeArgs {
     /// for research: `mean` = precession only, `true` = precession + nutation.
     #[arg(long = "ayanamsha-frame", value_enum, env = "STARCAT_AYANAMSHA_FRAME")]
     ayanamsha_frame: Option<FrameArg>,
+
+    /// Print extra diagnostic detail. Mutually exclusive with --quiet.
+    #[arg(long, short, env = "STARCAT_VERBOSE", conflicts_with = "quiet")]
+    verbose: bool,
+
+    /// Suppress non-essential output; errors still print. Mutually exclusive
+    /// with --verbose.
+    #[arg(long, short, env = "STARCAT_QUIET")]
+    quiet: bool,
+}
+
+/// Resolved output verbosity, derived from `--quiet`/`--verbose` (clap enforces
+/// they can't both be set, but `resolve` still has a defined answer if it ever
+/// receives both — verbose wins).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Verbosity {
+    Quiet,
+    Normal,
+    Verbose,
+}
+
+impl Verbosity {
+    fn resolve(quiet: bool, verbose: bool) -> Self {
+        if verbose {
+            Verbosity::Verbose
+        } else if quiet {
+            Verbosity::Quiet
+        } else {
+            Verbosity::Normal
+        }
+    }
+
+    /// `true` when non-essential narration (warnings, notes) should be
+    /// suppressed — the chart payload and errors are never gated by this.
+    fn is_quiet(self) -> bool {
+        self == Verbosity::Quiet
+    }
+
+    /// `true` when extra diagnostic detail (e.g. the compute path's
+    /// "data sources" section) should be printed.
+    fn is_verbose(self) -> bool {
+        self == Verbosity::Verbose
+    }
 }
 
 /// Output format for sexagesimal coordinates.
@@ -731,7 +844,7 @@ enum LilithMode {
 }
 
 /// Zodiac frame selector for `--zodiac`. Thin clap shim resolved into a
-/// `jzod::Zodiac` by [`resolve_zodiac`].
+/// `jzod::Zodiac` by `pericynthion::jzod::resolve_zodiac`.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum ZodiacArg {
     /// Tropical (vernal-equinox-anchored). Default.
@@ -756,22 +869,33 @@ enum FrameArg {
 /// This is a thin clap shim that converts to `pericynthion::houses::HouseSystem`.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum HouseArg {
+    /// Each house one whole sign from 0° of the rising sign; oldest system.
     WholeSign,
+    /// 30° of longitude from the Ascendant; the MC floats free of the 10th.
     EqualFromAsc,
+    /// Trisects each degree's day/night semi-arc in time; most common modern system.
     Placidus,
+    /// Celestial equator split 30° in RA from the RAMC, projected through the horizon.
     Regiomontanus,
+    /// Each Asc-IC-Dsc-MC quadrant trisected in longitude; oldest quadrant system.
     Porphyry,
+    /// Asc->MC and Asc->IC diurnal arcs trisected in time.
     Alcabitius,
+    /// Equal thirds of the MC's diurnal semi-arc at the birth latitude.
     Koch,
+    /// Prime vertical split 30° from the East Point, projected through the horizon.
     #[cfg(feature = "noref-houses")]
     Campanus,
+    /// Equator 30°/RA from the RAMC along ecliptic-longitude circles; latitude-independent.
     Morinus,
+    /// Equator 30°/RA from the RAMC along hour circles; latitude-independent.
     #[cfg(feature = "noref-houses")]
     Meridian,
     #[cfg(feature = "noref-houses")]
     EqualFromMc,
     #[cfg(feature = "noref-houses")]
     Horizontal,
+    /// Closed-form Placidus approximation; stable at high latitude.
     #[cfg(feature = "noref-houses")]
     Topocentric,
     #[cfg(feature = "noref-houses")]
@@ -864,25 +988,7 @@ impl From<BodyArg> for Body {
 /// computed twice. Order: sentinel-expanded names first (catalog order), then
 /// any remaining explicit names in input order.
 fn expand_star_tokens(input: &[String]) -> Vec<String> {
-    let wants_notable = input
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case("notable") || t.eq_ignore_ascii_case("all"));
-    let mut out: Vec<String> = Vec::new();
-    if wants_notable {
-        for (common, _hr) in pericynthion::stars::NOTABLE {
-            out.push((*common).to_string());
-        }
-    }
-    for t in input {
-        if t.eq_ignore_ascii_case("notable") || t.eq_ignore_ascii_case("all") {
-            continue;
-        }
-        if out.iter().any(|e| e.eq_ignore_ascii_case(t)) {
-            continue;
-        }
-        out.push(t.clone());
-    }
-    out
+    pericynthion::stars::expand_notable(input)
 }
 
 /// Dynamic completion candidates for `--stars`: the `notable`/`all` sentinels
@@ -904,7 +1010,7 @@ fn star_candidates() -> Vec<clap_complete::CompletionCandidate> {
 }
 
 /// Tab-completion candidates for `data fetch <slug>`: every entourage slug
-/// (`de441` default, `de431`, …) with its human description, drawn live from the
+/// (`de441`, `de431`, …) with its human description, drawn live from the
 /// oracle registry. Advisory only — the handler still validates the slug.
 fn dataset_candidates() -> Vec<clap_complete::CompletionCandidate> {
     pericynthion::datasets()
@@ -913,7 +1019,45 @@ fn dataset_candidates() -> Vec<clap_complete::CompletionCandidate> {
         .collect()
 }
 
-fn main() -> Result<()> {
+/// Tab-completion candidates for `--ayanamsha <slug>`: every ayanamsha the
+/// sidereal engine can actually compute, each labelled with its display name.
+///
+/// Drawn live from [`pericynthion::sidereal::AyanamshaRegistry`] — the same
+/// registry `resolve_zodiac` validates against — so the suggestions and the
+/// accepted set can never drift apart. The canonical slug/alias table lives in
+/// `jzod::ayanamsha`; the registry rows are cross-checked against it (see the
+/// `pericynthion::sidereal` tests), and starcat can only compute the registry's
+/// built-in subset, so completing that subset is what keeps every suggested
+/// value a value the flag accepts. The help text is the registry's own
+/// `display_name`, not fabricated. Advisory only — lookup stays case-insensitive
+/// and any registered slug still parses.
+fn ayanamsha_candidates() -> Vec<clap_complete::CompletionCandidate> {
+    let registry = pericynthion::sidereal::AyanamshaRegistry::with_builtins();
+    registry
+        .slugs()
+        .into_iter()
+        .map(|slug| {
+            let help = registry.get(slug).map(|a| a.display_name.into());
+            clap_complete::CompletionCandidate::new(slug).help(help)
+        })
+        .collect()
+}
+
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e:#}");
+            exit::classify(&e).exit_code()
+        }
+    }
+}
+
+/// Parses arguments and dispatches to the requested subcommand. Split from
+/// `main` so `main` can classify the returned error into an [`exit::ExitClass`]
+/// and exit with the matching code — clap's own parse errors still exit `2`
+/// before `run` is ever called.
+fn run() -> Result<()> {
     use clap::{CommandFactory, FromArgMatches};
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     let matches = Cli::command().get_matches();
@@ -939,9 +1083,12 @@ fn main() -> Result<()> {
         Command::Data(args) => cmd_data(&args),
         Command::GenerateCompletion { shell } => {
             let Some(shell) = shell.or_else(detect_shell) else {
-                anyhow::bail!(
-                    "could not detect shell from $SHELL; pass it explicitly (e.g. generate-completion zsh)"
-                );
+                return Err(exit::UsageError {
+                    message: "could not detect shell from $SHELL; pass it explicitly \
+                              (e.g. generate-completion zsh)"
+                        .to_string(),
+                }
+                .into());
             };
             clap_complete::generate(
                 shell,
@@ -994,10 +1141,12 @@ fn cmd_catalogue(
     verbose: bool,
 ) -> Result<()> {
     if !bodies && !points && !stars && !clusters && !all {
-        anyhow::bail!(
-            "specify at least one of --bodies, --points, --stars, --clusters, or --all\n\
-             See `starcat catalogue --help`. For body availability see `starcat placements`."
-        );
+        return Err(exit::UsageError {
+            message: "specify at least one of --bodies, --points, --stars, --clusters, or --all\n\
+                      See `starcat catalogue --help`. For body availability see `starcat placements`."
+                .to_string(),
+        }
+        .into());
     }
 
     let show_bodies = all || bodies;
@@ -1025,7 +1174,7 @@ fn cmd_catalogue(
     if show_stars {
         let named_all: Vec<_> = pericynthion::named_bsc5_entries().collect();
         if named_all.is_empty() {
-            eprintln!("BSC5 catalog not loaded — run `just fetch bsc5` then rebuild.");
+            eprintln!("BSC5 catalog not loaded — run `starcat data fetch bsc5` then rebuild.");
         } else {
             if all {
                 println!();
@@ -1137,20 +1286,28 @@ fn print_points_catalogue() {
 }
 
 /// Maps a `BodyResolveError` from the placements library to the exact CLI
-/// error strings that starcat presents to the user.  Extracted so that unit
-/// tests can assert the byte-identical strings without exercising the full
-/// `cmd_compute` pipeline.
+/// error strings that starcat presents to the user, typed so `exit::classify`
+/// maps `Unknown`/`NotMinorBody` to `Input` (3) and `NotCovered` to `NotFound`
+/// (4). Extracted so that unit tests can assert the byte-identical strings
+/// without exercising the full `cmd_compute` pipeline.
 fn body_resolve_cli_error(e: pericynthion::placements::BodyResolveError) -> anyhow::Error {
     use pericynthion::placements::BodyResolveError as E;
     match e {
-        E::Unknown(s) => anyhow::anyhow!("unknown body {s:?} (not in the placements catalog)"),
-        E::NotMinorBody(n) => {
-            anyhow::anyhow!("{n} is not an SPK minor body (computed from DE441, not --asteroids)")
+        E::Unknown(s) => exit::InputError {
+            message: format!("unknown body {s:?} (not in the placements catalog)"),
         }
-        E::NotCovered(n) => anyhow::anyhow!(
-            "{n} is not available locally — fetch it first with \
-             `starcat horizons <class>` (e.g. its category) into $STARCAT_HORIZONS_DATA"
-        ),
+        .into(),
+        E::NotMinorBody(n) => exit::InputError {
+            message: format!("{n} is not an SPK minor body (computed from DE441, not --asteroids)"),
+        }
+        .into(),
+        E::NotCovered(n) => exit::NotFoundError {
+            message: format!(
+                "{n} is not available locally — fetch it first with \
+                 `starcat horizons <class>` (e.g. its category) into $STARCAT_HORIZONS_DATA"
+            ),
+        }
+        .into(),
     }
 }
 
@@ -1164,10 +1321,7 @@ fn body_resolve_cli_error(e: pericynthion::placements::BodyResolveError) -> anyh
 /// before the 1582 cutover (proleptic Julian) and after 1927 (universally
 /// Gregorian) are unambiguous and return `false`.
 fn in_calendar_transition_era(year: i16, month: u8, day: u8) -> bool {
-    let on_or_after_cutover =
-        year > 1582 || (year == 1582 && (month > 10 || (month == 10 && day >= 15)));
-    let through_1927 = year <= 1927;
-    on_or_after_cutover && through_1927
+    pericynthion::time::calendar::in_transition_era(year, month, day)
 }
 
 /// Resolve the effective calendar. An explicit choice always wins; otherwise
@@ -1188,11 +1342,13 @@ fn resolve_calendar_arg(
         .map(|y| in_calendar_transition_era(y, month, day))
         .unwrap_or(false);
     if in_era {
-        bail!(
-            "--calendar is required for dates in the 1582-1927 Julian/Gregorian transition era; \
-             the recorded calendar depends on jurisdiction (Britain/US switched 1752, Russia 1918, \
-             Greece 1923). Pass --calendar julian|gregorian."
-        );
+        return Err(exit::UsageError {
+            message: "--calendar is required for dates in the 1582-1927 Julian/Gregorian \
+                      transition era; the recorded calendar depends on jurisdiction (Britain/US \
+                      switched 1752, Russia 1918, Greece 1923). Pass --calendar julian|gregorian."
+                .to_string(),
+        }
+        .into());
     }
     Ok(CalendarArg::Auto)
 }
@@ -1201,6 +1357,8 @@ fn resolve_calendar_arg(
 fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Result<()> {
     // === Output format (read before any partial moves of `args`) ===
     let fmt = coord;
+
+    let verbosity = Verbosity::resolve(args.quiet, args.verbose);
 
     // Fast-fail on I/O-free input validation (required-check, date parse,
     // calendar resolution) BEFORE resolving/opening the JPL ephemeris, so a bad
@@ -1219,7 +1377,10 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
     .flatten()
     .collect();
     if !missing.is_empty() {
-        bail!("a chart needs: {}", missing.join(", "));
+        return Err(exit::UsageError {
+            message: format!("a chart needs: {}", missing.join(", ")),
+        }
+        .into());
     }
     let date_str = args.date.as_deref().unwrap();
     let time_str = args.time.as_deref().unwrap();
@@ -1259,7 +1420,10 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
     } else if let Some(tz) = &args.tz {
         parse_tz(tz)?
     } else {
-        bail!("either --tz or --lmt (with --lon) must be supplied")
+        return Err(exit::UsageError {
+            message: "either --tz or --lmt (with --lon) must be supplied".to_string(),
+        }
+        .into());
     };
 
     // === Ephemeris file ===
@@ -1269,13 +1433,17 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
     // Date-aware selection: with several DE series on disk, prefer the smallest,
     // most precise binary whose window covers the chart year (e.g. DE440 over
     // DE441 for a modern date); falls back to highest-denum discovery.
-    let (header, source) = discover::open_dataset_for_year(&dir, year).with_context(|| {
-        format!(
-            "locate + open JPL ephemeris under {}",
-            pericynthion::display_path(&dir)
-        )
-    })?;
-    let ephem = Ephemeris::new(&*source, &header).context("build ephemeris facade")?;
+    let (header, source, binary_path) =
+        discover::open_dataset_for_year(&dir, year).with_context(|| {
+            format!(
+                "locate + open JPL ephemeris under {}",
+                pericynthion::display_path(&dir)
+            )
+        })?;
+    let mut ephem = Ephemeris::new(&*source, &header).context("build ephemeris facade")?;
+    if let Some(path) = binary_path {
+        ephem = ephem.with_source_path(path);
+    }
 
     // === Coordinate mode request ===
     let mode_request = if args.helio {
@@ -1364,7 +1532,9 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
             match pericynthion::resolve_star(name) {
                 Some(rs) => Some(rs),
                 None => {
-                    eprintln!("warning: unknown star {name:?} — skipped");
+                    if !verbosity.is_quiet() {
+                        eprintln!("warning: unknown star {name:?} — skipped");
+                    }
                     None
                 }
             }
@@ -1376,40 +1546,18 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
             .with_context(|| "chart computation failed")?;
 
     // === Output ===
-    // Resolve the zodiac frame once (validates --ayanamsha), shared by every
-    // renderer. --draconic and --zodiac draconic are equivalent.
-    let resolved_zodiac = resolve_zodiac(&args)?;
+    // Resolve the zodiac frame once (validates --ayanamsha, defaults the frame,
+    // applies sidereal-beats-draconic precedence) via the library resolver,
+    // which also returns the sidereal ayanamsha companion for the text/page
+    // renderers. --draconic and --zodiac draconic are equivalent.
+    let (resolved_zodiac, sidereal_ayanamsha) =
+        pericynthion::jzod::resolve_zodiac(&zodiac_request(&args))?;
     let want_draconic = matches!(resolved_zodiac, jzod::Zodiac::Draconic { .. });
     let zodiac_label = zodiac_display(&resolved_zodiac);
 
     // For a sidereal frame, pre-rotate the chart for the text/page renderers
     // (placements rotated; house cusps left tropical). Tropical and draconic
     // render `computed` directly — draconic projects internally in print_text.
-    // Pair the ayanamsha row with its resolved frame so the text/page renderer
-    // can pass both to `project_chart`.
-    let sidereal_ayanamsha: Option<(
-        pericynthion::sidereal::Ayanamsha,
-        pericynthion::sidereal::AyanamshaFrame,
-    )> = match &resolved_zodiac {
-        jzod::Zodiac::Sidereal { ayanamsha, frame } => {
-            let slug = ayanamsha
-                .as_deref()
-                .unwrap_or(pericynthion::sidereal::DEFAULT_AYANAMSHA_SLUG);
-            let jzod_frame = *frame;
-            pericynthion::sidereal::AyanamshaRegistry::with_builtins()
-                .get(slug)
-                .copied()
-                .map(|a| {
-                    let peri_frame = match jzod_frame {
-                        Some(f) => pericynthion::sidereal::AyanamshaFrame::from(f),
-                        // frame not specified: use the ayanamsha's intrinsic default_frame
-                        None => a.default_frame,
-                    };
-                    (a, peri_frame)
-                })
-        }
-        _ => None,
-    };
     let projected = sidereal_ayanamsha
         .as_ref()
         .map(|(a, frame)| pericynthion::sidereal::project_chart(&computed, a, *frame));
@@ -1439,6 +1587,20 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
         } else {
             None
         };
+        let generator = jzod::Generator {
+            name: "starcat".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            components: vec![
+                jzod::Component {
+                    name: "pericynthion".into(),
+                    version: pericynthion::PERICYNTHION_VERSION.into(),
+                },
+                jzod::Component {
+                    name: "jzod".into(),
+                    version: jzod::JZOD_VERSION.into(),
+                },
+            ],
+        };
         let chart = pericynthion::jzod::to_jzod_chart(
             &computed,
             &birth,
@@ -1446,6 +1608,7 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
             resolved_zodiac,
             draconic_node,
             args.antiscia,
+            generator,
         )?;
         println!(
             "{}",
@@ -1459,12 +1622,14 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
                 .as_ref()
                 .map_or(HouseSystem::DEFAULT_SET.len(), Vec::len);
             if page_house_count != 1 {
-                bail!(
-                    "page rendering requires exactly one --house system; got {} ({:?}). \
-                     Specify e.g. --house placidus or --house whole-sign.",
-                    page_house_count,
-                    args.houses
-                );
+                return Err(exit::UsageError {
+                    message: format!(
+                        "page rendering requires exactly one --house system; got {page_house_count} \
+                         ({:?}). Specify e.g. --house placidus or --house whole-sign.",
+                        args.houses
+                    ),
+                }
+                .into());
             }
             print_page(&args, render_chart, fmt, &zodiac_label);
         }
@@ -1478,6 +1643,13 @@ fn cmd_compute(args: ComputeArgs, output: OutputMode, coord: CoordFormat) -> Res
             want_draconic,
             &zodiac_label,
         );
+    }
+
+    // Verbose provenance detail applies to both non-JZOD render paths (text
+    // and page): the JZOD path already carries this machine-readably under
+    // `ephemeris.sources` and is left untouched.
+    if !is_jzod && verbosity.is_verbose() {
+        print_data_sources(&render_chart.provenance);
     }
 
     Ok(())
@@ -1503,11 +1675,13 @@ fn resolve_jpl_dir(data_dir_arg: Option<&std::path::Path>) -> Result<PathBuf> {
     {
         return Ok(home);
     }
-    bail!(
-        "no ephemeris data found. Run `starcat data fetch` to download it \
-         (~4.1 GB, one time), or pass --jpl-data PATH / set $STARCAT_JPL_DATA \
-         to an existing JPL mirror."
-    );
+    Err(exit::NotFoundError {
+        message: "no ephemeris data found. Run `starcat data fetch` to download it \
+                  (~4.1 GB, one time), or pass --jpl-data PATH / set $STARCAT_JPL_DATA \
+                  to an existing JPL mirror."
+            .to_string(),
+    }
+    .into())
 }
 
 /// Resolve the JPL mirror root (the directory directly containing
@@ -1534,10 +1708,12 @@ fn resolve_mirror_root(root_arg: Option<&std::path::Path>) -> Result<PathBuf> {
     {
         return Ok(home);
     }
-    bail!(
-        "no ephemeris data found. Run `starcat data fetch` to download it \
-         (~4.1 GB, one time), or pass --root PATH / set $STARCAT_JPL_DATA."
-    )
+    Err(exit::NotFoundError {
+        message: "no ephemeris data found. Run `starcat data fetch` to download it \
+                  (~4.1 GB, one time), or pass --root PATH / set $STARCAT_JPL_DATA."
+            .to_string(),
+    }
+    .into())
 }
 
 /// True when the tree rooted at `root` contains any starcat dataset file, in
@@ -1635,7 +1811,14 @@ fn verify_required_subset(root: &std::path::Path) -> Result<()> {
     }
     println!("{ok}/{} supported data files verified OK", reports.len());
     if required_subset_failed(&reports) {
-        std::process::exit(1);
+        return Err(exit::IntegrityError {
+            message: format!(
+                "{}/{} supported data files failed verification",
+                reports.len() - ok,
+                reports.len()
+            ),
+        }
+        .into());
     }
     Ok(())
 }
@@ -1677,7 +1860,14 @@ fn verify_present_integrity(root: &std::path::Path) -> Result<()> {
         present.len()
     );
     if present_integrity_failed(&reports) {
-        std::process::exit(1);
+        return Err(exit::IntegrityError {
+            message: format!(
+                "{}/{} present data files failed verification",
+                present.len() - ok,
+                present.len()
+            ),
+        }
+        .into());
     }
     Ok(())
 }
@@ -1769,32 +1959,63 @@ fn file_name_of(p: &std::path::Path) -> String {
     )
 }
 
-/// `data fetch`: download a dataset with a progress bar, then print the verify
-/// report.
+/// Print the dataset registry to stderr, one slug + description per line —
+/// shared by the bare-fetch guidance message and could equally back `--list`
+/// (which prints the same rows to stdout instead).
+fn print_dataset_list_to(mut out: impl std::io::Write) {
+    for d in pericynthion::datasets() {
+        let _ = writeln!(out, "{}\t{}", d.slug, d.description);
+    }
+}
+
+/// The bare `starcat data fetch` guidance: the dataset list plus a one-line
+/// hint, printed to stderr, then a typed [`exit::UsageError`] so `classify`
+/// maps it to the usage code (2) — clap's own usage-error code — making zero
+/// network calls. The decision itself lives in the pure [`fetch_action`]
+/// helper rather than inline here.
+fn guide_bare_fetch() -> Result<()> {
+    eprintln!("Available datasets (`starcat data fetch <SLUG>`):");
+    print_dataset_list_to(std::io::stderr());
+    eprintln!("specify a dataset (e.g. `de441` or `bsc5`), or pass `--list`");
+    Err(exit::UsageError {
+        message: "data fetch: specify a dataset (e.g. `de441` or `bsc5`), or pass `--list`"
+            .to_string(),
+    }
+    .into())
+}
+
+/// `data fetch`: download a dataset (or the BSC5 fixed-star catalogue) with a
+/// progress bar, then print the verify report. A bare invocation (no dataset,
+/// no `bsc5`, no `--list`/`--what`) prints guidance and exits instead of
+/// guessing a default — see [`fetch_action`].
 ///
 /// # Errors
 ///
 /// Returns an error if the destination cannot be determined, the dataset slug
 /// is unknown, the download fails, or the post-fetch verify step fails.
 fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
-    if args.what {
-        print!("{}", pericynthion::what_gets_you_what());
-        return Ok(());
-    }
-    if args.list {
-        for d in pericynthion::datasets() {
-            println!("{}\t{}", d.slug, d.description);
+    let dataset = match fetch_action(args) {
+        FetchAction::What => {
+            print!("{}", pericynthion::what_gets_you_what());
+            return Ok(());
         }
-        return Ok(());
+        FetchAction::List => {
+            print_dataset_list_to(std::io::stdout());
+            return Ok(());
+        }
+        FetchAction::Guide => return guide_bare_fetch(),
+        FetchAction::Fetch(slug) => pericynthion::dataset_from_slug(&slug).ok_or_else(|| {
+            let known: Vec<&str> = pericynthion::datasets().iter().map(|d| d.slug).collect();
+            exit::InputError {
+                message: format!("unknown dataset {slug:?}; known: {}", known.join(", ")),
+            }
+        })?,
+    };
+    // The fixed-star catalogue has its own fetch + rebuild path; every other
+    // dataset is a DE entourage handled by the generic loop below.
+    if dataset.kind == pericynthion::DatasetKind::FixedStars {
+        return cmd_data_fetch_bsc5();
     }
-    let dataset = pericynthion::dataset_from_slug(&args.dataset).ok_or_else(|| {
-        let known: Vec<&str> = pericynthion::datasets().iter().map(|d| d.slug).collect();
-        anyhow::anyhow!(
-            "unknown dataset {:?}; known: {}",
-            args.dataset,
-            known.join(", ")
-        )
-    })?;
     let root = resolve_fetch_dest()?;
     let source = resolve_fetch_source(args.jpl_data.as_deref());
     let entries = dataset.entries();
@@ -1886,6 +2107,34 @@ fn cmd_data_fetch(args: &FetchArgs) -> Result<()> {
     verified
 }
 
+/// `data fetch bsc5`: download the BSC5 fixed-star catalogue into the
+/// platform data-dir root, trying the CDS mirror first and the Harvard mirror
+/// on failure, verifying BLAKE3, and landing `catalog.gz`.
+///
+/// # Errors
+/// Returns an error if the destination cannot be determined or every mirror
+/// fails (naming each one and why).
+fn cmd_data_fetch_bsc5() -> Result<()> {
+    let root = resolve_fetch_dest()?;
+    let mirrors = oracle::fixed_star_mirror_entries();
+    println!("Fetching dataset bsc5: fixed-star catalogue (BSC5, ~560 KB)");
+    println!(
+        "Destination: {} (lands as catalog.gz)",
+        pericynthion::display_path(&root)
+    );
+    println!(
+        "{} mirror(s), trying each in order until one verifies",
+        mirrors.len()
+    );
+    let outcome = pericynthion::fetch_bsc5(&root).map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!(
+        "fetched BSC5 from {} -> {}",
+        outcome.url_used,
+        pericynthion::display_path(&outcome.path)
+    );
+    Ok(())
+}
+
 /// `data migrate`: cherry-pick usable ephemeris files out of an existing JPL
 /// data location into the platform data directory, verifying each, by copy or
 /// move.
@@ -1907,15 +2156,17 @@ fn cmd_data_migrate(args: &MigrateArgs) -> Result<()> {
     let jpl_source = resolve(&args.from_jpl, "STARCAT_JPL_DATA");
     let hz_source = resolve(&args.from_horizons, "STARCAT_HORIZONS_DATA");
     if jpl_source.is_none() && hz_source.is_none() {
-        bail!(
-            "no source data found. Point me at your existing JPL data with \
-             --from-jpl PATH / $STARCAT_JPL_DATA, and/or your Horizons SPKs with \
-             --from-horizons PATH / $STARCAT_HORIZONS_DATA."
-        );
+        return Err(exit::NotFoundError {
+            message: "no source data found. Point me at your existing JPL data with \
+                      --from-jpl PATH / $STARCAT_JPL_DATA, and/or your Horizons SPKs with \
+                      --from-horizons PATH / $STARCAT_HORIZONS_DATA."
+                .to_string(),
+        }
+        .into());
     }
 
     let root = resolve_fetch_dest()?;
-    let hz_dest = horizons_default_dir(pericynthion::default_data_dir());
+    let hz_dest = pericynthion::default_horizons_dir();
 
     // --- Scan both sources (no modification) ---
     let jpl_plan = jpl_source.as_ref().map(|s| {
@@ -2049,7 +2300,10 @@ fn cmd_data_migrate(args: &MigrateArgs) -> Result<()> {
     if failed == 0 {
         Ok(())
     } else {
-        bail!("{failed} file(s) failed verification after migration")
+        Err(exit::IntegrityError {
+            message: format!("{failed} file(s) failed verification after migration"),
+        }
+        .into())
     }
 }
 
@@ -2080,7 +2334,10 @@ fn resolve_migrate_mode(
     }
     use std::io::{IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
-        bail!("specify --copy or --move (no interactive terminal to prompt on).");
+        return Err(exit::UsageError {
+            message: "specify --copy or --move (no interactive terminal to prompt on).".to_string(),
+        }
+        .into());
     }
     // Probe copy-on-write from the source filesystem into the data dir, using a
     // queued file as the sample, so the prompt's disk-cost note is honest.
@@ -2108,7 +2365,10 @@ fn resolve_migrate_mode(
         "q" | "quit" => Ok(None),
         // An empty line (bare Enter) or EOF is treated as quit — the safe default.
         "" => Ok(None),
-        other => bail!("expected 'c' (copy), 'm' (move), or 'q' (quit), got {other:?}"),
+        other => Err(exit::UsageError {
+            message: format!("expected 'c' (copy), 'm' (move), or 'q' (quit), got {other:?}"),
+        }
+        .into()),
     }
 }
 
@@ -2232,23 +2492,14 @@ fn print_provenance_json(
     Ok(())
 }
 
-/// Derive the default Horizons SPK directory from a platform data base dir:
-/// the `horizons/` subdirectory, sibling to the JPL mirror. `None` propagates
-/// when no platform data dir is available.
-///
-/// Pure and side-effect-free (no env, no filesystem) so it can be unit-tested.
-fn horizons_default_dir(base: Option<PathBuf>) -> Option<PathBuf> {
-    base.map(|b| b.join("horizons"))
-}
-
 /// Resolve the directory for Horizons-fetched SPKs.
 ///
 /// Resolution order:
 /// 1. `--out` PATH (arg), if `Some`.
 /// 2. `$STARCAT_HORIZONS_DATA`, if set.
-/// 3. `pericynthion::default_data_dir()` joined with `horizons/` (e.g.
-///    `~/Library/Application Support/starcat/horizons/`), sibling to the JPL
-///    mirror under the same platform data dir.
+/// 3. [`pericynthion::default_horizons_dir`] — `default_data_dir()` joined with
+///    `horizons/` (e.g. `~/Library/Application Support/starcat/horizons/`),
+///    sibling to the JPL mirror under the same platform data dir.
 ///
 /// Only `bail!`s if even step 3 yields `None` (no platform data dir). Does not
 /// create the directory — read paths just probe existence and the fetch path
@@ -2260,7 +2511,7 @@ fn resolve_horizons_dir(out: Option<&std::path::Path>) -> Result<PathBuf> {
     if let Ok(env) = std::env::var("STARCAT_HORIZONS_DATA") {
         return Ok(PathBuf::from(env));
     }
-    horizons_default_dir(pericynthion::default_data_dir()).ok_or_else(|| {
+    pericynthion::default_horizons_dir().ok_or_else(|| {
         anyhow::anyhow!(
             "no output directory. Pass --out PATH or set $STARCAT_HORIZONS_DATA \
              (no platform data directory available for the default \
@@ -2271,37 +2522,25 @@ fn resolve_horizons_dir(out: Option<&std::path::Path>) -> Result<PathBuf> {
 
 /// Fetch SPKs for every minor body in a class, skipping ones already on disk.
 fn cmd_horizons(args: &HorizonsArgs) -> Result<()> {
-    use pericynthion::horizons::{self, FetchTarget};
+    use pericynthion::horizons;
     let category = args.noun.category();
     let dir = resolve_horizons_dir(args.out.as_deref())?;
     let (def_start, def_stop) = horizons::default_span();
     let start = args.from.as_deref().unwrap_or(def_start);
     let stop = args.to.as_deref().unwrap_or(def_stop);
 
-    // Candidates: minor bodies in this class with an MPC number. Skip any whose
-    // <naif_id>.bsp is already present (idempotent re-runs; courteous to JPL).
-    let mut targets = Vec::new();
-    let mut already = 0_usize;
-    for placement in pericynthion::placements::CATALOG
-        .iter()
-        .filter(|p| p.category == category)
-    {
-        let (Some(command), Some(naif_id)) =
-            (placement.horizons_command(), placement.horizons_naif_id())
-        else {
-            continue;
-        };
-        if dir.join(format!("{naif_id}.bsp")).exists() {
-            println!("skip {} ({naif_id}.bsp already present)", placement.name);
-            already += 1;
-            continue;
-        }
-        targets.push(FetchTarget {
-            label: placement.name.to_string(),
-            command,
-            naif_id,
-        });
+    // Candidates: minor bodies in this class with an MPC number, split by the
+    // library into those already on disk (skip — idempotent re-runs, courteous
+    // to JPL) and those still to fetch.
+    let candidates = horizons::fetch_candidates(category, &dir);
+    for present in &candidates.present {
+        println!(
+            "skip {} ({}.bsp already present)",
+            present.name, present.naif_id
+        );
     }
+    let already = candidates.present.len();
+    let targets = candidates.missing;
 
     if targets.is_empty() {
         println!("nothing to fetch ({already} body/bodies already present)");
@@ -2324,8 +2563,24 @@ fn cmd_horizons(args: &HorizonsArgs) -> Result<()> {
         ),
         Err(e) => eprintln!("FAIL {:<12} {e}", t.label),
     })?;
-    if failures > 0 {
-        bail!("{failures} body/bodies failed to fetch");
+    if !failures.is_empty() {
+        // Every failure's own cause was already printed to stderr above (one
+        // `FAIL` line per body) as the batch ran. The process exit code
+        // reflects the aggregate root cause via `exit::horizons_batch_class`'s
+        // precedence (Io > NotFound > Network > Internal); pick a
+        // representative failure of that class so `classify` (which
+        // downcasts `HorizonsError`) resolves to the same code.
+        let count = failures.len();
+        let class = exit::horizons_batch_class(failures.iter().map(|f| &f.error));
+        let representative = failures
+            .into_iter()
+            .find(|f| exit::horizons_error_class(&f.error) == class)
+            .expect("class was derived from this same failure set");
+        let count_msg = format!(
+            "{count} body/bodies failed to fetch (representative: {})",
+            representative.label
+        );
+        return Err(anyhow::Error::new(representative.error).context(count_msg));
     }
     Ok(())
 }
@@ -2450,59 +2705,39 @@ fn antiscia_rows(points: &[(&str, f64)]) -> Vec<(String, f64, f64)> {
         .collect()
 }
 
-/// Resolve the concrete [`pericynthion::sidereal::AyanamshaFrame`] from the
-/// CLI override (`--ayanamsha-frame`) or the ayanāṃśa row's intrinsic default.
-fn resolve_frame(
-    args: &ComputeArgs,
-    ay: &pericynthion::sidereal::Ayanamsha,
-) -> pericynthion::sidereal::AyanamshaFrame {
-    args.ayanamsha_frame
-        .map(|f| match f {
-            FrameArg::Mean => pericynthion::sidereal::AyanamshaFrame::Mean,
-            FrameArg::True => pericynthion::sidereal::AyanamshaFrame::True,
-        })
-        .unwrap_or(ay.default_frame)
+/// Map the CLI zodiac flags to the library's format-neutral
+/// [`pericynthion::jzod::ZodiacRequest`]. The `draconic_node` metadata is always
+/// populated from `--nodes`; it is only consumed when a draconic zodiac is
+/// resolved. All validation / defaulting / precedence lives in
+/// [`pericynthion::jzod::resolve_zodiac`].
+fn zodiac_request(args: &ComputeArgs) -> pericynthion::jzod::ZodiacRequest {
+    pericynthion::jzod::ZodiacRequest {
+        sidereal: matches!(args.zodiac, ZodiacArg::Sidereal),
+        draconic: matches!(args.zodiac, ZodiacArg::Draconic) || args.draconic,
+        ayanamsha: args.ayanamsha.clone(),
+        frame: args.ayanamsha_frame.map(|f| match f {
+            FrameArg::Mean => jzod::SiderealFrame::Mean,
+            FrameArg::True => jzod::SiderealFrame::True,
+        }),
+        draconic_node: Some(match args.nodes {
+            NodesMode::Mean => jzod::DraconicNode::Mean,
+            NodesMode::True => jzod::DraconicNode::True,
+        }),
+    }
 }
 
-/// Resolve the requested zodiac frame into a [`jzod::Zodiac`], validating the
-/// ayanamsha slug against the built-in registry.
+/// Resolve the requested zodiac frame into a [`jzod::Zodiac`]. Thin wrapper over
+/// [`pericynthion::jzod::resolve_zodiac`] that discards the sidereal companion.
+/// `cmd_compute` calls the library resolver directly (it needs the companion);
+/// this wrapper exists only for the resolution unit tests.
 ///
 /// `--draconic` and `--zodiac draconic` both yield `Draconic`; an explicit
 /// `--zodiac sidereal` takes precedence over `--draconic`. For sidereal the
 /// ayanamsha defaults to `lahiri`; an unknown slug is an error listing the
 /// known slugs.
+#[cfg(test)]
 fn resolve_zodiac(args: &ComputeArgs) -> Result<jzod::Zodiac> {
-    if matches!(args.zodiac, ZodiacArg::Sidereal) {
-        let slug = args
-            .ayanamsha
-            .as_deref()
-            .unwrap_or(pericynthion::sidereal::DEFAULT_AYANAMSHA_SLUG);
-        let registry = pericynthion::sidereal::AyanamshaRegistry::with_builtins();
-        let ay = registry.get(slug).ok_or_else(|| {
-            anyhow::anyhow!(
-                "unknown ayanamsha '{slug}'; known slugs: {}",
-                registry.slugs().join(", ")
-            )
-        })?;
-        let frame = resolve_frame(args, ay);
-        let jzod_frame = jzod::SiderealFrame::from(frame);
-        return Ok(jzod::Zodiac::Sidereal {
-            ayanamsha: Some(slug.to_string()),
-            frame: Some(jzod_frame),
-        });
-    }
-    if matches!(args.zodiac, ZodiacArg::Draconic) || args.draconic {
-        // Record the node choice as metadata. Note: this field is purely metadata —
-        // the actual draconic projection is steered by `draconic_node: Option<f64>`
-        // computed independently from `args.nodes` in `cmd_compute`. Changing `node`
-        // here does NOT change projection behavior.
-        let node = match args.nodes {
-            NodesMode::Mean => jzod::DraconicNode::Mean,
-            NodesMode::True => jzod::DraconicNode::True,
-        };
-        return Ok(jzod::Zodiac::Draconic { node: Some(node) });
-    }
-    Ok(jzod::Zodiac::Tropical)
+    Ok(pericynthion::jzod::resolve_zodiac(&zodiac_request(args))?.0)
 }
 
 /// Human-readable zodiac label for the text/page banner, e.g.
@@ -2526,6 +2761,49 @@ fn zodiac_display(zodiac: &jzod::Zodiac) -> String {
                 (None, None) => "sidereal".to_string(),
             }
         }
+    }
+}
+
+/// Build human-readable "data sources" rows from observed provenance.
+///
+/// One row per [`pericynthion::chart::SourceUse`], de-duplicated by `key`
+/// (first-seen wins, matching the fold used for JZOD's `ephemeris.sources`).
+/// Each row is `(key, cached_name_or_builtin, urls_joined)`:
+/// - `cached_name_or_builtin` is the on-disk basename, or `"(built-in)"` for
+///   sources with no real path (the baked-in fixed-star catalogue).
+/// - `urls_joined` is every mirror URL for that source, joined with `"  |  "`,
+///   or `"(no known URL)"` if `urls_for_observed` found none.
+fn data_source_rows(
+    provenance: &[pericynthion::chart::SourceUse],
+) -> Vec<(String, String, String)> {
+    pericynthion::provenance::observed_sources(provenance)
+        .into_iter()
+        .map(|row| {
+            let cached = row.cached.unwrap_or_else(|| "(built-in)".to_string());
+            let urls = if row.urls.is_empty() {
+                "(no known URL)".to_string()
+            } else {
+                row.urls.join("  |  ")
+            };
+            (row.key, cached, urls)
+        })
+        .collect()
+}
+
+/// Print the `--verbose` "data sources" section: which on-disk file served
+/// each observed category/body, plus its canonical mirror URL(s). Renders to
+/// stdout, as detail of the chart already printed on the text/page paths —
+/// mirrors (in human form) what the JZOD path already reports machine-
+/// readably under `ephemeris.sources`.
+fn print_data_sources(provenance: &[pericynthion::chart::SourceUse]) {
+    let rows = data_source_rows(provenance);
+    if rows.is_empty() {
+        return;
+    }
+    println!();
+    println!("data sources:");
+    for (key, cached, urls) in rows {
+        println!("  {key:<25} {cached:<22} ({urls})");
     }
 }
 
@@ -2908,19 +3186,21 @@ fn page_mode_str(mode: &pericynthion::chart::CoordMode) -> &'static str {
     }
 }
 
-/// Thin wrapper over `ComputedChart::sorted_placements`, mapping the CLI `NodesMode` to the library `NodeVariant`.
+/// Thin wrapper over `ComputedChart::sorted_placements_detailed`, mapping the
+/// CLI `NodesMode` to the library `NodeVariant`. Returns `Placement`s so the
+/// retrograde flag comes straight from the library, not label string-matching.
 #[cfg(feature = "page")]
 fn page_collect_placements(
     computed: &ComputedChart,
     primary_house: Option<&HouseCusps>,
     start_lon: f64,
     nodes_mode: NodesMode,
-) -> Vec<(String, f64)> {
+) -> Vec<pericynthion::chart::Placement> {
     let nv = match nodes_mode {
         NodesMode::Mean => pericynthion::chart::NodeVariant::Mean,
         NodesMode::True => pericynthion::chart::NodeVariant::True,
     };
-    computed.sorted_placements(primary_house, start_lon, nv)
+    computed.sorted_placements_detailed(primary_house, start_lon, nv)
 }
 
 /// Minimum gap (in spaces) between the left and right strings on any
@@ -3040,50 +3320,11 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat, zo
         .or_else(|| computed.angles.as_ref().and_then(|a| a.ac_deg))
         .unwrap_or(0.0);
 
+    // Each placement carries its retrograde flag directly from the library
+    // (`Placement::retrograde`) — bodies, asteroids, and the selected node
+    // variant are flagged at computation time; angles, house cusps, and lots
+    // are never retrograde. No label string-matching here.
     let placements = page_collect_placements(computed, primary_house_cusps, start_lon, args.nodes);
-
-    // Annotate each placement with a retrograde flag based on its label.
-    // The mapping covers the ten classical bodies, lunar nodes (Nn/Sn —
-    // both share the orbital-plane direction), and Black Moon Lilith /
-    // Priapus (share the apsides-axis direction). Angles, house cusps,
-    // and lots are never marked.
-    let retro_for = |label: &str| -> bool {
-        if let Some(body) = match label {
-            "Sun" => Some(Body::Sun),
-            "Moon" => Some(Body::Moon),
-            "Mercury" => Some(Body::Mercury),
-            "Venus" => Some(Body::Venus),
-            "Mars" => Some(Body::Mars),
-            "Jupiter" => Some(Body::Jupiter),
-            "Saturn" => Some(Body::Saturn),
-            "Uranus" => Some(Body::Uranus),
-            "Neptune" => Some(Body::Neptune),
-            "Pluto" => Some(Body::Pluto),
-            "Earth" => Some(Body::Earth),
-            _ => None,
-        } {
-            return computed
-                .bodies
-                .iter()
-                .find(|cb| cb.body == body)
-                .is_some_and(|cb| cb.retrograde);
-        }
-        // Asteroid retrograde by display name
-        if let Some(ca) = computed.asteroids.iter().find(|a| a.name == label) {
-            return ca.retrograde;
-        }
-        match label {
-            "Nn" | "Sn" => match args.nodes {
-                NodesMode::Mean => true,
-                NodesMode::True => computed.nodes.as_ref().is_some_and(|n| n.true_retrograde),
-            },
-            "Lil" | "Pri" => match args.lilith {
-                LilithMode::Mean => false,
-                LilithMode::True => computed.lilith.as_ref().is_some_and(|l| l.true_retrograde),
-            },
-            _ => false,
-        }
-    };
 
     let half = placements.len().div_ceil(2);
 
@@ -3100,11 +3341,23 @@ fn print_page(args: &ComputeArgs, computed: &ComputedChart, fmt: CoordFormat, zo
     for i in 0..half {
         let (l_lbl, l_retro, l_lon) = placements.get(i).map_or_else(
             || (String::new(), false, String::new()),
-            |(lbl, lon)| (lbl.clone(), retro_for(lbl), format_zodiac_lon(*lon, fmt)),
+            |p| {
+                (
+                    p.label.clone(),
+                    p.retrograde,
+                    format_zodiac_lon(p.longitude, fmt),
+                )
+            },
         );
         let (r_lbl, r_retro, r_lon) = placements.get(i + half).map_or_else(
             || (String::new(), false, String::new()),
-            |(lbl, lon)| (lbl.clone(), retro_for(lbl), format_zodiac_lon(*lon, fmt)),
+            |p| {
+                (
+                    p.label.clone(),
+                    p.retrograde,
+                    format_zodiac_lon(p.longitude, fmt),
+                )
+            },
         );
         placement_cells[0].push((l_lbl, l_retro));
         longitude_cells[0].push(l_lon);
@@ -3410,6 +3663,111 @@ fn split_sign(lon_deg: f64) -> (&'static str, f64) {
 mod tests {
     use super::*;
 
+    /// Every `STARCAT_*` var bound to a `compute` clap arg via `env = "..."`
+    /// (see the `#[arg(..., env = "STARCAT_*")]` attrs on `ComputeArgs`).
+    /// Deliberately excludes `STARCAT_JPL_DATA` / `STARCAT_HORIZONS_DATA`,
+    /// which are hand-rolled (not clap `env` attrs) and must stay intact so
+    /// data-dependent tests still find the ephemeris and run.
+    const COMPUTE_ENV_VARS: &[&str] = &[
+        "STARCAT_DATE",
+        "STARCAT_TIME",
+        "STARCAT_CALENDAR",
+        "STARCAT_TZ",
+        "STARCAT_LMT",
+        "STARCAT_LAT",
+        "STARCAT_LON",
+        "STARCAT_HELIO",
+        "STARCAT_BODIES",
+        "STARCAT_HOUSE",
+        "STARCAT_NODES",
+        "STARCAT_LILITH",
+        "STARCAT_JZOD",
+        "STARCAT_TEXT",
+        "STARCAT_PAGE",
+        "STARCAT_DD",
+        "STARCAT_DMS",
+        "STARCAT_DDM",
+        "STARCAT_DM",
+        "STARCAT_D",
+        "STARCAT_ASTEROIDS",
+        "STARCAT_SPK",
+        "STARCAT_OMNISCIENT",
+        "STARCAT_STARS",
+        "STARCAT_ANTISCIA",
+        "STARCAT_DRACONIC",
+        "STARCAT_ZODIAC",
+        "STARCAT_AYANAMSHA",
+        "STARCAT_AYANAMSHA_FRAME",
+        "STARCAT_VERBOSE",
+        "STARCAT_QUIET",
+    ];
+
+    /// Clear ambient `STARCAT_*` compute-input vars exactly once for the whole
+    /// test binary, so unit tests that assert clap-default/`None` behavior
+    /// are robust to a developer's shell exporting them as personal defaults
+    /// (CI's clean env never exercises this path). Clearing (never setting)
+    /// is safe to run from multiple parallel test threads: `Once` guarantees
+    /// the removal happens a single time before any caller proceeds, and
+    /// there is no set-then-restore step to race. `STARCAT_JPL_DATA` /
+    /// `STARCAT_HORIZONS_DATA` are intentionally untouched — data-dependent
+    /// tests must still find the ephemeris and run, not skip.
+    fn clear_ambient_compute_env() {
+        static CLEAR_ONCE: std::sync::Once = std::sync::Once::new();
+        CLEAR_ONCE.call_once(|| {
+            for var in COMPUTE_ENV_VARS {
+                // SAFETY: runs once, before any test thread has started
+                // reading these vars via clap's `env = "..."` parsing.
+                unsafe {
+                    std::env::remove_var(var);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn verbosity_resolves_precedence() {
+        assert_eq!(Verbosity::resolve(false, false), Verbosity::Normal);
+        assert_eq!(Verbosity::resolve(true, false), Verbosity::Quiet);
+        assert_eq!(Verbosity::resolve(false, true), Verbosity::Verbose);
+        // clap forbids both at once; if it ever reaches resolve, verbose wins
+        assert_eq!(Verbosity::resolve(true, true), Verbosity::Verbose);
+    }
+
+    #[test]
+    fn verbosity_is_quiet_and_is_verbose() {
+        assert!(Verbosity::Quiet.is_quiet());
+        assert!(!Verbosity::Quiet.is_verbose());
+        assert!(Verbosity::Verbose.is_verbose());
+        assert!(!Verbosity::Verbose.is_quiet());
+        assert!(!Verbosity::Normal.is_quiet());
+        assert!(!Verbosity::Normal.is_verbose());
+    }
+
+    #[test]
+    fn quiet_and_verbose_conflict_in_clap() {
+        use clap::Parser as _;
+        let result = Cli::try_parse_from(["starcat", "compute", "--quiet", "--verbose"]);
+        assert!(result.is_err(), "clap should reject --quiet with --verbose");
+    }
+
+    #[test]
+    fn compute_quiet_and_verbose_expose_starcat_env_vars() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let compute = cmd
+            .find_subcommand("compute")
+            .expect("compute subcommand present");
+        let env_of = |id: &str| -> Option<String> {
+            compute
+                .get_arguments()
+                .find(|a| a.get_id() == id)
+                .and_then(|a| a.get_env())
+                .map(|e| e.to_string_lossy().into_owned())
+        };
+        assert_eq!(env_of("verbose").as_deref(), Some("STARCAT_VERBOSE"));
+        assert_eq!(env_of("quiet").as_deref(), Some("STARCAT_QUIET"));
+    }
+
     #[test]
     fn expand_star_tokens_expands_notable_and_all_and_dedupes() {
         let notable_len = pericynthion::stars::NOTABLE.len();
@@ -3588,14 +3946,16 @@ mod tests {
     }
 
     #[test]
-    fn data_fetch_defaults_to_de441() {
+    fn bare_data_fetch_has_no_dataset_default() {
+        // No presumptive `de441` default: bare `data fetch` parses to `None`,
+        // so `fetch_action` can route it to `Guide` and make zero network calls.
         use clap::Parser;
         let cli = Cli::parse_from(["starcat", "data", "fetch"]);
         match cli.command {
             Command::Data(DataArgs {
                 cmd: DataCmd::Fetch(f),
             }) => {
-                assert_eq!(f.dataset, "de441");
+                assert_eq!(f.dataset, None);
                 assert!(!f.list);
             }
             other => panic!("expected data fetch, got {other:?}"),
@@ -3614,8 +3974,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn data_fetch_bsc5_slug_parses() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["starcat", "data", "fetch", "bsc5"]);
+        match cli.command {
+            Command::Data(DataArgs {
+                cmd: DataCmd::Fetch(f),
+            }) => assert_eq!(f.dataset.as_deref(), Some("bsc5")),
+            other => panic!("expected data fetch bsc5, got {other:?}"),
+        }
+    }
+
+    /// Build [`FetchArgs`] directly (no clap parsing) for [`fetch_action`] unit
+    /// tests — the decision helper is pure and doesn't need a CLI round-trip.
+    fn fetch_args(dataset: Option<&str>, list: bool, what: bool) -> FetchArgs {
+        FetchArgs {
+            dataset: dataset.map(str::to_string),
+            list,
+            what,
+            jpl_data: None,
+        }
+    }
+
+    #[test]
+    fn fetch_action_bare_is_guide_making_zero_network_calls_possible() {
+        // The crux of F2: no dataset, no flags -> Guide, never Fetch, so
+        // cmd_data_fetch can return before touching the oracle or the network.
+        assert_eq!(
+            fetch_action(&fetch_args(None, false, false)),
+            FetchAction::Guide
+        );
+    }
+
+    #[test]
+    fn fetch_action_list_and_what_take_priority() {
+        assert_eq!(
+            fetch_action(&fetch_args(None, true, false)),
+            FetchAction::List
+        );
+        assert_eq!(
+            fetch_action(&fetch_args(None, false, true)),
+            FetchAction::What
+        );
+        // --what wins over --list per cmd_data_fetch's existing check order.
+        assert_eq!(
+            fetch_action(&fetch_args(None, true, true)),
+            FetchAction::What
+        );
+        // Flags win even when a dataset slug is also present.
+        assert_eq!(
+            fetch_action(&fetch_args(Some("de441"), true, false)),
+            FetchAction::List
+        );
+    }
+
+    #[test]
+    fn fetch_action_treats_bsc5_as_a_registry_slug() {
+        // `bsc5` is no longer a CLI special case — it flows through the same
+        // slug path as any DE and is routed by its registry kind at dispatch.
+        assert_eq!(
+            fetch_action(&fetch_args(Some("bsc5"), false, false)),
+            FetchAction::Fetch("bsc5".to_string())
+        );
+    }
+
+    #[test]
+    fn fetch_action_explicit_slug_still_fetches() {
+        assert_eq!(
+            fetch_action(&fetch_args(Some("de441"), false, false)),
+            FetchAction::Fetch("de441".to_string())
+        );
+        assert_eq!(
+            fetch_action(&fetch_args(Some("de431"), false, false)),
+            FetchAction::Fetch("de431".to_string())
+        );
+    }
+
     /// Helper: parse a `compute` command line into its `ComputeArgs`.
     fn compute_args(extra: &[&str]) -> ComputeArgs {
+        clear_ambient_compute_env();
         let mut argv = vec![
             "starcat",
             "compute",
@@ -3723,6 +4161,7 @@ mod tests {
     #[test]
     fn compute_missing_date_still_errors() {
         // --calendar is optional at the clap layer, but --date remains required.
+        clear_ambient_compute_env();
         let err = Cli::try_parse_from(["starcat", "compute", "--time", "12:00", "--tz", "+00:00"]);
         // clap accepts it (date is Option at the clap layer); the runtime
         // pre-flight check is what enforces --date. Assert the parsed value has
@@ -4278,6 +4717,86 @@ mod tests {
         );
     }
 
+    /// `data_source_rows` renders a cached (on-disk mirror) source with its
+    /// basename and joined URL(s).
+    #[test]
+    fn data_source_rows_cached_file() {
+        use pericynthion::chart::SourceUse;
+        let provenance = vec![SourceUse {
+            key: "planets".to_string(),
+            path: std::path::PathBuf::from("linux_p1550p2650.440"),
+        }];
+        let rows = super::data_source_rows(&provenance);
+        assert_eq!(rows.len(), 1);
+        let (key, cached, urls) = &rows[0];
+        assert_eq!(key, "planets");
+        assert_eq!(cached, "linux_p1550p2650.440");
+        assert!(
+            urls.contains("linux_p1550p2650.440"),
+            "expected the basename to appear in the URL(s), got: {urls}"
+        );
+    }
+
+    /// The baked-in fixed-star catalogue has no real on-disk path — its
+    /// `SourceUse::path` is the `catalog.gz` sentinel, which `data_source_rows`
+    /// must render as `"(built-in)"`, not the sentinel's literal name.
+    #[test]
+    fn data_source_rows_builtin_catalogue() {
+        use pericynthion::chart::SourceUse;
+        let provenance = vec![SourceUse {
+            key: "fixed_stars".to_string(),
+            path: std::path::PathBuf::from("catalog.gz"),
+        }];
+        let rows = super::data_source_rows(&provenance);
+        assert_eq!(rows.len(), 1);
+        let (key, cached, _urls) = &rows[0];
+        assert_eq!(key, "fixed_stars");
+        assert_eq!(cached, "(built-in)");
+    }
+
+    /// De-duplicates by `key`, first-seen wins — matches the fold used for
+    /// JZOD's `ephemeris.sources` (see `pericynthion::jzod::to_jzod_chart`).
+    #[test]
+    fn data_source_rows_dedups_by_key_first_seen_wins() {
+        use pericynthion::chart::SourceUse;
+        let provenance = vec![
+            SourceUse {
+                key: "asteroids".to_string(),
+                path: std::path::PathBuf::from("sb441-n16.bsp"),
+            },
+            SourceUse {
+                key: "asteroids".to_string(),
+                path: std::path::PathBuf::from("sb441-n373.bsp"),
+            },
+        ];
+        let rows = super::data_source_rows(&provenance);
+        assert_eq!(rows.len(), 1, "must collapse to one row per key");
+        assert_eq!(rows[0].1, "sb441-n16.bsp", "first-seen path must win");
+    }
+
+    /// An unrecognized on-disk path (no oracle match, non-numeric stem) still
+    /// produces a row rather than panicking — `urls_for_observed` returns an
+    /// empty URL list in that case, rendered as `"(no known URL)"`.
+    #[test]
+    fn data_source_rows_unknown_path_has_placeholder_url() {
+        use pericynthion::chart::SourceUse;
+        let provenance = vec![SourceUse {
+            key: "mystery".to_string(),
+            path: std::path::PathBuf::from("totally-unknown-file.bsp"),
+        }];
+        let rows = super::data_source_rows(&provenance);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].2, "(no known URL)");
+    }
+
+    /// Empty provenance yields no rows (the section is skipped entirely by
+    /// `print_data_sources`, checked by the CLI-level test in `tests/`).
+    #[test]
+    fn data_source_rows_empty_provenance_is_empty() {
+        let rows = super::data_source_rows(&[]);
+        assert!(rows.is_empty());
+    }
+
     #[test]
     fn star_candidates_is_non_empty_and_contains_sirius() {
         let candidates = super::star_candidates();
@@ -4293,6 +4812,203 @@ mod tests {
             names.iter().any(|n| n == "Sirius"),
             "expected Sirius in candidates, got {names:?}"
         );
+    }
+
+    /// `--ayanamsha` completion candidates are exactly the ayanamshas the
+    /// sidereal engine accepts — derived live from the registry, never a
+    /// hand-copied slug list. This is the additive-only contract: the
+    /// suggestion set and the accepted set are one and the same.
+    #[test]
+    fn ayanamsha_candidates_match_accepted_registry_slugs() {
+        let registry = pericynthion::sidereal::AyanamshaRegistry::with_builtins();
+        let expected: Vec<String> = registry.slugs().iter().map(|s| (*s).to_string()).collect();
+        assert!(
+            !expected.is_empty(),
+            "registry must expose at least one ayanamsha"
+        );
+        let got: Vec<String> = super::ayanamsha_candidates()
+            .iter()
+            .map(|c| c.get_value().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            got, expected,
+            "ayanamsha candidates must equal the accepted registry slugs, in registry order"
+        );
+    }
+
+    /// Each `--ayanamsha` candidate carries help text, and that text is the
+    /// registry's own `display_name` — a real description source, never
+    /// fabricated.
+    #[test]
+    fn ayanamsha_candidates_help_is_registry_display_name() {
+        let registry = pericynthion::sidereal::AyanamshaRegistry::with_builtins();
+        for cand in super::ayanamsha_candidates() {
+            let slug = cand.get_value().to_string_lossy().into_owned();
+            let want = registry
+                .get(&slug)
+                .expect("candidate slug must resolve in the registry")
+                .display_name;
+            let got = cand
+                .get_help()
+                .map(std::string::ToString::to_string)
+                .unwrap_or_default();
+            assert_eq!(
+                got, want,
+                "help for {slug} must be its registry display_name, not invented text"
+            );
+        }
+    }
+
+    /// Additive-only guard: every ayanamsha slug the completer suggests must
+    /// still parse and validate through `resolve_zodiac` — wiring candidates
+    /// must not narrow what `--ayanamsha` accepts.
+    #[test]
+    fn every_suggested_ayanamsha_still_resolves() {
+        let registry = pericynthion::sidereal::AyanamshaRegistry::with_builtins();
+        for slug in registry.slugs() {
+            let z = resolve_zodiac(&compute_args(&[
+                "--zodiac",
+                "sidereal",
+                "--ayanamsha",
+                slug,
+            ]))
+            .unwrap_or_else(|e| panic!("suggested ayanamsha {slug} must resolve: {e}"));
+            assert!(
+                matches!(z, jzod::Zodiac::Sidereal { .. }),
+                "{slug} must yield a sidereal zodiac"
+            );
+        }
+    }
+
+    /// The `ValueEnum`-backed enumerable args complete for free via clap's
+    /// derive: their possible-value sets equal the enum's own `value_variants()`
+    /// (the single source of truth), so no explicit candidate wiring is needed
+    /// and none narrows them. Derived from each arg enum — no hardcoded lists.
+    #[test]
+    fn value_enum_args_expose_their_variants_as_possible_values() {
+        use clap::{CommandFactory, ValueEnum};
+
+        fn slugs_of<T: ValueEnum>() -> Vec<String> {
+            T::value_variants()
+                .iter()
+                .filter_map(|v| v.to_possible_value())
+                .map(|pv| pv.get_name().to_string())
+                .collect()
+        }
+        fn possible_of(cmd: &clap::Command, sub: &str, id: &str) -> Vec<String> {
+            cmd.find_subcommand(sub)
+                .unwrap_or_else(|| panic!("{sub} subcommand present"))
+                .get_arguments()
+                .find(|a| a.get_id() == id)
+                .unwrap_or_else(|| panic!("{id} arg present under {sub}"))
+                .get_possible_values()
+                .iter()
+                .map(|pv| pv.get_name().to_string())
+                .collect()
+        }
+
+        let cmd = Cli::command();
+        assert_eq!(
+            possible_of(&cmd, "compute", "houses"),
+            slugs_of::<HouseArg>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "compute", "zodiac"),
+            slugs_of::<ZodiacArg>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "compute", "ayanamsha_frame"),
+            slugs_of::<FrameArg>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "compute", "nodes"),
+            slugs_of::<NodesMode>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "compute", "lilith"),
+            slugs_of::<LilithMode>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "compute", "bodies"),
+            slugs_of::<BodyArg>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "compute", "calendar"),
+            slugs_of::<CalendarArg>()
+        );
+        assert_eq!(
+            possible_of(&cmd, "horizons", "noun"),
+            slugs_of::<HorizonsNoun>()
+        );
+        let verify = cmd
+            .find_subcommand("data")
+            .expect("data subcommand")
+            .find_subcommand("verify")
+            .expect("data verify subcommand");
+        let scope: Vec<String> = verify
+            .get_arguments()
+            .find(|a| a.get_id() == "scope")
+            .expect("scope arg")
+            .get_possible_values()
+            .iter()
+            .map(|pv| pv.get_name().to_string())
+            .collect();
+        assert_eq!(scope, slugs_of::<VerifyScope>());
+    }
+
+    /// `--house`'s possible values must each carry non-empty completion/`--help`
+    /// text, derived straight from `HouseArg`'s own `///` doc comments (clap's
+    /// `ValueEnum` derive surfaces them as `PossibleValue::help`) — not a
+    /// hardcoded copy here. Covers every variant with a canonical domain
+    /// description (the 11 systems in the astrologer reference); variants for
+    /// house systems outside that reference (only reachable under
+    /// `noref-houses`) are allowed to have no help rather than an invented one.
+    #[test]
+    fn house_arg_possible_values_have_help() {
+        use clap::ValueEnum;
+        let undescribed = [
+            "equal-from-mc",
+            "horizontal",
+            "krusinski",
+            "sripati",
+            "vehlow",
+            "carter",
+            "pullen-sd",
+            "pullen-sr",
+        ];
+        for variant in HouseArg::value_variants() {
+            let pv = variant
+                .to_possible_value()
+                .expect("HouseArg variant has a possible value");
+            if undescribed.contains(&pv.get_name()) {
+                continue;
+            }
+            let help = pv.get_help().map(std::string::ToString::to_string);
+            assert!(
+                help.as_deref().is_some_and(|h| !h.is_empty()),
+                "HouseArg::{variant:?} ({}) must have non-empty help",
+                pv.get_name()
+            );
+        }
+    }
+
+    /// Additive-only guard for the aliased `ValueEnum` args: the computation-mode
+    /// aliases documented on `--nodes` / `--lilith` still parse. Wiring
+    /// completion must never reject a value that parsed before.
+    #[test]
+    fn nodes_and_lilith_aliases_still_parse() {
+        for alias in ["mean", "average", "true", "apparent", "osculating"] {
+            let n = compute_args(&["--nodes", alias]);
+            assert!(
+                matches!(n.nodes, NodesMode::Mean | NodesMode::True),
+                "--nodes {alias} must parse"
+            );
+            let l = compute_args(&["--lilith", alias]);
+            assert!(
+                matches!(l.lilith, LilithMode::Mean | LilithMode::True),
+                "--lilith {alias} must parse"
+            );
+        }
     }
 
     #[test]
@@ -4319,23 +5035,17 @@ mod tests {
     }
 
     #[test]
-    fn horizons_default_dir_appends_horizons_subdir() {
-        let base = PathBuf::from("/x/starcat");
-        let got = horizons_default_dir(Some(base)).expect("Some base yields Some dir");
-        assert_eq!(
-            got.file_name().and_then(|n| n.to_str()),
-            Some("horizons"),
-            "default horizons dir must end in `horizons`, got {got:?}"
-        );
-        assert_eq!(got, PathBuf::from("/x/starcat/horizons"));
-    }
-
-    #[test]
-    fn horizons_default_dir_is_none_without_base() {
-        assert!(
-            horizons_default_dir(None).is_none(),
-            "no platform data dir must propagate to None"
-        );
+    fn default_horizons_dir_is_horizons_child_of_data_dir() {
+        // The `<data_dir>/horizons/` convention lives in the library now; the
+        // CLI just consumes it. When a platform data dir exists, the horizons
+        // dir is its `horizons/` child.
+        if let Some(data) = pericynthion::default_data_dir() {
+            let hz = pericynthion::default_horizons_dir().expect("Some when data dir is Some");
+            assert_eq!(hz.file_name().and_then(|n| n.to_str()), Some("horizons"));
+            assert_eq!(hz, data.join("horizons"));
+        } else {
+            assert!(pericynthion::default_horizons_dir().is_none());
+        }
     }
 
     #[test]
@@ -4465,6 +5175,7 @@ mod tests {
         }
 
         fn compute_matches(argv: &[&str]) -> clap::ArgMatches {
+            clear_ambient_compute_env();
             let mut full = vec!["starcat", "compute"];
             full.extend_from_slice(argv);
             Cli::command()

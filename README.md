@@ -10,6 +10,8 @@ Astrology software written in Rust.
     - Astrolog AAF
     - Jagannatha Hora `.jhd` (read-only)
     - Zeus
+    - JSON machine output (`--to json`, write-only)
+    - Raw full-fidelity dump (`--to raw`, write-only)
 
   - Web platforms
     - astro.com
@@ -45,7 +47,7 @@ open -a "Astro Gold.app" blackmoon.*.sfcht
 ```any
 just fetch de441
 export STARCAT_JPL_DATA="$PWD/de441"
-starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:00 --lat 48.208333 --lon=16.371667 --house=placidus
+starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:00 --lat 48.208333 --lon=16.371667 --house=placidus --page
 
 ╭─────────────────────────────────────────────────╮
 │ 1895.12.03 15:15 UTC+01:00     48°N12' 016°E22' │
@@ -54,6 +56,7 @@ starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:
 ╰─────────────────────────────────────────────────╯
 ╭─────────────────────────────────────────────────╮
 │ JD UT 2413531.0938                      Diurnal │
+│ Lunar Phase  full moon  196.73°  day 16 of 28   │
 ├─────────────────────────────────────────────────┤
 │ Placement │  Longitude │ Placement │  Longitude │
 ├───────────┼────────────┼───────────┼────────────┤
@@ -80,7 +83,7 @@ starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:
 ## Docker users
 
 ```
-docker run --rm --pull always -v "${STARCAT_JPL_DATA}":/jpl:ro lucidaeon/starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:00 --lat 48.208333 --lon=16.371667 --house=placidus
+docker run --rm --pull always -v "${STARCAT_JPL_DATA}":/jpl:ro lucidaeon/starcat compute --date 1895-12-03 --time 15:15:00 --calendar gregorian --tz=+01:00 --lat 48.208333 --lon=16.371667 --house=placidus --page
 ```
 ```
 docker run --rm --pull always -v "$(pwd)":/workspace:rw lucidaeon/blackmoon /workspace/adb_export_sample.xml  --output /workspace/now.sfcht

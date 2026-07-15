@@ -415,6 +415,7 @@ mod tests {
             sect: None,
             interp_sect_twilight: None,
             stars: vec![],
+            provenance: vec![],
         }
     }
 

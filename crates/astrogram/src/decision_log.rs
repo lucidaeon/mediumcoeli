@@ -129,6 +129,22 @@ impl DecisionLog {
     }
 }
 
+/// The `phenom_id`s to delete in the apply phase: every logged [`Choice::Drop`]
+/// with a non-empty `phenom_id`, in log order.
+///
+/// A `Drop` with an empty `phenom_id` is skipped — it carries no target to
+/// delete. Front-ends replay the whole decision log through this to build the
+/// deletion set, so the "which records actually get deleted" rule lives in one
+/// place rather than in each caller.
+#[must_use]
+pub fn drops_to_apply(records: &[DecisionRecord]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|r| matches!(r.choice, Choice::Drop) && !r.phenom_id.is_empty())
+        .map(|r| r.phenom_id.clone())
+        .collect()
+}
+
 /// The XDG-compliant default decision-log path from explicit base dirs:
 /// `$XDG_CACHE_HOME/blackmoon/luna-decisions.jsonl`, else
 /// `$HOME/.cache/blackmoon/luna-decisions.jsonl`, else
@@ -157,6 +173,33 @@ pub fn default_path() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rec(phenom_id: &str, choice: Choice) -> DecisionRecord {
+        DecisionRecord {
+            group_id: "g".into(),
+            phenom_id: phenom_id.into(),
+            choice,
+            chart_name: "n".into(),
+        }
+    }
+
+    #[test]
+    fn drops_to_apply_collects_only_nonempty_drops() {
+        let records = vec![
+            rec("keep-me", Choice::Keep),
+            rec("drop-a", Choice::Drop),
+            rec("", Choice::Drop), // empty phenom_id — no target, skipped
+            rec("skip-me", Choice::Skip),
+            rec("drop-b", Choice::Drop),
+        ];
+        assert_eq!(drops_to_apply(&records), vec!["drop-a", "drop-b"]);
+    }
+
+    #[test]
+    fn drops_to_apply_empty_when_no_drops() {
+        let records = vec![rec("x", Choice::Keep), rec("y", Choice::Skip)];
+        assert!(drops_to_apply(&records).is_empty());
+    }
 
     #[test]
     fn default_path_prefers_xdg_then_home_then_cwd() {

@@ -1,0 +1,126 @@
+name: Publish to crates.io
+
+# Idempotent, dependency-ordered publish of every workspace crate.
+#
+# On each push to main it computes the workspace's topological order (deps
+# before dependents), checks the crates.io sparse index for each crate's
+# CURRENT version, and publishes ONLY the versions that aren't live yet.
+# Versions already on crates.io are skipped, so re-running is a no-op and
+# staggered tags never cause an ordering failure — the sweep always publishes
+# whatever is missing, leaves first.
+#
+# It NEVER touches Cargo.toml versions, Cargo.lock, or git tags/changelog —
+# those stay the release manager's alone. It only reads versions and runs
+# `cargo publish`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only — list what would publish, upload nothing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crates-io-publish
+  cancel-in-progress: false   # never interrupt an in-flight publish
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      # push = real publish; manual dispatch honors the dry_run box (default true)
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Plan — topological order + crates.io status
+        id: plan
+        shell: bash
+        run: |
+          python3 - <<'PY' | tee "$RUNNER_TEMP/plan.tsv"
+          import json, subprocess, urllib.request, urllib.error
+
+          md = json.loads(subprocess.check_output(
+              ["cargo","metadata","--format-version","1","--no-deps"]))
+          members = {p["name"]: p for p in md["packages"]}
+          names = set(members)
+
+          # intra-workspace edges only (external deps are already on crates.io)
+          remaining = {n: {d["name"] for d in members[n]["dependencies"]
+                           if d["name"] in names} for n in names}
+
+          # Kahn topo sort, alphabetical tie-break for deterministic output
+          order, ready = [], sorted(n for n in names if not remaining[n])
+          while ready:
+              n = ready.pop(0); order.append(n)
+              for m in names:
+                  if n in remaining[m]:
+                      remaining[m].discard(n)
+                      if not remaining[m] and m not in order and m not in ready:
+                          ready.append(m); ready.sort()
+          if len(order) != len(names):
+              raise SystemExit(f"cycle in workspace graph: {names - set(order)}")
+
+          def prefix(n):
+              n = n.lower()
+              return {1:f"1/{n}", 2:f"2/{n}", 3:f"3/{n[0]}/{n}"}.get(
+                  len(n), f"{n[:2]}/{n[2:4]}/{n}")
+
+          for n in order:
+              ver = members[n]["version"]
+              try:
+                  body = urllib.request.urlopen(
+                      f"https://index.crates.io/{prefix(n)}", timeout=20).read().decode()
+                  live = {json.loads(l)["vers"] for l in body.splitlines() if l.strip()}
+                  need = ver not in live
+              except urllib.error.HTTPError as e:
+                  if e.code == 404:      # crate name never published — first publish
+                      need = True
+                  else:
+                      raise
+              print(f"{n}\t{ver}\t{'publish' if need else 'skip'}")
+          PY
+
+      - name: Publish missing versions (leaves first)
+        shell: bash
+        run: |
+          echo "DRY_RUN=$DRY_RUN"
+          any=0
+          while IFS=$'\t' read -r name ver action; do
+            if [[ "$action" != "publish" ]]; then
+              echo "== $name $ver — already on crates.io, skip"
+              continue
+            fi
+            any=1
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "== $name $ver — WOULD PUBLISH (dry run)"
+              continue
+            fi
+            echo "== $name $ver — publishing"
+            # cargo publish blocks until the version is visible in the index,
+            # so the next (dependent) crate resolves it. Tolerate a same-run
+            # race where it reports the version already landed.
+            if ! out=$(cargo publish -p "$name" --locked 2>&1); then
+              echo "$out"
+              if grep -qiE 'already (uploaded|exists)' <<<"$out"; then
+                echo "   (already present — treating as done)"
+              else
+                exit 1
+              fi
+            fi
+          done < "$RUNNER_TEMP/plan.tsv"
+          [[ "$any" == "0" ]] && echo "nothing to publish — all versions current."
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

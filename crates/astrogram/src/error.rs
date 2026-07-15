@@ -53,4 +53,8 @@ pub enum ChartError {
         #[source]
         source: std::io::Error,
     },
+    /// A format requiring a `jzod::Generator` identity (currently only
+    /// [`Format::Json`](crate::format::Format::Json)) was written without one.
+    #[error("JSON output requires a generator")]
+    MissingGenerator,
 }

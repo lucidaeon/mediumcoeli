@@ -124,6 +124,127 @@ pub fn fixed_star_providers() -> Vec<Provider> {
     out
 }
 
+/// One observed file mapped back to the oracle's mirror URL(s), for
+/// `generator`/provenance reporting. Distinct from [`jzod::DataSource`]
+/// (which this crate does not depend on outside the `jzod` feature) so a
+/// bare, non-jzod build of this crate stays fully independent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataSourceInfo {
+    /// One or more mirror URLs for the same byte-identical artifact.
+    pub urls: Vec<String>,
+    /// Local cache basename, if the artifact is (or would be) on disk.
+    /// `None` for the baked-in fixed-star catalogue, which has no real
+    /// on-disk path.
+    pub cached: Option<String>,
+}
+
+/// Map an observed file (as recorded in [`crate::chart::SourceUse::path`])
+/// back to the oracle's mirror URL(s) it can be fetched from.
+///
+/// Resolution order:
+/// 1. The `catalog.gz` fixed-star sentinel (no real on-disk path — the
+///    catalogue is baked into the binary): returns every mirror carrying
+///    [`STAR_CLASS_ALL`] (`catalog.gz` and `ybsc5.gz`, both byte-identical
+///    but hosted under different names), `cached: None`.
+/// 2. Any oracle file whose basename matches `path`'s basename: returns
+///    every mirror URL for that basename (there can be more than one, e.g.
+///    a file mirrored under two hosts with the same name), `cached` set to
+///    the basename.
+/// 3. Otherwise, treat `path` as a Horizons-fetched `<naif>.bsp` (not in the
+///    oracle, since Horizons SPKs are generated on demand, never mirrored):
+///    synthesizes the Horizons API URL from the numeric stem, `cached` set
+///    to the basename. If the stem isn't numeric, the URL list is empty.
+#[must_use]
+pub fn urls_for_observed(path: &std::path::Path) -> DataSourceInfo {
+    let basename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+
+    if basename == "catalog.gz" {
+        let urls = oracle::manifest_dirs()
+            .iter()
+            .flat_map(|d| d.files.iter().map(move |f| (d, f)))
+            .filter(|(_, f)| f.provides.contains(&STAR_CLASS_ALL))
+            .map(|(d, f)| jpl_url(d.prefix, f.name))
+            .collect();
+        return DataSourceInfo { urls, cached: None };
+    }
+
+    let urls: Vec<String> = oracle::manifest_dirs()
+        .iter()
+        .flat_map(|d| d.files.iter().map(move |f| (d, f)))
+        .filter(|(_, f)| f.name == basename)
+        .map(|(d, f)| jpl_url(d.prefix, f.name))
+        .collect();
+    if !urls.is_empty() {
+        return DataSourceInfo {
+            urls,
+            cached: Some(basename.to_string()),
+        };
+    }
+
+    // Not in the oracle: a Horizons-generated SPK, named `<naif>.bsp`.
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let urls = stem
+        .parse::<i32>()
+        .map(|naif| vec![horizons_url(naif)])
+        .unwrap_or_default();
+    DataSourceInfo {
+        urls,
+        cached: Some(basename.to_string()),
+    }
+}
+
+/// One observed data source folded to a reporting row: the provenance key, the
+/// local cache basename (if any), and every mirror URL it resolves to.
+///
+/// Produced by [`observed_sources`]. This is the shared, format-neutral shape
+/// that both the JZOD serializer (`ephemeris.sources`) and the CLI's human
+/// "data sources" section build from, so the fold rule lives in one place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRow {
+    /// Provenance category or body key (e.g. `"planets"`, `"fixed_stars"`).
+    pub key: String,
+    /// Local cache basename, or `None` for a built-in source (the baked-in
+    /// fixed-star catalogue) — mirrors [`DataSourceInfo::cached`].
+    pub cached: Option<String>,
+    /// Every mirror URL for this source (possibly empty).
+    pub urls: Vec<String>,
+}
+
+/// Fold observed provenance into one [`SourceRow`] per key, first-seen wins.
+///
+/// Walks `provenance` in order, keeping the first [`crate::chart::SourceUse`]
+/// seen for each `key` and resolving its path through [`urls_for_observed`].
+/// A key could in principle be observed against more than one path across the
+/// fold, so the first mapping is kept. `compute_with_spk` already sorts and
+/// de-duplicates `(key, path)` pairs, so the surviving row is deterministic.
+///
+/// The returned order follows the (already-sorted) `provenance` order. Both the
+/// JZOD `ephemeris.sources` map and the CLI's human "data sources" section are
+/// built from this list so the fold rule is defined exactly once.
+#[must_use]
+pub fn observed_sources(provenance: &[crate::chart::SourceUse]) -> Vec<SourceRow> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut rows = Vec::new();
+    for u in provenance {
+        if !seen.insert(u.key.clone()) {
+            continue;
+        }
+        let info = urls_for_observed(&u.path);
+        rows.push(SourceRow {
+            key: u.key.clone(),
+            cached: info.cached,
+            urls: info.urls,
+        });
+    }
+    rows
+}
+
 /// Catalogued minor bodies with no bundle provider — the ones `data prod`
 /// must list under the Horizons dir. Returns (display name, horizons naif id).
 #[must_use]
@@ -224,5 +345,83 @@ mod tests {
         assert!(names.contains(&"Albion"));
         assert!(!names.contains(&"Eris")); // bundled in n373
         assert!(!names.contains(&"Ceres")); // bundled in n16
+    }
+
+    #[test]
+    fn fixed_star_sentinel_yields_both_mirror_urls_no_cache() {
+        let info = urls_for_observed(std::path::Path::new("catalog.gz"));
+        assert_eq!(info.urls.len(), 2);
+        assert!(
+            info.urls
+                .iter()
+                .any(|u| u.contains("cdsarc.cds.unistra.fr"))
+        );
+        assert!(info.urls.iter().any(|u| u.contains("tdc-www.harvard.edu")));
+        assert!(info.cached.is_none());
+    }
+
+    #[test]
+    fn horizons_bsp_synthesizes_api_url_and_cached_name() {
+        let info = urls_for_observed(std::path::Path::new("/x/horizons/20000002.bsp"));
+        assert!(
+            info.urls[0].contains("horizons.api?") && info.urls[0].contains("COMMAND=20000002")
+        );
+        assert_eq!(info.cached.as_deref(), Some("20000002.bsp"));
+    }
+
+    #[test]
+    fn observed_sources_folds_first_seen_wins_per_key() {
+        use crate::chart::SourceUse;
+        use std::path::PathBuf;
+        let provenance = vec![
+            SourceUse {
+                key: "asteroids".to_string(),
+                path: PathBuf::from("/data/nasa/small_bodies/asteroids_de441/sb441-n16.bsp"),
+            },
+            // Duplicate key with a different path — must be ignored (first wins).
+            SourceUse {
+                key: "asteroids".to_string(),
+                path: PathBuf::from("/somewhere/else/sb441-n373.bsp"),
+            },
+            SourceUse {
+                key: "fixed_stars".to_string(),
+                path: PathBuf::from("catalog.gz"),
+            },
+        ];
+        let rows = observed_sources(&provenance);
+        assert_eq!(rows.len(), 2, "duplicate key folded to one row");
+        assert_eq!(rows[0].key, "asteroids");
+        assert_eq!(rows[0].cached.as_deref(), Some("sb441-n16.bsp"));
+        assert_eq!(
+            rows[0].urls,
+            vec![
+                "https://ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp"
+                    .to_string()
+            ]
+        );
+        // Fixed-star sentinel: no cache, two mirror URLs.
+        assert_eq!(rows[1].key, "fixed_stars");
+        assert!(rows[1].cached.is_none());
+        assert_eq!(rows[1].urls.len(), 2);
+    }
+
+    #[test]
+    fn observed_sources_empty_provenance_is_empty() {
+        assert!(observed_sources(&[]).is_empty());
+    }
+
+    #[test]
+    fn mirrored_bundle_file_yields_its_jpl_mirror_url_with_cache() {
+        // A real oracle-known file (not the star sentinel, not a Horizons SPK)
+        // resolves to its single JPL mirror URL, cached under its own basename.
+        let info = urls_for_observed(std::path::Path::new(
+            "/data/nasa/small_bodies/asteroids_de441/sb441-n16.bsp",
+        ));
+        assert_eq!(info.urls.len(), 1);
+        assert_eq!(
+            info.urls[0],
+            "https://ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp"
+        );
+        assert_eq!(info.cached.as_deref(), Some("sb441-n16.bsp"));
     }
 }

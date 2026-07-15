@@ -38,12 +38,25 @@
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
 
+/// This crate's own version, for embedding in a JZOD [`::jzod::Component`] entry
+/// (e.g. by consumers such as `blackmoon` building their own [`::jzod::Generator`]).
+pub const ASTROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// AAF (Astrolog Ascii Format) parser.
 pub mod aaf;
 pub mod adbxml;
 /// astro.com HTTP API helpers.
 pub mod astrocom;
 pub mod astrotheoros;
+/// Web-provider credential assembly and authentication (requires the
+/// `cookie-import` Cargo feature).
+///
+/// Turns gathered credential inputs into an authenticated
+/// [`provider::WebProvider`], folding the `cookie → token → login`
+/// fall-through, half-credential validation, and non-empty-chain enforcement
+/// into one place so every consumer (CLI or GUI) shares it.
+#[cfg(feature = "cookie-import")]
+pub mod auth;
 pub mod capability;
 pub mod chart;
 pub mod consolidate;

@@ -485,6 +485,29 @@ pub fn entries() -> Vec<OracleEntry> {
         .collect()
 }
 
+/// The CDS fixed-star catalogue mirrors — every [`SourceKind::CdsCatalog`]
+/// file whose `provides` contains [`STAR_CLASS_ALL`] — as integrity entries,
+/// in manifest order (the committed order is CDS-first, Harvard-second: see
+/// `oracle.json`). Drives `starcat data fetch bsc5`, which tries each mirror
+/// in turn until one downloads and verifies.
+#[must_use]
+pub fn fixed_star_mirror_entries() -> Vec<OracleEntry> {
+    manifest_dirs()
+        .iter()
+        .filter(|d| matches!(d.kind, SourceKind::CdsCatalog))
+        .flat_map(|d| {
+            d.files
+                .iter()
+                .filter(|f| f.provides.contains(&STAR_CLASS_ALL))
+                .map(move |f| OracleEntry {
+                    path: format!("{}/{}", d.prefix, f.name),
+                    size: f.size,
+                    blake3_hex: f.blake3_hex,
+                })
+        })
+        .collect()
+}
+
 /// The oracle subset for starcat's currently-supported placements: the DE441
 /// binary dataset (header + ephemeris) plus the headline small-body SPK.
 ///
@@ -821,6 +844,24 @@ mod tests {
         assert_eq!(cat.blake3_hex, ybsc5.blake3_hex);
         assert_eq!(cat.size, ybsc5.size);
         assert_eq!(ybsc5.provides, &[super::STAR_CLASS_ALL]);
+    }
+
+    #[test]
+    fn fixed_star_mirror_entries_are_cds_then_harvard_and_both_verify() {
+        let mirrors = super::fixed_star_mirror_entries();
+        assert_eq!(mirrors.len(), 2, "expected exactly two BSC5 mirrors");
+        assert!(mirrors[0].path.ends_with("catalog.gz"), "CDS mirror first");
+        assert!(
+            mirrors[1].path.ends_with("ybsc5.gz"),
+            "Harvard mirror second"
+        );
+        assert_eq!(mirrors[0].size, 573_921);
+        assert_eq!(mirrors[0].size, mirrors[1].size);
+        assert_eq!(mirrors[0].blake3_hex, mirrors[1].blake3_hex);
+        assert_eq!(
+            mirrors[0].blake3_hex,
+            "1c74a8eb610560b54a4436c75d2cd7a0b2edbc23bee8a4a99be9f7c4de322034"
+        );
     }
 
     #[test]

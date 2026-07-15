@@ -29,7 +29,8 @@ pub fn format_utc_offset(hours: f64) -> String {
 
 /// Current wall-clock time as `YYYY-MM-DDTHH:MM:SSZ` (ISO 8601 extended).
 ///
-/// Used in JZOD `ephemeris.calculated_at` fields.
+/// Thin re-export of [`jzod::time::calculated_at_now`], which is what JZOD's
+/// `ephemeris.calculated_at` field is actually populated from.
 #[must_use]
 pub fn utc_iso8601() -> String {
     jzod::time::calculated_at_now()

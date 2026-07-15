@@ -1,8 +1,8 @@
 //! Validates emitted JZOD against the published JSON Schema and round-trips it.
 
 use jzod::{
-    Angle, AngleId, Body, BodyId, Chart, ChartType, CoordinateSystem, Datetime, Ephemeris,
-    JzodDocument, Location, Placements, Position, Sect, Zodiac,
+    Angle, AngleId, Body, BodyId, Chart, ChartType, Component, CoordinateSystem, DataSource,
+    Datetime, Ephemeris, Generator, JzodDocument, Location, Placements, Position, Sect, Zodiac,
 };
 use std::collections::BTreeMap;
 
@@ -63,12 +63,35 @@ fn full_chart() -> Chart {
         coordinate_system: CoordinateSystem::Geocentric,
         sect: Some(Sect::Diurnal),
         interp_sect_twilight: None,
-        ephemeris: Ephemeris {
-            source: "DE441".into(),
+        generator: Generator {
+            name: "starcat".into(),
+            version: "0.12.0".into(),
+            components: vec![
+                Component {
+                    name: "pericynthion".into(),
+                    version: "0.13.0".into(),
+                },
+                Component {
+                    name: "jzod".into(),
+                    version: "0.6.0".into(),
+                },
+            ],
+        },
+        ephemeris: Some(Ephemeris {
+            sources: std::collections::BTreeMap::from([(
+                "planets".to_string(),
+                DataSource {
+                    urls: vec![
+                        "https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441/linux_m13000p17000.441"
+                            .into(),
+                    ],
+                    cached: Some("linux_m13000p17000.441".into()),
+                },
+            )]),
             calculated_at: "2026-06-08T20:45:18Z".into(),
             jd_ut: Some(2_413_472.0),
             jd_tt: Some(2_413_472.0),
-        },
+        }),
         placements: Placements {
             bodies: vec![body],
             angles: vec![asc],

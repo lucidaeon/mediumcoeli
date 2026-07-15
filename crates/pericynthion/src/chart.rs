@@ -132,6 +132,14 @@ pub struct NodePoints {
     pub true_retrograde: bool,
 }
 
+impl NodePoints {
+    /// Whether the **mean** lunar node is retrograde: always `true`. The mean
+    /// node regresses uniformly along the ecliptic by construction, so this is
+    /// an astronomical constant rather than a per-chart computation. Exposed as
+    /// data so renderers need not hard-code the fact.
+    pub const MEAN_RETROGRADE: bool = true;
+}
+
 /// Both mean and true Black Moon Lilith (lunar apogee) longitudes, with
 /// retrograde status for the true (osculating) variant.
 ///
@@ -151,6 +159,14 @@ pub struct LilithPoints {
     pub true_retrograde: bool,
 }
 
+impl LilithPoints {
+    /// Whether **mean** Black Moon Lilith is retrograde: always `false`. Mean
+    /// Lilith (the mean lunar apogee) advances direct along the ecliptic by
+    /// construction, so this is an astronomical constant rather than a per-chart
+    /// computation. Exposed as data so renderers need not hard-code the fact.
+    pub const MEAN_RETROGRADE: bool = false;
+}
+
 /// Which lunar-node variant a flat placement list should carry.
 ///
 /// Mirrors the mean/true distinction in [`NodePoints`] without pulling a CLI
@@ -161,6 +177,24 @@ pub enum NodeVariant {
     Mean,
     /// Osculating true node.
     True,
+}
+
+/// A single flattened chart placement: display label, ecliptic longitude in
+/// degrees, and whether the point was retrograde at the chart moment.
+///
+/// Produced by [`ComputedChart::sorted_placements_detailed`]. The retrograde
+/// flag is carried through from the computation ([`ComputedBody::retrograde`],
+/// [`ComputedAsteroid::retrograde`], [`NodePoints`]) rather than reconstructed
+/// by the consumer, so every renderer draws the ℞ marker from one source of
+/// truth. Angles, house cusps, and lots are never retrograde (`false`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Placement {
+    /// Display label (e.g. `"Sun"`, `"H4"`, `"Nn"`, `"Fortune"`).
+    pub label: String,
+    /// Ecliptic longitude, degrees \[0, 360).
+    pub longitude: f64,
+    /// `true` when this point was retrograde at the chart moment.
+    pub retrograde: bool,
 }
 
 /// Sort `(label, longitude_deg)` pairs zodiacally starting from `start_lon`,
@@ -280,6 +314,23 @@ pub struct ChartRequest {
     pub asteroids: Vec<i32>,
 }
 
+/// One observed data source consulted while computing a chart: a category
+/// (or specific body display name) plus the on-disk file that actually
+/// served it. Recorded live during [`compute_with_spk`] rather than derived
+/// after the fact, so it reflects what was *actually* opened — not merely
+/// what could have been.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceUse {
+    /// Category (`"planets"`, `"fixed_stars"`, `"asteroids"`,
+    /// `"trans_neptunian_objects"`) or a specific body display name when
+    /// that body's catalogue category doesn't map onto one of the above.
+    pub key: String,
+    /// The on-disk file that served this category/body. A sentinel
+    /// (`catalog.gz`) for the baked-in fixed-star catalogue, which has no
+    /// real on-disk path.
+    pub path: std::path::PathBuf,
+}
+
 /// Complete result of a single chart computation.
 ///
 /// Produced by [`compute`].
@@ -330,6 +381,12 @@ pub struct ComputedChart {
     /// Tropical ecliptic positions of caller-supplied resolved stars.
     /// Empty when no stars were requested; order matches the input slice.
     pub stars: Vec<ComputedStar>,
+    /// Observed data-source provenance: which on-disk file actually served
+    /// each category (or specific body) computed for this chart.
+    /// De-duplicated by `(key, path)`. Populated by [`compute_with_spk`]; since
+    /// [`compute`] delegates to `compute_with_spk` with an empty SPK slice,
+    /// planet and star provenance is recorded there too.
+    pub provenance: Vec<SourceUse>,
 }
 
 impl ComputedChart {
@@ -348,53 +405,122 @@ impl ComputedChart {
         start_lon: f64,
         node_variant: NodeVariant,
     ) -> Vec<(String, f64)> {
-        let mut v: Vec<(String, f64)> = Vec::new();
+        self.sorted_placements_detailed(primary_house, start_lon, node_variant)
+            .into_iter()
+            .map(|p| (p.label, p.longitude))
+            .collect()
+    }
+
+    /// Detailed counterpart to [`sorted_placements`](ComputedChart::sorted_placements):
+    /// the same flattened, zodiacally-sorted list, but each entry is a
+    /// [`Placement`] that also carries the point's retrograde flag.
+    ///
+    /// The retrograde flag is read directly from the computation — bodies from
+    /// [`ComputedBody::retrograde`], asteroids from [`ComputedAsteroid::retrograde`],
+    /// the selected node variant from [`NodePoints`] (the mean node is retrograde
+    /// per [`NodePoints::MEAN_RETROGRADE`]; the true node from
+    /// [`NodePoints::true_retrograde`]). Angles, house cusps, and lots are never
+    /// retrograde. Consumers should draw the ℞ marker from this flag rather than
+    /// re-deriving it from the label.
+    #[must_use]
+    pub fn sorted_placements_detailed(
+        &self,
+        primary_house: Option<&HouseCusps>,
+        start_lon: f64,
+        node_variant: NodeVariant,
+    ) -> Vec<Placement> {
+        let mut v: Vec<Placement> = Vec::new();
+        let push = |v: &mut Vec<Placement>, label: String, longitude: f64, retrograde: bool| {
+            v.push(Placement {
+                label,
+                longitude,
+                retrograde,
+            });
+        };
 
         if let Some(hc) = primary_house {
             for h in 1_u8..=12 {
-                v.push((format!("H{h}"), hc.cusp(h).to_degrees().rem_euclid(360.0)));
+                push(
+                    &mut v,
+                    format!("H{h}"),
+                    hc.cusp(h).to_degrees().rem_euclid(360.0),
+                    false,
+                );
             }
         }
         for cb in &self.bodies {
-            v.push((cb.body.name().to_string(), cb.position.longitude_deg));
+            push(
+                &mut v,
+                cb.body.name().to_string(),
+                cb.position.longitude_deg,
+                cb.retrograde,
+            );
         }
         for ca in &self.asteroids {
-            v.push((ca.name.to_string(), ca.position.longitude_deg));
+            push(
+                &mut v,
+                ca.name.to_string(),
+                ca.position.longitude_deg,
+                ca.retrograde,
+            );
         }
         if let Some(ang) = &self.angles {
             if let Some(d) = ang.ac_deg {
-                v.push(("Ac".into(), d));
+                push(&mut v, "Ac".into(), d, false);
             }
             if let Some(d) = ang.ds_deg {
-                v.push(("Ds".into(), d));
+                push(&mut v, "Ds".into(), d, false);
             }
-            v.push(("Mc".into(), ang.mc_deg));
-            v.push(("Ic".into(), ang.ic_deg));
+            push(&mut v, "Mc".into(), ang.mc_deg, false);
+            push(&mut v, "Ic".into(), ang.ic_deg, false);
             if let Some(d) = ang.vx_deg {
-                v.push(("Vx".into(), d));
+                push(&mut v, "Vx".into(), d, false);
             }
             if let Some(d) = ang.ax_deg {
-                v.push(("Ax".into(), d));
+                push(&mut v, "Ax".into(), d, false);
             }
             if let Some(n) = &self.nodes {
-                let (nn, sn) = match node_variant {
-                    NodeVariant::Mean => (n.mean_nn_deg, n.mean_sn_deg),
-                    NodeVariant::True => (n.true_nn_deg, n.true_sn_deg),
+                let (nn, sn, retro) = match node_variant {
+                    NodeVariant::Mean => {
+                        (n.mean_nn_deg, n.mean_sn_deg, NodePoints::MEAN_RETROGRADE)
+                    }
+                    NodeVariant::True => (n.true_nn_deg, n.true_sn_deg, n.true_retrograde),
                 };
-                v.push(("Nn".into(), nn));
-                v.push(("Sn".into(), sn));
+                push(&mut v, "Nn".into(), nn, retro);
+                push(&mut v, "Sn".into(), sn, retro);
             }
         }
         if let Some(l) = &self.lots {
-            v.push(("Fortune".into(), l.fortune_deg));
-            v.push(("Spirit".into(), l.spirit_deg));
+            push(&mut v, "Fortune".into(), l.fortune_deg, false);
+            push(&mut v, "Spirit".into(), l.spirit_deg, false);
             if let Some(d) = l.eros_deg {
-                v.push(("Eros".into(), d));
+                push(&mut v, "Eros".into(), d, false);
             }
         }
 
-        sort_zodiacally(start_lon, &mut v);
+        v.sort_by(|a, b| {
+            let a_rel = (a.longitude - start_lon).rem_euclid(360.0);
+            let b_rel = (b.longitude - start_lon).rem_euclid(360.0);
+            a_rel
+                .partial_cmp(&b_rel)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         v
+    }
+
+    /// North Node ecliptic longitude for the requested variant, or `None` when
+    /// no nodes were computed (heliocentric mode or no longitude supplied).
+    ///
+    /// [`NodeVariant::Mean`] returns [`NodePoints::mean_nn_deg`];
+    /// [`NodeVariant::True`] returns [`NodePoints::true_nn_deg`]. Consumers that
+    /// need the chart's North Node (draconic projection, point-table display)
+    /// should call this rather than matching on `nodes` inline.
+    #[must_use]
+    pub fn north_node_deg(&self, variant: NodeVariant) -> Option<f64> {
+        self.nodes.as_ref().map(|n| match variant {
+            NodeVariant::Mean => n.mean_nn_deg,
+            NodeVariant::True => n.true_nn_deg,
+        })
     }
 }
 
@@ -513,6 +639,18 @@ pub fn compute_with_spk(
             }
         }
     };
+
+    // ── 4b. Observed data-source provenance, recorded live as each source is
+    //        actually consulted (never derived after the fact) ───────────────
+    let mut provenance: Vec<SourceUse> = Vec::new();
+    if !body_list.is_empty()
+        && let Some(path) = ephem.source_path()
+    {
+        provenance.push(SourceUse {
+            key: "planets".to_string(),
+            path: path.to_path_buf(),
+        });
+    }
 
     // ── 5. Per-body positions + daily speed + retrograde ─────────────────────
     let mut bodies: Vec<ComputedBody> = Vec::with_capacity(body_list.len());
@@ -686,6 +824,10 @@ pub fn compute_with_spk(
         };
         let daily_speed_deg = signed_daily_motion(before_lon, after_lon);
         let retrograde = !matches!(mode, CoordMode::Heliocentric) && daily_speed_deg < 0.0;
+        provenance.push(SourceUse {
+            key: provenance_key_for_body(name),
+            path: spk.source_path().to_path_buf(),
+        });
         asteroids.push(ComputedAsteroid {
             name,
             naif_id,
@@ -702,6 +844,14 @@ pub fn compute_with_spk(
             position: rs.position(jd_tt),
         })
         .collect();
+    if !stars.is_empty() {
+        provenance.push(SourceUse {
+            key: "fixed_stars".to_string(),
+            path: std::path::PathBuf::from("catalog.gz"),
+        });
+    }
+    provenance.sort_by(|a, b| (&a.key, &a.path).cmp(&(&b.key, &b.path)));
+    provenance.dedup();
 
     Ok(ComputedChart {
         jd_ut,
@@ -720,7 +870,23 @@ pub fn compute_with_spk(
         sect: sect_val,
         interp_sect_twilight,
         stars,
+        provenance,
     })
+}
+
+/// Map a catalogued body display name to its provenance category key:
+/// `"asteroids"` for [`crate::placements::Category::Asteroid`],
+/// `"trans_neptunian_objects"` for [`crate::placements::Category::Tno`], and
+/// the body's own display name for every other category (dwarf planets,
+/// centaurs, KBOs) — these don't share a single bundle file consistently
+/// enough to warrant a category-wide key.
+fn provenance_key_for_body(name: &'static str) -> String {
+    use crate::placements::{CATALOG, Category};
+    match CATALOG.iter().find(|p| p.name == name).map(|p| p.category) {
+        Some(Category::Asteroid) => "asteroids".to_string(),
+        Some(Category::Tno) => "trans_neptunian_objects".to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// Compute the chart axes (Mc/Ic/Ac/Ds/Vx/Ax) from a Julian Day (TT) and
@@ -1116,6 +1282,118 @@ mod sorted_placement_tests {
         sort_zodiacally(90.0, &mut items);
         let labels: Vec<&str> = items.iter().map(|(l, _)| l.as_str()).collect();
         assert_eq!(labels, vec!["C", "B", "A"]);
+    }
+
+    #[test]
+    fn sorted_placements_detailed_carries_retrograde_flags() {
+        use crate::body::Body;
+        use crate::coords::apparent::EclipticPosition;
+
+        let mk_body = |body: Body, lon: f64, retro: bool| ComputedBody {
+            body,
+            position: EclipticPosition {
+                longitude_deg: lon,
+                latitude_deg: 0.0,
+                distance_au: 1.0,
+            },
+            daily_speed_deg: if retro { -0.5 } else { 0.5 },
+            retrograde: retro,
+        };
+        let computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![
+                mk_body(Body::Sun, 10.0, false),
+                mk_body(Body::Mercury, 20.0, true),
+            ],
+            asteroids: vec![],
+            angles: Some(Angles {
+                mc_deg: 200.0,
+                ic_deg: 20.0,
+                ac_deg: Some(100.0),
+                ds_deg: Some(280.0),
+                vx_deg: None,
+                ax_deg: None,
+            }),
+            nodes: Some(NodePoints {
+                mean_nn_deg: 30.0,
+                mean_sn_deg: 210.0,
+                true_nn_deg: 31.0,
+                true_sn_deg: 211.0,
+                true_retrograde: false,
+            }),
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+            provenance: vec![],
+        };
+
+        let flag =
+            |v: &[Placement], label: &str| v.iter().find(|p| p.label == label).unwrap().retrograde;
+
+        // Mean nodes: both Nn and Sn are retrograde by construction.
+        let mean = computed.sorted_placements_detailed(None, 0.0, NodeVariant::Mean);
+        assert!(!flag(&mean, "Sun"));
+        assert!(flag(&mean, "Mercury"), "Mercury supplied retrograde");
+        assert!(!flag(&mean, "Ac"), "angles never retrograde");
+        assert!(!flag(&mean, "Mc"));
+        assert!(flag(&mean, "Nn"), "mean node always retrograde");
+        assert!(flag(&mean, "Sn"), "mean node always retrograde");
+
+        // True nodes: follow NodePoints::true_retrograde (false here).
+        let truev = computed.sorted_placements_detailed(None, 0.0, NodeVariant::True);
+        assert!(!flag(&truev, "Nn"), "true node prograde in this fixture");
+        assert!(!flag(&truev, "Sn"));
+
+        // Delegation parity: label/longitude match sorted_placements exactly.
+        let pairs = computed.sorted_placements(None, 0.0, NodeVariant::Mean);
+        let detailed = computed.sorted_placements_detailed(None, 0.0, NodeVariant::Mean);
+        assert_eq!(pairs.len(), detailed.len());
+        for ((l, lon), p) in pairs.iter().zip(detailed.iter()) {
+            assert_eq!(l, &p.label);
+            assert!((lon - p.longitude).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn north_node_deg_picks_variant_or_none() {
+        let mut computed = ComputedChart {
+            jd_ut: 0.0,
+            jd_tt: 0.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![],
+            asteroids: vec![],
+            angles: None,
+            nodes: Some(NodePoints {
+                mean_nn_deg: 30.0,
+                mean_sn_deg: 210.0,
+                true_nn_deg: 31.5,
+                true_sn_deg: 211.5,
+                true_retrograde: false,
+            }),
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+            provenance: vec![],
+        };
+        assert_eq!(computed.north_node_deg(NodeVariant::Mean), Some(30.0));
+        assert_eq!(computed.north_node_deg(NodeVariant::True), Some(31.5));
+        computed.nodes = None;
+        assert_eq!(computed.north_node_deg(NodeVariant::Mean), None);
+        assert_eq!(computed.north_node_deg(NodeVariant::True), None);
     }
 
     #[test]

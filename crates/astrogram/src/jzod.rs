@@ -8,7 +8,11 @@
 //! - `zodiac` — object `{ "name": "tropical" }` per OQ-4
 //! - `gender` — "m"/"f"/"a" from EventType; absent for entity charts
 //! - `placements.bodies` — empty; blackmoon carries no ephemeris data
-//! - `ephemeris.source` — `"blackmoon/<version>"`
+//! - `ephemeris` — omitted entirely; blackmoon converts formats, it does not
+//!   compute positions, so there is no ephemeris provenance to report
+//! - `generator` — supplied by the caller (see [`crate::jzod::write_file`]); blackmoon
+//!   passes its own name/version plus the `astrogram`/`jzod` components it's
+//!   built against
 //! - `uid` — deterministic from birth data (stable across repeated exports)
 
 use crate::capability::{CapabilitySet, ChartField};
@@ -31,21 +35,23 @@ pub const WRITE_CAPS: CapabilitySet = CapabilitySet::new(&[
 
 /// Serialize `charts` as a JZOD v0.0.0 JSON document.
 ///
+/// `generator` identifies the tool producing this document (name, version,
+/// and the in-repo library components it's built against) and is stamped
+/// onto every chart. astrogram has no generator identity of its own — it is
+/// a library, not a producing tool — so callers (e.g. `blackmoon`) must
+/// supply one.
+///
 /// # Panics
 ///
 /// Never in practice — `serde_json` only fails on non-finite floats, which
 /// `Chart` coordinate fields cannot hold (enforced at construction).
 #[must_use]
-pub fn write_file(charts: &[Chart]) -> String {
-    let calculated_at = jzod::time::calculated_at_now();
-    let jcharts: Vec<jzod::Chart> = charts
-        .iter()
-        .map(|c| chart_to_jzod(c, &calculated_at))
-        .collect();
+pub fn write_file(charts: &[Chart], generator: &jzod::Generator) -> String {
+    let jcharts: Vec<jzod::Chart> = charts.iter().map(|c| chart_to_jzod(c, generator)).collect();
     jzod::to_string_pretty(&jzod::JzodDocument::new(jcharts))
 }
 
-fn chart_to_jzod(c: &Chart, calculated_at: &str) -> jzod::Chart {
+fn chart_to_jzod(c: &Chart, generator: &jzod::Generator) -> jzod::Chart {
     let uid = jzod::uid::derive_uid(&jzod::uid::UidSeed {
         name: &c.name,
         year: c.year,
@@ -111,12 +117,10 @@ fn chart_to_jzod(c: &Chart, calculated_at: &str) -> jzod::Chart {
         },
         sect: None,
         interp_sect_twilight: None,
-        ephemeris: jzod::Ephemeris {
-            source: concat!("blackmoon/", env!("CARGO_PKG_VERSION")).to_string(),
-            calculated_at: calculated_at.to_string(),
-            jd_ut: None,
-            jd_tt: None,
-        },
+        // blackmoon converts formats; it never computes ephemeris positions,
+        // so there is no provenance to report here.
+        ephemeris: None,
+        generator: generator.clone(),
         placements: jzod::Placements::default(),
         houses: jzod::Houses::new(),
         lunar_phase: None,
@@ -213,13 +217,30 @@ mod tests {
         }
     }
 
+    fn test_generator() -> jzod::Generator {
+        jzod::Generator {
+            name: "blackmoon".into(),
+            version: "0.0.0".into(),
+            components: vec![
+                jzod::Component {
+                    name: "astrogram".into(),
+                    version: crate::ASTROGRAM_VERSION.into(),
+                },
+                jzod::Component {
+                    name: "jzod".into(),
+                    version: jzod::JZOD_VERSION.into(),
+                },
+            ],
+        }
+    }
+
     #[test]
     fn uid_is_stable_across_exports() {
         let c = anna_freud();
         let a: serde_json::Value =
-            serde_json::from_str(&write_file(std::slice::from_ref(&c))).unwrap();
+            serde_json::from_str(&write_file(std::slice::from_ref(&c), &test_generator())).unwrap();
         let b: serde_json::Value =
-            serde_json::from_str(&write_file(std::slice::from_ref(&c))).unwrap();
+            serde_json::from_str(&write_file(std::slice::from_ref(&c), &test_generator())).unwrap();
         assert_eq!(a["charts"][0]["uid"], b["charts"][0]["uid"]);
     }
 
@@ -228,15 +249,17 @@ mod tests {
         let c = anna_freud();
         let mut c2 = c.clone();
         c2.name = "Sigmund Freud".into();
-        let a: serde_json::Value = serde_json::from_str(&write_file(&[c])).unwrap();
-        let b: serde_json::Value = serde_json::from_str(&write_file(&[c2])).unwrap();
+        let a: serde_json::Value =
+            serde_json::from_str(&write_file(&[c], &test_generator())).unwrap();
+        let b: serde_json::Value =
+            serde_json::from_str(&write_file(&[c2], &test_generator())).unwrap();
         assert_ne!(a["charts"][0]["uid"], b["charts"][0]["uid"]);
     }
 
     #[test]
     fn write_file_parses_as_valid_json() {
         let chart = anna_freud();
-        let out = write_file(&[chart]);
+        let out = write_file(&[chart], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
         assert_eq!(v["version"], "0.0.0");
         let charts = v["charts"].as_array().unwrap();
@@ -252,10 +275,31 @@ mod tests {
     }
 
     #[test]
+    fn generator_is_emitted_and_ephemeris_is_omitted() {
+        let chart = anna_freud();
+        let out = write_file(&[chart], &test_generator());
+        let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        let c = &v["charts"][0];
+        assert_eq!(c["generator"]["name"], "blackmoon");
+        let components: Vec<String> = c["generator"]["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|comp| comp["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(components.contains(&"astrogram".to_string()));
+        assert!(components.contains(&"jzod".to_string()));
+        assert!(
+            c.get("ephemeris").is_none(),
+            "blackmoon carries no ephemeris data and must omit the field entirely"
+        );
+    }
+
+    #[test]
     fn gender_absent_for_event_chart() {
         let mut c = anna_freud();
         c.event_type = EventType::Event;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(v["charts"][0].get("gender").is_none());
     }
@@ -264,7 +308,7 @@ mod tests {
     fn coordinate_system_topocentric() {
         let mut c = anna_freud();
         c.coordinate_system = CoordinateSystem::Topocentric;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["charts"][0]["coordinate_system"], "topocentric");
     }
@@ -273,7 +317,7 @@ mod tests {
     fn topocentric_round_trips_to_jzod() {
         let mut c = anna_freud();
         c.coordinate_system = CoordinateSystem::Topocentric;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).expect("valid JZOD JSON");
         assert_eq!(v["version"], "0.0.0");
         assert_eq!(v["charts"][0]["coordinate_system"], "topocentric");
@@ -283,7 +327,7 @@ mod tests {
     fn sidereal_zodiac_emits_ayanamsha() {
         let mut c = anna_freud();
         c.zodiac = Zodiac::Lahiri;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");
@@ -294,7 +338,7 @@ mod tests {
     fn lahiri_emits_canonical_slug_and_true_frame() {
         let mut c = anna_freud();
         c.zodiac = Zodiac::Lahiri;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");
@@ -306,7 +350,7 @@ mod tests {
     fn fagan_allen_emits_canonical_slug_and_mean_frame() {
         let mut c = anna_freud();
         c.zodiac = Zodiac::FaganAllen;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");
@@ -318,7 +362,7 @@ mod tests {
     fn raman_emits_canonical_slug_and_mean_frame() {
         let mut c = anna_freud();
         c.zodiac = Zodiac::Raman;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");
@@ -330,7 +374,7 @@ mod tests {
     fn de_luce_emits_canonical_slug_and_no_frame() {
         let mut c = anna_freud();
         c.zodiac = Zodiac::DeLuce;
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");
@@ -345,7 +389,7 @@ mod tests {
     fn other_zodiac_preserves_raw_id_and_no_frame() {
         let mut c = anna_freud();
         c.zodiac = Zodiac::Other(53);
-        let out = write_file(&[c]);
+        let out = write_file(&[c], &test_generator());
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let z = &v["charts"][0]["zodiac"];
         assert_eq!(z["name"], "sidereal");

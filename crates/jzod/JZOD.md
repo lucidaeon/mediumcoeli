@@ -23,21 +23,22 @@ An open format for storage, transmission, and processing of astrology chart data
    - [Core Fields](#core-fields)
 4. [Birth Data](#birth-data)
 5. [Ephemeris Metadata](#ephemeris-metadata)
-6. [Chart-Level Fields](#chart-level-fields)
-7. [Placements](#placements)
+6. [Generator](#generator)
+7. [Chart-Level Fields](#chart-level-fields)
+8. [Placements](#placements)
    - [Coordinate Notation](#coordinate-notation)
    - [Bodies](#bodies)
    - [Angles](#angles)
    - [Points](#points)
    - [Lots](#lots)
-8. [Houses](#houses)
-9. [Lunar Phase](#lunar-phase)
-10. [Relationships](#relationships)
+9. [Houses](#houses)
+10. [Lunar Phase](#lunar-phase)
+11. [Relationships](#relationships)
     - [Relationship Codes](#relationship-codes)
-11. [Views](#views)
-12. [Enumerated Values](#enumerated-values)
-13. [Minimally Calculated Radix](#minimally-calculated-radix)
-14. [Compliance](#compliance)
+12. [Views](#views)
+13. [Enumerated Values](#enumerated-values)
+14. [Minimally Calculated Radix](#minimally-calculated-radix)
+15. [Compliance](#compliance)
 15. [Decision Chronology](#decision-chronology)
 15a. [Candidate Additions (proposed, pending ratification)](#candidate-additions-proposed-pending-ratification)
 16. [Open Questions](#open-questions)
@@ -131,6 +132,7 @@ Every chart object carries a `type` field. `type` determines what the chart repr
   "zodiac": { "name": "tropical" },
   "coordinate_system": "geocentric",
   "sect": "diurnal",
+  "generator": { ... },
   "ephemeris": { ... },
   "placements": { ... },
   "houses": { ... },
@@ -306,17 +308,59 @@ Follows the Astro-Databank system. Encodes both data source and confidence level
 
 ## Ephemeris Metadata
 
+`ephemeris` is **optional**: present when the producer computed positions itself,
+absent for pure format conversions that only carry positions someone else
+already computed (no calculation happened, so there is nothing to attest to).
+
 ```json
 "ephemeris": {
-  "source": "DE441",
+  "sources": {
+    "planets": {
+      "urls": ["https://ssd.jpl.nasa.gov/ftp/eph/planets/Linux/de441/linux_m13000p17000.441"],
+      "cached": "linux_m13000p17000.441"
+    },
+    "fixed_stars": {
+      "urls": [
+        "https://cdsarc.cds.unistra.fr/ftp/cats/V/50/catalog.gz",
+        "https://tdc-www.harvard.edu/catalogs/ybsc5.gz"
+      ]
+    }
+  },
   "calculated_at": "2026-06-08T20:45:18Z"
 }
 ```
 
 | field | notes |
 |---|---|
-| `source` | Ephemeris source identifier. Known values: `"DE441"`. |
+| `sources` | Object keyed by category (`"planets"`, `"fixed_stars"`, `"asteroids"`, `"trans_neptunian_objects"`, …) or individual body (e.g. `"pallas"`), each value a data-source object. Required, but may be an empty object when provenance is unknown. |
+| `sources.*.urls` | One or more mirror URLs for the same byte-identical artifact. Required, at least one entry. |
+| `sources.*.cached` | Local cache filename, when the artifact is (or would be) on disk. Omitted for baked-in data with no separate cache file (e.g. a second mirror URL for the same source). |
 | `calculated_at` | ISO 8601 UTC timestamp of calculation. |
+| `jd_ut` | Julian Date (UT), when relevant. |
+| `jd_tt` | Julian Date (TT), when relevant. |
+
+---
+
+## Generator
+
+`generator` is **required** — every chart records the software that produced it.
+
+```json
+"generator": {
+  "name": "starcat",
+  "version": "0.12.0",
+  "components": [
+    { "name": "pericynthion", "version": "0.13.0" },
+    { "name": "jzod", "version": "0.6.0" }
+  ]
+}
+```
+
+| field | notes |
+|---|---|
+| `name` | Producing tool name (e.g. `"starcat"`, `"blackmoon"`). |
+| `version` | Producing tool version. |
+| `components` | In-repo libraries the producing tool linked, each `{name, version}`. May be empty. |
 
 ---
 
@@ -327,6 +371,8 @@ Follows the Astro-Databank system. Encodes both data source and confidence level
 | `zodiac` | object | `name` field is required. `"tropical"` — anchored to the vernal equinox. `"sidereal"` — adds an optional `ayanamsha` slug and an optional `frame` (`"mean"` \| `"true"`, mean = precession only, true = precession + nutation; absent = unrecorded, consult canonical ayanamsha defaults). `"draconic"` — anchored to the North Node; adds an optional `node` field (`"mean"` \| `"true"`; absent = unrecorded). Additional names to be specified. |
 | `coordinate_system` | `"geocentric"`, `"topocentric"`, `"heliocentric"` | `"topocentric"` = parallax-corrected for observer's surface location; affects Moon by up to ~1°. |
 | `sect` | `"diurnal"`, `"nocturnal"`, `"unknown"` | Sun above the horizon = diurnal. Use `"unknown"` when the birth time is unknown (`datetime.unknown` is `true`), since sect cannot be trusted from a placeholder time-of-day. **Omit the field entirely for heliocentric charts** — sect is geocentric by definition (Sun relative to the local horizon) and has no meaning without an Ascendant. |
+| `generator` | object | Required. See [Generator](#generator). |
+| `ephemeris` | object | Optional. See [Ephemeris Metadata](#ephemeris-metadata). |
 
 ---
 
@@ -669,15 +715,17 @@ The `views` array holds display-only wrappers for biwheels, triwheels, and quadw
 
 **Classical Planets:** `mercury`, `venus`, `mars`, `jupiter`, `saturn`
 
-**Modern Planets:** `uranus`, `neptune`, `pluto`
+**Modern Planets:** `uranus`, `neptune`
 
-**Dwarf Planets:** `ceres`, `quaoar`, `sedna`, `orcus`, `haumea`, `eris`, `makemake`, `gonggong`
+**Dwarf Planets:** `ceres`, `pluto`, `haumea`, `eris`, `makemake`
 
 **Major Asteroids:** `chiron`, `pallas`, `juno`, `vesta`, `hygiea`
 
 **Centaurs:** `pholus`, `nessus`, `chariklo`, `asbolus`
 
-**Kuiper-belt Objects:** `ixion`, `varuna`, `albion`
+**Kuiper-belt Objects:** `ixion`, `varuna`, `albion`, `quaoar`, `orcus`
+
+**Trans-Neptunian Objects:** `sedna`, `gonggong`
 
 ### Angle IDs
 `ascendant`, `descendant`, `midheaven`, `imum_coeli`
@@ -689,7 +737,7 @@ The `views` array holds display-only wrappers for biwheels, triwheels, and quadw
 `lot_of_fortune`, `lot_of_spirit`, `lot_of_eros`, `lot_of_exaltation`, `lot_of_necessity`, `lot_of_courage`, `lot_of_victory`, `lot_of_nemesis`
 
 ### House System Slugs
-`whole_sign`, `placidus`, `equal_asc`, `equal_mc`, `regiomontanus`, `porphyry`, `campanus`, `koch`, `morinus`, `meridian`, `topocentric`, `krusinski`, `alcabitius`, `sripati`, `horizontal`
+`whole_sign`, `placidus`, `equal_asc`, `equal_mc`, `regiomontanus`, `porphyry`, `campanus`, `koch`, `morinus`, `meridian`, `topocentric`, `krusinski`, `alcabitius`, `sripati`, `horizontal`, `vehlow`, `carter`, `pullen_sd`, `pullen_sr`
 
 ### Sign Slugs
 `aries`, `taurus`, `gemini`, `cancer`, `leo`, `virgo`, `libra`, `scorpio`, `sagittarius`, `capricorn`, `aquarius`, `pisces`

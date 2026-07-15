@@ -150,11 +150,11 @@ Adding a new format means: add a `Format` variant, add a `FormatSpec` row to `FO
 
 ## Capability / loss tracking
 
-`capability::ChartField` enumerates fields that vary across formats. `CapabilitySet` wraps a `&'static [ChartField]`. The `lost_fields` and `fill_fields` functions compute what data a specific source→sink conversion loses or needs filled. Only `SFcht` persists `HouseSystem`, `Zodiac`, `CoordinateSystem`, and `SubCharts`; web formats store none of these per-chart.
+`capability::ChartField` enumerates fields that vary across formats. `CapabilitySet` wraps a `&'static [ChartField]`. The `lost_fields` and `fill_fields` functions compute what data a specific source→sink conversion loses or needs filled. Among file sinks, `raw` is full-fidelity (persists all four) and `SFcht` persists `HouseSystem`, `Zodiac`, `CoordinateSystem`, and `SubCharts`; `json` persists `Zodiac` and `CoordinateSystem` (but drops `HouseSystem` and `SubCharts`). Web formats store none of these per-chart.
 
 ## Transcript / readback
 
-After writing to a web sink, blackmoon calls `transcript::diff(source, landed, field_notes)` to produce per-field `FieldMapping` (Preserved / Transformed / Dropped / Filled). For astrotheoros, house system and zodiac are account-wide globals, so `fetch_global_settings()` returns a `GlobalRender` that is folded into the landed chart before diffing, with `field_notes` tagging those fields as `"global setting"`.
+After writing to a web sink, blackmoon calls `transcript::diff(source, landed, field_notes)` to produce per-field `FieldMapping` records, each carrying a `FieldStatus` (Preserved / Transformed / Dropped / Filled). For astrotheoros, house system and zodiac are account-wide globals, so `fetch_global_settings()` returns a `GlobalRender` that is folded into the landed chart before diffing, with `field_notes` tagging those fields as `"global setting"`.
 
 How `landed` is obtained depends on the provider (`WebProvider::verifies_inline()`):
 

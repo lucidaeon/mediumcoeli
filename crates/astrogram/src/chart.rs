@@ -166,6 +166,69 @@ impl HouseSystem {
             _ => None,
         }
     }
+
+    /// Canonical slugs accepted by [`Self::from_str_slug`] — one spelling per
+    /// variant (aliases such as `"whole"` still parse but are omitted here).
+    #[must_use]
+    pub const fn accepted_slugs() -> &'static [&'static str] {
+        &[
+            "placidus",
+            "koch",
+            "campanus",
+            "regiomontanus",
+            "porphyry",
+            "equal",
+            "whole-sign",
+            "alcabitius",
+            "topocentric",
+            "meridian",
+            "morinus",
+            "zero-aries",
+            "solar-sign",
+            "hindu-bhava",
+        ]
+    }
+
+    /// A one-line accurate domain description for a canonical slug (as
+    /// returned by [`Self::accepted_slugs`]), suitable for completion/`--help`
+    /// text. Returns `None` for a slug this table hasn't been taught a
+    /// description for (rather than fabricating one) — currently `"zero-aries"`,
+    /// `"solar-sign"`, and `"hindu-bhava"` are Solar-Fire-specific house codes
+    /// with no documented semantics elsewhere in this codebase.
+    #[must_use]
+    pub fn slug_description(slug: &str) -> Option<&'static str> {
+        match slug {
+            "placidus" => {
+                Some("trisects each degree's day/night semi-arc in time; most common modern system")
+            }
+            "koch" => Some("equal thirds of the MC's diurnal semi-arc at the birth latitude"),
+            "campanus" => {
+                Some("prime vertical split 30° from the East Point, projected through the horizon")
+            }
+            "regiomontanus" => Some(
+                "celestial equator split 30° in RA from the RAMC, projected through the horizon",
+            ),
+            "porphyry" => {
+                Some("each Asc-IC-Dsc-MC quadrant trisected in longitude; oldest quadrant system")
+            }
+            "equal" => Some("30° of longitude from the Ascendant; the MC floats free of the 10th"),
+            "whole-sign" => {
+                Some("each house one whole sign from 0° of the rising sign; oldest system")
+            }
+            "alcabitius" => Some("Asc->MC and Asc->IC diurnal arcs trisected in time"),
+            "topocentric" => Some("closed-form Placidus approximation; stable at high latitude"),
+            "meridian" => {
+                Some("equator 30°/RA from the RAMC along hour circles; latitude-independent")
+            }
+            "morinus" => Some(
+                "equator 30°/RA from the RAMC along ecliptic-longitude circles; latitude-independent",
+            ),
+            // "zero-aries", "solar-sign", "hindu-bhava": no documented meaning
+            // elsewhere in this codebase (see doc comment above) — intentionally
+            // `None` rather than invented.
+            _ => None,
+        }
+    }
 }
 
 /// Zodiac system. Variants cover the 17 systems observed in Solar Fire;
@@ -236,6 +299,37 @@ impl Zodiac {
             _ => None,
         }
     }
+
+    /// Canonical slugs accepted by [`Self::from_str_slug`]. NOTE: `Zodiac`
+    /// has 17 variants but `from_str_slug` recognises only this partial set —
+    /// this list mirrors that accepted set exactly, not all enum variants.
+    #[must_use]
+    pub const fn accepted_slugs() -> &'static [&'static str] {
+        &[
+            "tropical",
+            "fagan-allen",
+            "lahiri",
+            "raman",
+            "krishnamurti",
+            "draconic",
+        ]
+    }
+
+    /// A one-line accurate domain description for a canonical slug (as
+    /// returned by [`Self::accepted_slugs`]), suitable for completion/`--help`
+    /// text.
+    #[must_use]
+    pub fn slug_description(slug: &str) -> Option<&'static str> {
+        match slug {
+            "tropical" => Some("ecliptic longitude from the true vernal equinox (Western default)"),
+            "draconic" => Some("longitudes from the Moon's North Node (0° = North Node)"),
+            "lahiri" => Some("sidereal, Lahiri (Chitrapaksha) ayanamsha"),
+            "fagan-allen" => Some("sidereal, Fagan-Bradley ayanamsha"),
+            "raman" => Some("sidereal, B.V. Raman ayanamsha"),
+            "krishnamurti" => Some("sidereal, Krishnamurti (KP) ayanamsha"),
+            _ => None,
+        }
+    }
 }
 
 /// Coordinate reference frame.
@@ -271,6 +365,29 @@ impl CoordinateSystem {
             "geocentric" | "geo" => Some(Self::Geocentric),
             "topocentric" | "topo" => Some(Self::Topocentric),
             "heliocentric" | "helio" => Some(Self::Heliocentric),
+            _ => None,
+        }
+    }
+
+    /// Canonical slugs accepted by [`Self::from_str_slug`] — one spelling per
+    /// variant (aliases such as `"geo"`/`"topo"`/`"helio"` still parse but are
+    /// omitted here).
+    #[must_use]
+    pub const fn accepted_slugs() -> &'static [&'static str] {
+        &["geocentric", "topocentric", "heliocentric"]
+    }
+
+    /// A one-line accurate domain description for a canonical slug (as
+    /// returned by [`Self::accepted_slugs`]), suitable for completion/`--help`
+    /// text.
+    #[must_use]
+    pub fn slug_description(slug: &str) -> Option<&'static str> {
+        match slug {
+            "geocentric" => Some("apparent position from Earth's centre (default)"),
+            "topocentric" => {
+                Some("parallax-corrected for the observer's location; affects the Moon by ~1°")
+            }
+            "heliocentric" => Some("Sun-centred positions"),
             _ => None,
         }
     }
@@ -400,5 +517,94 @@ mod parse_tests {
         assert_eq!(CoordinateSystem::from(1u8), CoordinateSystem::Geocentric);
         assert_eq!(CoordinateSystem::from(2u8), CoordinateSystem::Heliocentric);
         assert_eq!(CoordinateSystem::from(3u8), CoordinateSystem::Topocentric);
+    }
+
+    /// Drift guard: every slug `accepted_slugs()` lists must parse back via
+    /// `from_str_slug`, so the two can never fall out of sync.
+    #[test]
+    fn house_system_accepted_slugs_round_trip() {
+        let slugs = HouseSystem::accepted_slugs();
+        assert!(slugs.contains(&"placidus"));
+        assert!(slugs.contains(&"whole-sign"));
+        for slug in slugs {
+            assert!(
+                HouseSystem::from_str_slug(slug).is_some(),
+                "accepted_slugs() lists {slug:?} but from_str_slug rejects it"
+            );
+        }
+    }
+
+    #[test]
+    fn zodiac_accepted_slugs_round_trip() {
+        let slugs = Zodiac::accepted_slugs();
+        assert!(slugs.contains(&"tropical"));
+        assert!(slugs.contains(&"draconic"));
+        // Partial set: from_str_slug does NOT accept every Zodiac variant
+        // (e.g. "de-luce", "svp" have no slug mapping) — accepted_slugs must
+        // mirror exactly what from_str_slug accepts, not all 17 variants.
+        assert_eq!(slugs.len(), 6);
+        for slug in slugs {
+            assert!(
+                Zodiac::from_str_slug(slug).is_some(),
+                "accepted_slugs() lists {slug:?} but from_str_slug rejects it"
+            );
+        }
+    }
+
+    #[test]
+    fn coordinate_system_accepted_slugs_round_trip() {
+        let slugs = CoordinateSystem::accepted_slugs();
+        assert!(slugs.contains(&"geocentric"));
+        assert!(slugs.contains(&"heliocentric"));
+        for slug in slugs {
+            assert!(
+                CoordinateSystem::from_str_slug(slug).is_some(),
+                "accepted_slugs() lists {slug:?} but from_str_slug rejects it"
+            );
+        }
+    }
+
+    /// Every `HouseSystem` accepted slug has a non-empty `slug_description`,
+    /// except the three Solar-Fire-specific house codes with no documented
+    /// semantics elsewhere in this codebase (see `slug_description`'s doc
+    /// comment) — those are allowed to have none, but never a fabricated one.
+    #[test]
+    fn house_system_slugs_have_descriptions_except_documented_unknowns() {
+        let undescribed = ["zero-aries", "solar-sign", "hindu-bhava"];
+        for slug in HouseSystem::accepted_slugs() {
+            let desc = HouseSystem::slug_description(slug);
+            if undescribed.contains(slug) {
+                assert_eq!(
+                    desc, None,
+                    "{slug:?} was expected to remain undescribed; if it's now \
+                     documented, update this allowlist"
+                );
+            } else {
+                assert!(
+                    desc.is_some_and(|d| !d.is_empty()),
+                    "{slug:?} must have a non-empty slug_description"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zodiac_slugs_have_descriptions() {
+        for slug in Zodiac::accepted_slugs() {
+            assert!(
+                Zodiac::slug_description(slug).is_some_and(|d| !d.is_empty()),
+                "{slug:?} must have a non-empty slug_description"
+            );
+        }
+    }
+
+    #[test]
+    fn coordinate_system_slugs_have_descriptions() {
+        for slug in CoordinateSystem::accepted_slugs() {
+            assert!(
+                CoordinateSystem::slug_description(slug).is_some_and(|d| !d.is_empty()),
+                "{slug:?} must have a non-empty slug_description"
+            );
+        }
     }
 }

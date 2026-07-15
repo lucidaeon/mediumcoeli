@@ -10,10 +10,8 @@
 //! header/binary pair, same as the library acceptance tests.
 
 use std::env;
-use std::process::Command;
 
-/// Cargo sets this for integration tests in a crate that builds a binary.
-const STARCAT_BIN: &str = env!("CARGO_BIN_EXE_starcat");
+mod common;
 
 fn jpl_data_dir() -> Option<String> {
     env::var("STARCAT_JPL_DATA").ok()
@@ -85,7 +83,7 @@ fn run_case(case: &Case) {
         jpl,
     ]);
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args(&argv)
         .output()
         .expect("failed to launch starcat binary");
@@ -342,7 +340,7 @@ fn json_placements_structure() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -466,7 +464,7 @@ fn json_house_cusps_keyed_by_house_number() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -540,7 +538,7 @@ fn json_degree_formatting() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -615,7 +613,7 @@ fn json_zero_cusp_no_scientific_notation() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -671,7 +669,7 @@ fn whole_sign_cusps_are_multiples_of_30() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -750,7 +748,7 @@ fn json_bodies_have_speed_and_retrograde() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -858,7 +856,7 @@ fn sidereal_zodiac_rotates_bodies_via_cli() {
         .collect();
         argv.push(jpl.clone());
         argv.extend(extra.iter().map(|s| (*s).to_string()));
-        let output = Command::new(STARCAT_BIN)
+        let output = common::starcat_command()
             .args(&argv)
             .output()
             .expect("failed to launch starcat binary");
@@ -941,7 +939,7 @@ fn heliocentric_speed_uses_helio_positions() {
         return;
     };
 
-    let output = Command::new(STARCAT_BIN)
+    let output = common::starcat_command()
         .args([
             "compute",
             "--date",
@@ -989,5 +987,276 @@ fn heliocentric_speed_uses_helio_positions() {
     assert!(
         (0.95..=1.02).contains(&earth_speed),
         "Earth heliocentric speed should be ~1°/day, got {earth_speed:.5}"
+    );
+}
+
+// =============================================================================
+// Generator + observed provenance in JZOD output
+// =============================================================================
+//
+// `to_jzod_chart` takes a `jzod::Generator` (starcat + its pericynthion/jzod
+// components) and folds `ComputedChart::provenance` into `ephemeris.sources`.
+// Provenance for "planets" is only recorded when the `Ephemeris` carries the
+// resolved DE binary path (set via `Ephemeris::with_source_path`), which
+// starcat wires up from `discover::open_dataset_for_year`.
+#[test]
+fn jzod_output_reports_generator_and_planet_source() {
+    let Some(jpl) = jpl_data_dir() else {
+        eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
+        return;
+    };
+
+    let output = common::starcat_command()
+        .args([
+            "compute",
+            "--date",
+            "1955-11-12",
+            "--time",
+            "22:04:00",
+            "--calendar",
+            "gregorian",
+            "--tz=-08:00",
+            "--lat",
+            "34.138889",
+            "--lon=-118.3525",
+            "--json",
+            "--jpl-data",
+            &jpl,
+        ])
+        .output()
+        .expect("failed to launch starcat binary");
+
+    assert!(
+        output.status.success(),
+        "starcat failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).expect("stdout must be UTF-8"))
+            .expect("output must parse as JSON");
+
+    let chart = &json["charts"][0];
+
+    assert_eq!(
+        chart["generator"]["name"], "starcat",
+        "generator.name must be \"starcat\"; got {}",
+        chart["generator"]
+    );
+
+    let components = chart["generator"]["components"]
+        .as_array()
+        .expect("generator.components must be an array");
+    let component_names: Vec<&str> = components
+        .iter()
+        .filter_map(|c| c["name"].as_str())
+        .collect();
+    assert!(
+        component_names.contains(&"pericynthion"),
+        "generator.components must include pericynthion; got {component_names:?}"
+    );
+    assert!(
+        component_names.contains(&"jzod"),
+        "generator.components must include jzod; got {component_names:?}"
+    );
+
+    let planet_urls = chart["ephemeris"]["sources"]["planets"]["urls"]
+        .as_array()
+        .unwrap_or_else(|| {
+            panic!(
+                "ephemeris.sources.planets.urls must be an array; got {}",
+                chart["ephemeris"]["sources"]
+            )
+        });
+    assert!(
+        !planet_urls.is_empty(),
+        "ephemeris.sources.planets.urls must be non-empty"
+    );
+}
+
+// =============================================================================
+// --verbose: human "data sources" section on the text render path
+// =============================================================================
+//
+// `print_data_sources` (starcat/src/main.rs) renders `ComputedChart::provenance`
+// to stdout under `--verbose`, the human counterpart to the JZOD path's
+// `ephemeris.sources` (see `jzod_output_reports_generator_and_planet_source`
+// above). Text mode (no `--json`/`--page`) is used here since that's the
+// unconditional render path.
+#[test]
+fn verbose_text_reports_data_sources_section() {
+    let Some(jpl) = jpl_data_dir() else {
+        eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
+        return;
+    };
+
+    let output = common::starcat_command()
+        .args([
+            "compute",
+            "--text",
+            "--date",
+            "1955-11-12",
+            "--time",
+            "22:04:00",
+            "--calendar",
+            "gregorian",
+            "--tz=-08:00",
+            "--lat",
+            "34.138889",
+            "--lon=-118.3525",
+            "--verbose",
+            "--jpl-data",
+            &jpl,
+        ])
+        .output()
+        .expect("failed to launch starcat binary");
+
+    assert!(
+        output.status.success(),
+        "starcat failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("starcat stdout must be UTF-8");
+
+    // Normal chart content must still be present.
+    assert!(stdout.contains("Body"), "missing body table header");
+    assert!(stdout.contains("Sun"), "missing Sun placement row");
+
+    // The verbose section: a "data sources" heading naming the "planets"
+    // category and a real de44x ephemeris filename (the DE binary actually
+    // opened for this chart's year, recorded live by `compute_with_spk`).
+    assert!(
+        stdout.contains("data sources:"),
+        "missing 'data sources:' section under --verbose:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("planets"),
+        "data sources section must name the planets category:\n{stdout}"
+    );
+    assert!(
+        stdout.to_lowercase().contains("de4"),
+        "data sources section must name a de44x ephemeris file:\n{stdout}"
+    );
+}
+
+// Without --verbose, the "data sources" section must not appear at all.
+#[test]
+fn non_verbose_text_omits_data_sources_section() {
+    let Some(jpl) = jpl_data_dir() else {
+        eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
+        return;
+    };
+
+    let output = common::starcat_command()
+        .args([
+            "compute",
+            "--text",
+            "--date",
+            "1955-11-12",
+            "--time",
+            "22:04:00",
+            "--calendar",
+            "gregorian",
+            "--tz=-08:00",
+            "--lat",
+            "34.138889",
+            "--lon=-118.3525",
+            "--jpl-data",
+            &jpl,
+        ])
+        .output()
+        .expect("failed to launch starcat binary");
+
+    assert!(
+        output.status.success(),
+        "starcat failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("starcat stdout must be UTF-8");
+    assert!(stdout.contains("Sun"), "missing Sun placement row");
+    assert!(
+        !stdout.contains("data sources:"),
+        "data sources section must not appear without --verbose:\n{stdout}"
+    );
+}
+
+// --quiet must not suppress the chart itself: same assertions as a normal run.
+#[test]
+fn quiet_text_still_prints_chart() {
+    let Some(jpl) = jpl_data_dir() else {
+        eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
+        return;
+    };
+
+    let output = common::starcat_command()
+        .args([
+            "compute",
+            "--text",
+            "--date",
+            "1955-11-12",
+            "--time",
+            "22:04:00",
+            "--calendar",
+            "gregorian",
+            "--tz=-08:00",
+            "--lat",
+            "34.138889",
+            "--lon=-118.3525",
+            "--quiet",
+            "--jpl-data",
+            &jpl,
+        ])
+        .output()
+        .expect("failed to launch starcat binary");
+
+    assert!(
+        output.status.success(),
+        "starcat failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("starcat stdout must be UTF-8");
+    assert!(stdout.contains("Body"), "missing body table header");
+    assert!(stdout.contains("Sun"), "missing Sun placement row");
+    assert!(
+        !stdout.contains("data sources:"),
+        "--quiet must not imply --verbose:\n{stdout}"
+    );
+}
+
+// --quiet still surfaces errors — an invalid invocation must fail exactly as
+// it would without --quiet, not be silently swallowed.
+#[test]
+fn quiet_still_reports_errors() {
+    let Some(jpl) = jpl_data_dir() else {
+        eprintln!("STARCAT_JPL_DATA not set — skipping integration test");
+        return;
+    };
+
+    let output = common::starcat_command()
+        .args([
+            "compute",
+            "--text",
+            "--date",
+            "not-a-date",
+            "--time",
+            "22:04:00",
+            "--tz=-08:00",
+            "--quiet",
+            "--jpl-data",
+            &jpl,
+        ])
+        .output()
+        .expect("failed to launch starcat binary");
+
+    assert!(
+        !output.status.success(),
+        "an invalid --date must still fail under --quiet"
+    );
+    assert!(
+        !output.stderr.is_empty(),
+        "--quiet must not suppress the error message"
     );
 }

@@ -87,6 +87,10 @@ use crate::jpl::header::{self, Header};
 use crate::jpl::reader::{EphemerisFile, RecordSource};
 use std::path::{Path, PathBuf};
 
+/// A parsed [`Header`], its backing [`RecordSource`], and — when the dataset
+/// is binary — the resolved binary file path for provenance reporting.
+type DatasetWithPath = (Header, Box<dyn RecordSource>, Option<PathBuf>);
+
 /// The result of a recursive ephemeris search: either a ready-to-use binary
 /// dataset or an ASCII dataset that the caller can load with a parser.
 #[derive(Debug, Clone)]
@@ -433,7 +437,15 @@ fn find_binary_for_denum(entries: &[PathBuf], denum: u32) -> Option<PathBuf> {
 /// - the `header.NNN` file cannot be read or fails to parse, or
 /// - the backing store (binary mmap or ASCII chunk index) cannot be opened.
 pub fn open_dataset(start: &Path) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
-    match locate(start)? {
+    open_located_dataset(locate(start)?)
+}
+
+/// Open a dataset whose location has already been [`locate`]d, skipping the
+/// redundant filesystem walk `locate(start)` would otherwise repeat.
+fn open_located_dataset(
+    location: DatasetLocation,
+) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
+    match location {
         DatasetLocation::Binary(paths) => open_binary_pair(&paths.header, &paths.binary),
         DatasetLocation::Ascii {
             header: hdr_path,
@@ -508,17 +520,32 @@ fn entourage_de_files(ent: &crate::jpl::oracle::Entourage) -> Option<(&'static s
 /// preferred+present dataset covers `year`, preserving behavior for custom or
 /// unrecognized data layouts.
 ///
+/// Also returns the resolved binary path, when known — callers use this to
+/// record observed data-source provenance (e.g. via
+/// [`Ephemeris::with_source_path`](crate::ephemeris::Ephemeris::with_source_path)).
+/// `None` for ASCII-format datasets, which are backed by a directory of
+/// `asc[pm]*.NNN` chunk files rather than a single binary.
+///
 /// # Errors
 /// [`PericynthionError`] if the chosen (or fallback) dataset cannot be opened.
 pub fn open_dataset_for_year(
     start: &Path,
     year: i32,
-) -> Result<(Header, Box<dyn RecordSource>), PericynthionError> {
+) -> Result<DatasetWithPath, PericynthionError> {
     if let Some((header, binary)) = select_de_pair_for_year(start, year) {
-        return open_binary_pair(&header, &binary);
+        let (hdr, source) = open_binary_pair(&header, &binary)?;
+        return Ok((hdr, source, Some(binary)));
     }
     // Nothing preferred is present for this year — fall back to discovery.
-    open_dataset(start)
+    // Resolve the location once and reuse it for both the binary-path lookup
+    // and the open, rather than walking the filesystem twice.
+    let location = locate(start)?;
+    let binary_path = match &location {
+        DatasetLocation::Binary(paths) => Some(paths.binary.clone()),
+        DatasetLocation::Ascii { .. } => None,
+    };
+    let (hdr, source) = open_located_dataset(location)?;
+    Ok((hdr, source, binary_path))
 }
 
 /// The (header path, binary path) of the best DE covering `year` that is present

@@ -27,7 +27,7 @@ impl JzodDocument {
 mod tests {
     use super::*;
     use crate::chart::{
-        Birth, Chart, ChartType, CoordinateSystem, Datetime, Ephemeris, Location, Zodiac,
+        Birth, Chart, ChartType, CoordinateSystem, Datetime, Ephemeris, Generator, Location, Zodiac,
     };
     use crate::placement::Placements;
 
@@ -61,12 +61,17 @@ mod tests {
             coordinate_system: CoordinateSystem::Geocentric,
             sect: None,
             interp_sect_twilight: None,
-            ephemeris: Ephemeris {
-                source: "test".into(),
+            generator: Generator {
+                name: "test".into(),
+                version: "0.0.0".into(),
+                components: vec![],
+            },
+            ephemeris: Some(Ephemeris {
+                sources: std::collections::BTreeMap::new(),
                 calculated_at: "2026-06-08T20:45:18Z".into(),
                 jd_ut: None,
                 jd_tt: None,
-            },
+            }),
             placements: Placements::default(),
             houses: crate::house::Houses::new(),
             lunar_phase: None,

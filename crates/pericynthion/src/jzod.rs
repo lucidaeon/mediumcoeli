@@ -23,8 +23,13 @@
 //! ```
 //!
 //! ```rust,ignore
+//! let generator = jzod::Generator {
+//!     name: "starcat".to_string(),
+//!     version: starcat::STARCAT_VERSION.to_string(),
+//!     components: vec![],
+//! };
 //! let chart = pericynthion::jzod::to_jzod_chart(
-//!     &computed, &birth, uid, jzod::Zodiac::Tropical, None, false,
+//!     &computed, &birth, uid, jzod::Zodiac::Tropical, None, false, generator,
 //! )?;
 //! println!("{}", jzod::to_string_pretty(&jzod::JzodDocument::new(vec![chart])));
 //! ```
@@ -152,6 +157,110 @@ pub fn house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
     1
 }
 
+/// Validate an ayanamsha slug and resolve its effective frame.
+///
+/// `ayanamsha` defaults to [`crate::sidereal::DEFAULT_AYANAMSHA_SLUG`] when
+/// `None`. `frame` overrides the ayanamsha's intrinsic
+/// [`crate::sidereal::Ayanamsha::default_frame`] when `Some`. This is the single
+/// "validate slug / default frame" step shared by [`resolve_zodiac`] and
+/// [`to_jzod_chart`].
+///
+/// # Errors
+///
+/// Returns [`PericynthionError::UnknownAyanamshaSlug`] when the slug is not in
+/// [`crate::sidereal::AyanamshaRegistry::with_builtins`].
+fn resolve_ayanamsha(
+    ayanamsha: Option<&str>,
+    frame: Option<jzod::SiderealFrame>,
+) -> Result<(crate::sidereal::Ayanamsha, crate::sidereal::AyanamshaFrame), PericynthionError> {
+    let slug = ayanamsha.unwrap_or(crate::sidereal::DEFAULT_AYANAMSHA_SLUG);
+    let registry = crate::sidereal::AyanamshaRegistry::with_builtins();
+    if let Some(a) = registry.get(slug).copied() {
+        let resolved_frame = match frame {
+            Some(f) => crate::sidereal::AyanamshaFrame::from(f),
+            // frame not specified: use the ayanamsha's intrinsic default_frame
+            None => a.default_frame,
+        };
+        Ok((a, resolved_frame))
+    } else {
+        let known = registry.slugs().join(", ");
+        Err(PericynthionError::UnknownAyanamshaSlug {
+            slug: slug.to_string(),
+            known,
+        })
+    }
+}
+
+/// A caller-facing zodiac selection, before slug validation and frame
+/// defaulting. Mirrors the CLI's zodiac flags without pulling clap arg enums
+/// into the library.
+///
+/// Sidereal takes precedence over draconic (see [`resolve_zodiac`]).
+#[derive(Debug, Clone, Default)]
+pub struct ZodiacRequest {
+    /// A sidereal zodiac was requested (e.g. `--zodiac sidereal`).
+    pub sidereal: bool,
+    /// A draconic zodiac was requested (e.g. `--zodiac draconic` or the
+    /// `--draconic` convenience flag). Ignored when `sidereal` is set.
+    pub draconic: bool,
+    /// Ayanamsha slug for a sidereal request; `None` selects the built-in
+    /// default ([`crate::sidereal::DEFAULT_AYANAMSHA_SLUG`]).
+    pub ayanamsha: Option<String>,
+    /// Frame override for a sidereal request; `None` uses the ayanamsha's
+    /// intrinsic default frame.
+    pub frame: Option<jzod::SiderealFrame>,
+    /// Node metadata recorded on a draconic zodiac's `node` field. Pure
+    /// metadata — the actual draconic projection is steered separately by the
+    /// `draconic_node` longitude passed to [`to_jzod_chart`].
+    pub draconic_node: Option<jzod::DraconicNode>,
+}
+
+/// Resolve a [`ZodiacRequest`] into the concrete [`jzod::Zodiac`] to emit and,
+/// for a sidereal request, the resolved ayanamsha companion needed to rotate
+/// longitudes (e.g. via [`crate::sidereal::project_chart`]).
+///
+/// Precedence: a sidereal request wins over draconic, which wins over tropical.
+/// For sidereal the slug is validated and the frame defaulted once (via the
+/// shared internal resolver), so this rule lives in exactly one place. The
+/// returned companion is `Some` only for sidereal; `None` for tropical/draconic.
+///
+/// # Errors
+///
+/// Returns [`PericynthionError::UnknownAyanamshaSlug`] when a sidereal request
+/// names an ayanamsha slug not in the built-in registry.
+#[allow(clippy::type_complexity)]
+pub fn resolve_zodiac(
+    request: &ZodiacRequest,
+) -> Result<
+    (
+        jzod::Zodiac,
+        Option<(crate::sidereal::Ayanamsha, crate::sidereal::AyanamshaFrame)>,
+    ),
+    PericynthionError,
+> {
+    if request.sidereal {
+        let slug = request
+            .ayanamsha
+            .as_deref()
+            .unwrap_or(crate::sidereal::DEFAULT_AYANAMSHA_SLUG);
+        let (ay, frame) = resolve_ayanamsha(Some(slug), request.frame)?;
+        let zodiac = jzod::Zodiac::Sidereal {
+            ayanamsha: Some(slug.to_string()),
+            frame: Some(jzod::SiderealFrame::from(frame)),
+        };
+        return Ok((zodiac, Some((ay, frame))));
+    }
+    if request.draconic {
+        return Ok((
+            jzod::Zodiac::Draconic {
+                node: request.draconic_node,
+            },
+            None,
+        ));
+    }
+    Ok((jzod::Zodiac::Tropical, None))
+}
+
 /// Assemble a [`jzod::Chart`] from a [`ComputedChart`] and birth metadata.
 ///
 /// # Parameters
@@ -180,6 +289,8 @@ pub fn house_for(lon_deg: f64, cusps: &HouseCusps) -> u8 {
 ///   are populated from [`crate::antiscia::antiscion`] /
 ///   [`crate::antiscia::contra_antiscion`] applied to the *emitted* longitude
 ///   (after any draconic or sidereal projection). When `false`, both fields are `None`.
+/// - `generator` — identifies the producing tool (name/version/components);
+///   set verbatim on the returned `jzod::Chart::generator`.
 ///
 /// # Mapping notes
 ///
@@ -211,6 +322,7 @@ pub fn to_jzod_chart(
     zodiac: jzod::Zodiac,
     draconic_node: Option<f64>,
     emit_antiscia: bool,
+    generator: jzod::Generator,
 ) -> Result<jzod::Chart, PericynthionError> {
     // ── Coordinate system ────────────────────────────────────────────────────
     let coord_system = match &computed.mode {
@@ -228,24 +340,7 @@ pub fn to_jzod_chart(
     let sidereal: Option<(crate::sidereal::Ayanamsha, crate::sidereal::AyanamshaFrame)> =
         match &zodiac {
             jzod::Zodiac::Sidereal { ayanamsha, frame } => {
-                let slug = ayanamsha
-                    .as_deref()
-                    .unwrap_or(crate::sidereal::DEFAULT_AYANAMSHA_SLUG);
-                let registry = crate::sidereal::AyanamshaRegistry::with_builtins();
-                if let Some(a) = registry.get(slug).copied() {
-                    let resolved_frame = match frame {
-                        Some(f) => crate::sidereal::AyanamshaFrame::from(*f),
-                        // frame not specified: use the ayanamsha's intrinsic default_frame
-                        None => a.default_frame,
-                    };
-                    Some((a, resolved_frame))
-                } else {
-                    let known = registry.slugs().join(", ");
-                    return Err(PericynthionError::UnknownAyanamshaSlug {
-                        slug: slug.to_string(),
-                        known,
-                    });
-                }
+                Some(resolve_ayanamsha(ayanamsha.as_deref(), *frame)?)
             }
             _ => None,
         };
@@ -430,12 +525,14 @@ pub fn to_jzod_chart(
         points_vec.push(jzod::Point {
             id: jzod::PointId::NorthNodeMean,
             position: jzod::coord::Position::from_longitude(project_lon(n.mean_nn_deg)),
-            retrograde: true, // mean node is always retrograde by construction
+            // Mean node is always retrograde by construction — see the astronomical
+            // fact carried as data on the node type.
+            retrograde: crate::chart::NodePoints::MEAN_RETROGRADE,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::SouthNodeMean,
             position: jzod::coord::Position::from_longitude(project_lon(n.mean_sn_deg)),
-            retrograde: true,
+            retrograde: crate::chart::NodePoints::MEAN_RETROGRADE,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::NorthNodeTrue,
@@ -454,12 +551,14 @@ pub fn to_jzod_chart(
         points_vec.push(jzod::Point {
             id: jzod::PointId::BlackMoonLilithMean,
             position: jzod::coord::Position::from_longitude(project_lon(l.mean_lilith_deg)),
-            retrograde: false, // mean Lilith is always prograde
+            // Mean Lilith is always prograde — see the astronomical fact carried
+            // as data on the Lilith type.
+            retrograde: crate::chart::LilithPoints::MEAN_RETROGRADE,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::PriapusMean,
             position: jzod::coord::Position::from_longitude(project_lon(l.mean_priapus_deg)),
-            retrograde: false,
+            retrograde: crate::chart::LilithPoints::MEAN_RETROGRADE,
         });
         points_vec.push(jzod::Point {
             id: jzod::PointId::BlackMoonLilithTrue,
@@ -561,6 +660,20 @@ pub fn to_jzod_chart(
         fraction: t.fraction,
     });
 
+    // ── Ephemeris sources, folded from observed provenance ──────────────────
+    // The first-seen-wins-per-key fold lives in `provenance::observed_sources`,
+    // shared with the CLI's human "data sources" renderer.
+    let mut sources = BTreeMap::new();
+    for row in crate::provenance::observed_sources(&computed.provenance) {
+        sources.insert(
+            row.key,
+            jzod::DataSource {
+                urls: row.urls,
+                cached: row.cached,
+            },
+        );
+    }
+
     // ── Assemble the chart ───────────────────────────────────────────────────
     Ok(jzod::Chart {
         uid,
@@ -591,12 +704,13 @@ pub fn to_jzod_chart(
         coordinate_system: coord_system,
         sect: jzod_sect,
         interp_sect_twilight,
-        ephemeris: jzod::Ephemeris {
-            source: "DE441".to_string(),
+        generator,
+        ephemeris: Some(jzod::Ephemeris {
+            sources,
             calculated_at: jzod::time::calculated_at_now(),
             jd_ut: Some(computed.jd_ut),
             jd_tt: Some(computed.jd_tt),
-        },
+        }),
         placements: jzod::Placements {
             bodies,
             angles: angles_vec,
@@ -616,6 +730,16 @@ pub fn to_jzod_chart(
 
 #[cfg(all(test, feature = "jzod"))]
 mod jzod_tests {
+    /// A minimal `Generator` for tests that don't specifically exercise
+    /// generator content.
+    fn test_generator() -> jzod::Generator {
+        jzod::Generator {
+            name: "starcat".to_string(),
+            version: "0.0.0-test".to_string(),
+            components: vec![],
+        }
+    }
+
     /// `ComputedChart::tithi` is propagated verbatim (index + name + fraction)
     /// to `jzod::Chart::tithi` by `to_jzod_chart`.
     #[test]
@@ -640,6 +764,7 @@ mod jzod_tests {
             sect: None,
             interp_sect_twilight: None,
             stars: vec![],
+            provenance: vec![],
         };
 
         // Set tithi directly — moon=12°, sun=0° → index 2 (Dwitiya).
@@ -666,6 +791,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         let t = chart
@@ -715,6 +841,7 @@ mod jzod_tests {
             sect: None,
             interp_sect_twilight: None,
             stars: vec![],
+            provenance: vec![],
         };
         let birth = super::ChartBirth {
             year: 2000,
@@ -733,6 +860,7 @@ mod jzod_tests {
             jzod::Zodiac::Draconic { node: None },
             Some(node_lon),
             false,
+            test_generator(),
         )
         .unwrap();
 
@@ -786,6 +914,7 @@ mod jzod_tests {
             sect: None,
             interp_sect_twilight: None,
             stars: vec![],
+            provenance: vec![],
         }
     }
 
@@ -815,6 +944,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         assert_eq!(chart.zodiac, jzod::Zodiac::Tropical);
@@ -852,6 +982,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         assert_eq!(
@@ -899,6 +1030,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         assert_eq!(
@@ -955,6 +1087,7 @@ mod jzod_tests {
             sect: None,
             interp_sect_twilight: None,
             stars: vec![],
+            provenance: vec![],
         };
         let birth = super::ChartBirth {
             year: 2000,
@@ -973,6 +1106,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             true,
+            test_generator(),
         )
         .unwrap();
 
@@ -1100,6 +1234,7 @@ mod jzod_tests {
             sect: None,
             interp_sect_twilight: None,
             stars: vec![],
+            provenance: vec![],
         };
         let birth = super::ChartBirth {
             year: 2000,
@@ -1118,6 +1253,7 @@ mod jzod_tests {
             jzod::Zodiac::Draconic { node: None },
             Some(node_lon),
             false,
+            test_generator(),
         )
         .unwrap();
 
@@ -1175,6 +1311,7 @@ mod jzod_tests {
             sect: Some(Sect::Night),
             interp_sect_twilight: Some(true),
             stars: vec![],
+            provenance: vec![],
         };
 
         let birth = super::ChartBirth {
@@ -1196,6 +1333,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         assert_eq!(chart.sect, Some(jzod::Sect::Nocturnal));
@@ -1210,6 +1348,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         assert_eq!(chart2.interp_sect_twilight, Some(false));
@@ -1222,9 +1361,100 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         assert_eq!(chart3.interp_sect_twilight, None);
+    }
+
+    /// `to_jzod_chart` sets `generator` verbatim on the returned chart, and
+    /// folds `computed.provenance` through `provenance::urls_for_observed`
+    /// into `ephemeris.sources`, keyed by `SourceUse::key`.
+    #[test]
+    fn to_jzod_chart_emits_generator_and_observed_sources() {
+        use crate::chart::{ComputedChart, CoordMode, SourceUse};
+        use std::path::PathBuf;
+
+        let computed = ComputedChart {
+            jd_ut: 2_451_545.0,
+            jd_tt: 2_451_545.0,
+            mode: CoordMode::Geocentric,
+            utc_offset: "+00:00".to_string(),
+            bodies: vec![],
+            asteroids: vec![],
+            angles: None,
+            nodes: None,
+            lilith: None,
+            lots: None,
+            houses: vec![],
+            lunar_phase: None,
+            tithi: None,
+            sect: None,
+            interp_sect_twilight: None,
+            stars: vec![],
+            provenance: vec![
+                SourceUse {
+                    key: "asteroids".to_string(),
+                    path: PathBuf::from("/data/nasa/small_bodies/asteroids_de441/sb441-n16.bsp"),
+                },
+                SourceUse {
+                    key: "fixed_stars".to_string(),
+                    path: PathBuf::from("catalog.gz"),
+                },
+            ],
+        };
+        let birth = super::ChartBirth {
+            year: 2000,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            lat: None,
+            lon: None,
+        };
+        let generator = jzod::Generator {
+            name: "starcat".to_string(),
+            version: "9.9.9".to_string(),
+            components: vec![],
+        };
+        let chart = super::to_jzod_chart(
+            &computed,
+            &birth,
+            "test-uid".to_string(),
+            jzod::Zodiac::Tropical,
+            None,
+            false,
+            generator,
+        )
+        .unwrap();
+
+        assert_eq!(chart.generator.name, "starcat");
+        assert_eq!(chart.generator.version, "9.9.9");
+
+        let ephemeris = chart.ephemeris.expect("ephemeris must be Some");
+        assert_eq!(ephemeris.jd_ut, Some(2_451_545.0));
+        assert_eq!(ephemeris.jd_tt, Some(2_451_545.0));
+
+        let asteroids = ephemeris
+            .sources
+            .get("asteroids")
+            .expect("asteroids key must be present");
+        assert_eq!(
+            asteroids.urls,
+            vec![
+                "https://ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp"
+                    .to_string()
+            ]
+        );
+        assert_eq!(asteroids.cached.as_deref(), Some("sb441-n16.bsp"));
+
+        let fixed_stars = ephemeris
+            .sources
+            .get("fixed_stars")
+            .expect("fixed_stars key must be present");
+        assert_eq!(fixed_stars.urls.len(), 2);
+        assert!(fixed_stars.cached.is_none());
     }
 
     /// An unknown ayanamsha slug must be a hard error, not a silent
@@ -1242,6 +1472,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         );
         let err = result.expect_err("expected error for unknown slug");
         let msg = err.to_string();
@@ -1264,6 +1495,7 @@ mod jzod_tests {
             jzod::Zodiac::Draconic { node: None },
             None, // no node longitude available
             false,
+            test_generator(),
         );
         let err = result.expect_err("expected DraconicNodeUnavailable error");
         let msg = err.to_string();
@@ -1293,6 +1525,7 @@ mod jzod_tests {
             },
             None, // still no node longitude
             false,
+            test_generator(),
         );
         let err = result.expect_err("expected DraconicNodeUnavailable error");
         let msg = err.to_string();
@@ -1318,6 +1551,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         );
         assert!(
             result.is_ok(),
@@ -1340,6 +1574,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         );
         assert!(
             result.is_ok(),
@@ -1473,6 +1708,7 @@ mod jzod_tests {
             jzod::Zodiac::Tropical,
             None,
             false,
+            test_generator(),
         )
         .unwrap();
 
@@ -1519,6 +1755,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         let chart_true = super::to_jzod_chart(
@@ -1531,6 +1768,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         let sun_none = chart_none
@@ -1569,6 +1807,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         let chart_mean = super::to_jzod_chart(
@@ -1581,6 +1820,7 @@ mod jzod_tests {
             },
             None,
             false,
+            test_generator(),
         )
         .unwrap();
         let sun_none = chart_none

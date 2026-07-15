@@ -88,11 +88,23 @@ pub struct Birth {
     pub location: Location,
 }
 
-/// Ephemeris provenance.
+/// One data artifact's provenance: the mirror URL(s) it can be fetched from
+/// and the local cache filename (absent for baked-in data).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataSource {
+    /// One or more mirror URLs for the same byte-identical artifact.
+    pub urls: Vec<String>,
+    /// Local cache filename, if the artifact is (or would be) on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached: Option<String>,
+}
+
+/// Ephemeris provenance — observed data sources plus computation timing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ephemeris {
-    /// Ephemeris source identifier (e.g. `"DE441"`).
-    pub source: String,
+    /// Observed data sources, keyed by category (`planets`, `fixed_stars`,
+    /// `asteroids`, `trans_neptunian_objects`) or individual body (`pallas`).
+    pub sources: std::collections::BTreeMap<String, DataSource>,
     /// ISO 8601 UTC timestamp of calculation.
     pub calculated_at: String,
     /// Julian Date (UT), when relevant.
@@ -101,6 +113,26 @@ pub struct Ephemeris {
     /// Julian Date (TT), when relevant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub jd_tt: Option<f64>,
+}
+
+/// One in-repo library the producing tool linked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Component {
+    /// Crate/library name.
+    pub name: String,
+    /// Crate/library version.
+    pub version: String,
+}
+
+/// The software that produced this JZOD file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Generator {
+    /// Producing tool name (e.g. `"starcat"`).
+    pub name: String,
+    /// Producing tool version.
+    pub version: String,
+    /// In-repo libraries linked by the producing tool.
+    pub components: Vec<Component>,
 }
 
 /// Reduction frame for a sidereal zodiac: `mean` (precession only) or `true`
@@ -257,8 +289,12 @@ pub struct Chart {
     /// (heliocentric charts, or Ac/Sun unavailable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interp_sect_twilight: Option<bool>,
-    /// Ephemeris provenance.
-    pub ephemeris: Ephemeris,
+    /// Producing software stack.
+    pub generator: Generator,
+    /// Ephemeris provenance (present when the producer computed positions;
+    /// absent for pure format conversions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeris: Option<Ephemeris>,
     /// Computed placements.
     pub placements: Placements,
     /// House cusps by system. Omitted when empty.
@@ -489,12 +525,17 @@ mod tests {
             coordinate_system: CoordinateSystem::Geocentric,
             sect: None,
             interp_sect_twilight: None,
-            ephemeris: Ephemeris {
-                source: "test".into(),
+            generator: Generator {
+                name: "test".into(),
+                version: "0.0.0".into(),
+                components: vec![],
+            },
+            ephemeris: Some(Ephemeris {
+                sources: std::collections::BTreeMap::new(),
                 calculated_at: "1970-01-01T00:00:00Z".into(),
                 jd_ut: None,
                 jd_tt: None,
-            },
+            }),
             placements: crate::placement::Placements::default(),
             houses: crate::house::Houses::new(),
             lunar_phase: None,
@@ -539,5 +580,68 @@ mod tests {
         let s = serde_json::to_string(&c).unwrap();
         let back: Chart = serde_json::from_str(&s).unwrap();
         assert_eq!(back.interp_sect_twilight, Some(false));
+    }
+
+    #[test]
+    fn ephemeris_serializes_sources_map_and_omits_when_absent() {
+        use std::collections::BTreeMap;
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            "planets".to_string(),
+            DataSource {
+                urls: vec!["https://example/de.441".into()],
+                cached: Some("de.441".into()),
+            },
+        );
+        sources.insert(
+            "fixed_stars".to_string(),
+            DataSource {
+                urls: vec![
+                    "https://cdsarc.cds.unistra.fr/ftp/cats/V/50/catalog.gz".into(),
+                    "https://tdc-www.harvard.edu/catalogs/ybsc5.gz".into(),
+                ],
+                cached: None,
+            },
+        );
+        let eph = Ephemeris {
+            sources,
+            calculated_at: "2026-07-13T00:00:00Z".into(),
+            jd_ut: None,
+            jd_tt: None,
+        };
+        let j = serde_json::to_value(&eph).unwrap();
+        assert_eq!(j["sources"]["planets"]["urls"][0], "https://example/de.441");
+        assert_eq!(j["sources"]["planets"]["cached"], "de.441");
+        // fixed_stars: two mirror urls, no cached (baked-in) → `cached` omitted
+        assert_eq!(
+            j["sources"]["fixed_stars"]["urls"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(j["sources"]["fixed_stars"].get("cached").is_none());
+    }
+
+    #[test]
+    fn generator_round_trips_with_components() {
+        let g = Generator {
+            name: "starcat".into(),
+            version: "0.12.0".into(),
+            components: vec![
+                Component {
+                    name: "pericynthion".into(),
+                    version: "0.13.0".into(),
+                },
+                Component {
+                    name: "jzod".into(),
+                    version: "0.6.0".into(),
+                },
+            ],
+        };
+        let s = serde_json::to_string(&g).unwrap();
+        let back: Generator = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.name, "starcat");
+        assert_eq!(back.components[0].name, "pericynthion");
     }
 }

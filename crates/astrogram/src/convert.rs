@@ -102,15 +102,25 @@ pub fn read_path(format: Format, path: &Path) -> Result<Vec<Chart>, ChartError> 
 /// as the file-header description field; pass `None` to use the default
 /// `"Blackmoon <version>"` string.
 ///
+/// `generator` is forwarded to [`crate::jzod::write_file`] when `format` is
+/// [`Format::Json`] (JZOD); every other format ignores it, since only JZOD
+/// carries a `generator` field. Pass `None` for any non-JZOD `format`;
+/// passing `None` for `Format::Json` returns [`ChartError::MissingGenerator`]
+/// — the caller must always know its own producer identity when asking for a
+/// JZOD document.
+///
 /// # Errors
 ///
 /// Returns [`ChartError::UnsupportedDirection`] when `format` is read-only or
 /// a web format.  Returns [`ChartError::Parse`] for format-level write errors
-/// (currently only possible for `SFcht`).
+/// (currently only possible for `SFcht`).  Returns
+/// [`ChartError::MissingGenerator`] when `format` is [`Format::Json`] and
+/// `generator` is `None`.
 pub fn write_bytes(
     format: Format,
     charts: &[Chart],
     sfcht_description: Option<&str>,
+    generator: Option<jzod::Generator>,
 ) -> Result<Vec<u8>, ChartError> {
     match format {
         Format::Sfcht => {
@@ -127,7 +137,8 @@ pub fn write_bytes(
             Ok(text.into_bytes())
         }
         Format::Json => {
-            let text = crate::jzod::write_file(charts);
+            let generator = generator.ok_or(ChartError::MissingGenerator)?;
+            let text = crate::jzod::write_file(charts, &generator);
             Ok(text.into_bytes())
         }
         Format::Raw => {
@@ -150,6 +161,63 @@ pub fn write_bytes(
             "use the Astrotheoros web provider rather than raw bytes",
         )),
     }
+}
+
+/// Encode `charts` for `format`, preserving format-specific state carried by an
+/// existing sink when overwriting it.
+///
+/// This is the write counterpart a front-end shares so it never has to special-
+/// case which formats round-trip existing on-disk state: pass the current bytes
+/// of the file being overwritten (or `None` when creating fresh or writing to a
+/// stream) and this decides what to preserve.
+///
+/// - [`Format::Sfcht`]: delegates to [`crate::sfcht::write_file_preserving`],
+///   which keeps the header `description` from `existing` if it parses.
+/// - Every other format: identical to [`write_bytes`]; `existing` is ignored
+///   (those writers carry no cross-write state).
+///
+/// The caller keeps path / stdout I/O (and its own write-error handling) — read
+/// the existing file yourself and hand the bytes in, mirroring [`read_path`]'s
+/// split of I/O from format logic.
+///
+/// # Errors
+///
+/// Same as [`write_bytes`]: [`ChartError::UnsupportedDirection`] for a read-only
+/// or web format, [`ChartError::Parse`] for a format write error, and
+/// [`ChartError::MissingGenerator`] when `format` is [`Format::Json`] and
+/// `generator` is `None`.
+pub fn write_preserving(
+    format: Format,
+    charts: &[Chart],
+    existing: Option<&[u8]>,
+    generator: Option<jzod::Generator>,
+) -> Result<Vec<u8>, ChartError> {
+    match format {
+        Format::Sfcht => crate::sfcht::write_file_preserving(existing, charts)
+            .map_err(|e| ChartError::Parse(e.to_string())),
+        _ => write_bytes(format, charts, None, generator),
+    }
+}
+
+/// Drop from `files` any entry that is the same file as `output` (the resolved
+/// output path), compared by canonical path so relative / absolute / symlink
+/// spellings all match. A `None` output, or an `output` that does not exist yet
+/// (canonicalization fails), excludes nothing.
+///
+/// A front-end expanding a directory of inputs uses this to avoid reading the
+/// file it is about to overwrite back in as an input.
+#[must_use]
+pub fn without_output_file(files: Vec<PathBuf>, output: Option<&Path>) -> Vec<PathBuf> {
+    let Some(output) = output else {
+        return files;
+    };
+    let Ok(canonical_output) = std::fs::canonicalize(output) else {
+        return files; // not written yet (or unresolvable) — nothing to exclude
+    };
+    files
+        .into_iter()
+        .filter(|f| !std::fs::canonicalize(f).is_ok_and(|c| c == canonical_output))
+        .collect()
 }
 
 /// The chart files discovered under a directory, plus a count of files whose
@@ -238,7 +306,7 @@ mod tests {
     #[test]
     fn write_then_read_zeus_roundtrips_count() {
         let charts = sample_charts();
-        let bytes = write_bytes(Format::Zeus, &charts, None).unwrap();
+        let bytes = write_bytes(Format::Zeus, &charts, None, None).unwrap();
         let back = read_bytes(Format::Zeus, &bytes).unwrap();
         assert_eq!(back.len(), charts.len());
     }
@@ -246,6 +314,73 @@ mod tests {
     #[test]
     fn read_write_only_format_errors() {
         assert!(read_bytes(Format::Json, b"{}").is_err());
+    }
+
+    #[test]
+    fn json_write_without_generator_errors() {
+        let charts = sample_charts();
+        let err = write_bytes(Format::Json, &charts, None, None).unwrap_err();
+        assert!(
+            matches!(err, ChartError::MissingGenerator),
+            "expected ChartError::MissingGenerator, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn json_write_with_generator_ok() {
+        let charts = sample_charts();
+        let generator = jzod::Generator {
+            name: "test".into(),
+            version: "0.0.0".into(),
+            components: vec![],
+        };
+        let bytes = write_bytes(Format::Json, &charts, None, Some(generator)).unwrap();
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn write_preserving_sfcht_keeps_existing_description() {
+        let charts = sample_charts();
+        // Seed an existing SFcht file carrying a non-Blackmoon description.
+        let seed = crate::sfcht::write_file_with_description(&charts, Some("Curated by Erin"))
+            .expect("seed writes");
+        // Overwrite via write_preserving with those existing bytes.
+        let out = write_preserving(Format::Sfcht, &charts, Some(&seed), None).expect("writes");
+        let (hdr, back) = crate::sfcht::parse_file(&out).expect("parses");
+        assert_eq!(
+            hdr.description, "Curated by Erin",
+            "description must survive"
+        );
+        assert_eq!(back.len(), charts.len());
+
+        // With no existing bytes, it matches a fresh plain write (default desc).
+        let fresh = write_preserving(Format::Sfcht, &charts, None, None).expect("writes");
+        let plain = write_bytes(Format::Sfcht, &charts, None, None).expect("writes");
+        assert_eq!(
+            fresh, plain,
+            "no-existing SFcht write equals plain write_bytes"
+        );
+    }
+
+    #[test]
+    fn write_preserving_non_sfcht_ignores_existing() {
+        let charts = sample_charts();
+        // For a non-SFcht format, existing bytes must not change the output:
+        // write_preserving equals write_bytes regardless of `existing`.
+        let with_existing =
+            write_preserving(Format::Zeus, &charts, Some(b"stale bytes"), None).expect("writes");
+        let plain = write_bytes(Format::Zeus, &charts, None, None).expect("writes");
+        assert_eq!(with_existing, plain);
+    }
+
+    #[test]
+    fn write_preserving_json_needs_generator() {
+        let charts = sample_charts();
+        // JZOD still requires a generator through the preserving path.
+        assert!(matches!(
+            write_preserving(Format::Json, &charts, None, None),
+            Err(ChartError::MissingGenerator)
+        ));
     }
 
     #[test]
@@ -334,6 +469,34 @@ mod tests {
         let scan = chart_files_under(root.path(), None).unwrap();
         assert_eq!(scan.files.len(), 1);
         assert!(scan.files[0].ends_with("linked.jhd"));
+    }
+
+    #[test]
+    fn without_output_file_drops_output_and_noops_otherwise() {
+        let dir = tempdir::TempDir::new("excl").unwrap();
+        let a = dir.path().join("a.jhd");
+        let b = dir.path().join("b.jhd");
+        let out = dir.path().join("collection.SFcht");
+        std::fs::write(&a, b"").unwrap();
+        std::fs::write(&b, b"").unwrap();
+        std::fs::write(&out, b"").unwrap();
+
+        // Output present in the list → dropped (matched by canonical path).
+        let kept = without_output_file(vec![a.clone(), b.clone(), out.clone()], Some(&out));
+        assert_eq!(kept, vec![a.clone(), b.clone()]);
+
+        // None output → no-op.
+        assert_eq!(
+            without_output_file(vec![a.clone(), b.clone()], None),
+            vec![a.clone(), b.clone()]
+        );
+
+        // Output that does not exist yet (first run) → no-op (canonicalize fails).
+        let missing = dir.path().join("not-yet.SFcht");
+        assert_eq!(
+            without_output_file(vec![a.clone(), b.clone()], Some(&missing)),
+            vec![a, b]
+        );
     }
 
     #[test]

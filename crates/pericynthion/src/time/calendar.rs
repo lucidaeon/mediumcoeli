@@ -89,6 +89,25 @@ pub fn auto_calendar(year: i32, month: u8, day: u8) -> Calendar {
     }
 }
 
+/// Is this date inside the Julian/Gregorian transition era — on or after the
+/// 1582-10-15 Catholic cutover through 1927?
+///
+/// In this window the recorded calendar depends on jurisdiction (Britain/US
+/// switched 1752, Russia 1918, Greece 1923, Turkey 1926), so a date alone
+/// cannot determine which calendar it was recorded in. Dates before the 1582
+/// cutover (proleptic Julian) and after 1927 (universally Gregorian) are
+/// unambiguous and return `false`.
+///
+/// Callers decide the policy (e.g. requiring an explicit calendar in this era);
+/// this predicate only reports membership.
+#[must_use]
+pub fn in_transition_era(year: i16, month: u8, day: u8) -> bool {
+    let on_or_after_cutover =
+        year > 1582 || (year == 1582 && (month > 10 || (month == 10 && day >= 15)));
+    let through_1927 = year <= 1927;
+    on_or_after_cutover && through_1927
+}
+
 /// A civil date with sub-second time-of-day.
 ///
 /// `year` follows the astronomical convention: a year 0 exists, and
@@ -228,6 +247,20 @@ pub fn jd_to_civil(jd: f64, calendar: Calendar) -> CivilDate {
 mod tests {
     use super::*;
     use approx::assert_abs_diff_eq;
+
+    #[test]
+    fn in_transition_era_bounds() {
+        // Before the 1582-10-15 cutover: unambiguous proleptic Julian.
+        assert!(!in_transition_era(1582, 10, 14));
+        // The cutover day and after, through 1927: ambiguous.
+        assert!(in_transition_era(1582, 10, 15));
+        assert!(in_transition_era(1752, 9, 2));
+        assert!(in_transition_era(1927, 12, 31));
+        // After 1927: universally Gregorian, unambiguous.
+        assert!(!in_transition_era(1928, 1, 1));
+        // Well before 1582.
+        assert!(!in_transition_era(1500, 6, 1));
+    }
 
     fn date(year: i32, month: u8, day: u8, h: u8, mi: u8, s: f64) -> CivilDate {
         CivilDate {

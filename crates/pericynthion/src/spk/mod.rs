@@ -158,6 +158,12 @@ impl SpkEphemeris {
             .find(|s| s.target == naif_id)
             .map(|s| s.center)
     }
+
+    /// The on-disk file this SPK was opened from.
+    #[must_use]
+    pub fn source_path(&self) -> &Path {
+        self.daf.path()
+    }
 }
 
 /// Open every `*.bsp` file directly inside `dir`, skipping any that are not
@@ -481,6 +487,34 @@ mod open_all_tests {
 #[cfg(test)]
 mod tests {
     use super::locate_default_bsp;
+
+    /// Write a minimal valid DAF/SPK (file record + empty summary record) at
+    /// `path`, creating parents. Zero segments — opens fine, covers nothing.
+    /// Mirrors `open_all_tests::write_minimal_spk`.
+    fn write_minimal_spk(path: &std::path::Path) {
+        use std::io::Write;
+        let mut file_rec = [0u8; 1024];
+        file_rec[0..8].copy_from_slice(b"DAF/SPK ");
+        file_rec[8..12].copy_from_slice(&2i32.to_le_bytes());
+        file_rec[12..16].copy_from_slice(&6i32.to_le_bytes());
+        file_rec[76..80].copy_from_slice(&2i32.to_le_bytes()); // FWARD=2
+        file_rec[88..96].copy_from_slice(b"LTL-IEEE");
+        let sum_rec = [0u8; 1024]; // NSUM=0
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(&file_rec).unwrap();
+        f.write_all(&sum_rec).unwrap();
+    }
+
+    #[test]
+    fn source_path_returns_the_opened_file() {
+        let tmp = tempdir::TempDir::new("spk_source_path").unwrap();
+        let path = tmp.path().join("synthetic.bsp");
+        write_minimal_spk(&path);
+        let spk = super::SpkEphemeris::open(&path).expect("open synthetic SPK");
+        assert_eq!(spk.source_path(), path);
+        assert!(spk.source_path().ends_with("synthetic.bsp"));
+    }
 
     #[test]
     fn open_dir_opens_bsp_and_skips_junk() {

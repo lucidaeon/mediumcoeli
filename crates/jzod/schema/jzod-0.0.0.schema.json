@@ -146,20 +146,45 @@
         "node":  { "type": "string", "enum": ["mean","true"], "description": "draconic node choice; absent = unrecorded" }
       }
     },
+    "DataSource": {
+      "type": "object",
+      "required": ["urls"],
+      "properties": {
+        "urls": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "cached": { "type": "string" }
+      }
+    },
     "Ephemeris": {
       "type": "object",
-      "required": ["source","calculated_at"],
+      "required": ["sources","calculated_at"],
       "properties": {
-        "source": { "type": "string" },
+        "sources": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/DataSource" }
+        },
         "calculated_at": { "type": "string",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
         "jd_ut": { "type": "number" },
         "jd_tt": { "type": "number" }
       }
     },
+    "Component": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" } }
+    },
+    "Generator": {
+      "type": "object",
+      "required": ["name", "version", "components"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "components": { "type": "array", "items": { "$ref": "#/$defs/Component" } }
+      }
+    },
     "Chart": {
       "type": "object",
-      "required": ["uid","type","birth","zodiac","coordinate_system","ephemeris",
+      "required": ["uid","type","birth","zodiac","coordinate_system","generator",
                    "placements","lunar_phase"],
       "properties": {
         "uid":  { "type": "string" },
@@ -189,6 +214,7 @@
         "coordinate_system": { "type": "string",
                                "enum": ["geocentric","topocentric","heliocentric"] },
         "sect": { "type": "string", "enum": ["diurnal","nocturnal","unknown"] },
+        "generator": { "$ref": "#/$defs/Generator" },
         "ephemeris": { "$ref": "#/$defs/Ephemeris" },
         "placements": { "$ref": "#/$defs/Placements" },
         "houses": {

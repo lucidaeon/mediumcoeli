@@ -197,6 +197,36 @@ pub enum AstrotheorosCredential {
     },
 }
 
+/// Error returned by [`AstrotheorosCredential::parse_token_triple`] when the
+/// input is not a colon-delimited `jwt:session_id:client_uat` triple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("token must be a 'jwt:session_id:client_uat' triple")]
+pub struct TokenTripleError;
+
+impl AstrotheorosCredential {
+    /// Parse a `jwt:session_id:client_uat` token triple into a
+    /// [`Token`](Self::Token) credential.
+    ///
+    /// Splits on the first two colons only, so a `client_uat` value that itself
+    /// contains colons is preserved verbatim. The `jwt` and `session_id`
+    /// segments never legitimately contain a colon.
+    ///
+    /// # Errors
+    /// [`TokenTripleError`] when fewer than three colon-delimited segments are
+    /// present (i.e. the string has fewer than two colons).
+    pub fn parse_token_triple(s: &str) -> Result<Self, TokenTripleError> {
+        let parts: Vec<&str> = s.splitn(3, ':').collect();
+        if parts.len() != 3 {
+            return Err(TokenTripleError);
+        }
+        Ok(Self::Token {
+            jwt: parts[0].to_string(),
+            session_id: parts[1].to_string(),
+            client_uat: parts[2].to_string(),
+        })
+    }
+}
+
 /// Per-record callback for [`AstrotheorosSession::write_charts`]:
 /// `(orig_index, new_index, total_new, source, status, landed_entry)`.
 pub type WriteRecordFn<'a> =
@@ -1220,6 +1250,48 @@ mod settings_tests {
             Err(e) => {
                 eprintln!("network/login unavailable ({e}) — skipping assertion");
             }
+        }
+    }
+
+    #[test]
+    fn parse_token_triple_splits_three_segments() {
+        match AstrotheorosCredential::parse_token_triple("jwt.abc:sess_1:1700000000") {
+            Ok(AstrotheorosCredential::Token {
+                jwt,
+                session_id,
+                client_uat,
+            }) => {
+                assert_eq!(jwt, "jwt.abc");
+                assert_eq!(session_id, "sess_1");
+                assert_eq!(client_uat, "1700000000");
+            }
+            other => panic!("expected Token credential, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_token_triple_keeps_colons_in_last_segment() {
+        // Only the first two colons split; a client_uat with colons survives.
+        match AstrotheorosCredential::parse_token_triple("j:s:a:b:c") {
+            Ok(AstrotheorosCredential::Token { client_uat, .. }) => {
+                assert_eq!(client_uat, "a:b:c");
+            }
+            other => panic!("expected Token credential, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_token_triple_rejects_wrong_arity() {
+        // AstrotheorosCredential is not PartialEq (holds no comparable payload
+        // guarantees), so match on the Err rather than assert_eq on the Result.
+        for bad in ["only_one", "jwt:session_only", ""] {
+            assert!(
+                matches!(
+                    AstrotheorosCredential::parse_token_triple(bad),
+                    Err(TokenTripleError)
+                ),
+                "expected TokenTripleError for {bad:?}"
+            );
         }
     }
 

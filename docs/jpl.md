@@ -70,12 +70,14 @@ packings of those same coefficients; the SPK files are a portable SPICE re-pack;
 the rest is reader code and documentation.
 
 Endianness matters because the binaries are raw little-endian or big-endian
-IEEE doubles. starcat reads **only** little-endian (`Linux/`) binaries.
+IEEE doubles. starcat's DE reader detects each file's byte order and byte-swaps
+on read, so it can consume either; in practice it uses the little-endian
+`Linux/` DE441 binaries because the big-endian `SunOS/` set carries no DE441.
 
 | Subdir | Format / purpose | Endianness | starcat uses |
 |--------|------------------|-----------|--------------|
 | `Linux/` | Little-endian DE binaries: paired `header.NNN` + `linux_*.NNN` coefficient file. Directly memory-mapped by starcat's DE reader. | little-endian | **YES** (DE441 only) |
-| `SunOS/` | Same DE data, big-endian packing (`xnp_*.NNN`), for legacy SPARC/PowerPC. | big-endian | no (wrong endianness; reader rejects) |
+| `SunOS/` | Same DE data, big-endian packing (`xnp_*.NNN`), for legacy SPARC/PowerPC. | big-endian | no (carries no DE441; only through de423) |
 | `ascii/` | The source coefficients as text: `header.NNN` + `ascp*.NNN` (forward JD) / `ascm*.NNN` (negative JD) blocks. Users convert these to a platform binary. This is the *origin* the `Linux/`+`SunOS/` binaries are built from. | text | no (redundant source; also huge) |
 | `bsp/` | SPICE SPK (`.bsp`) re-pack of the DE data - portable across platforms, read via the SPICE toolkit. A different reader path than starcat's native DE reader. | portable | no |
 | `bpc/` | Binary planetary **constants** kernel (`.bpc`) plus a text frame kernel (`.tf`): the Moon's orientation (lunar libration Euler angles, PA-to-ME frame). Orientation, not body positions. | portable | no |
@@ -233,8 +235,8 @@ scope for a mirror `migrate`.
 - **`planets/ascii/`** - the *source* the `Linux/` binary is built from;
   redundant once you have the binary, and larger (ascii/de441 ~8.6 GB vs the
   2.6 GB binary).
-- **`planets/SunOS/`** - big-endian; starcat's reader rejects big-endian, and
-  it does not even contain de441.
+- **`planets/SunOS/`** - big-endian; starcat's reader supports big-endian, but
+  this set does not contain de441 (only through de423).
 - **`planets/bsp/`, `bpc/`, `nio/`, `fortran/`, `ioms/`, `stations/`,
   `test-data/`** - SPK/orientation re-packs, JPL-internal NAVIO, reader source
   code, PDFs, ground-station coordinates, and validation printouts: none are the
@@ -424,7 +426,7 @@ positions); `.bpc` = binary PCK (orientation); `.log` / `.tex` / `.txt` /
 |------|-----------|-----------------|
 | `Linux/deNNN/` | LE DE binaries (header + `linux_*`/`lnx*`, + `testpo`). | **The source of the entourage registry.** de441 wired; others need wiring (see above). |
 | `ascii/` | DE coefficients as text (`ascp*`/`ascm*`), the source the binaries build from. | Excluded: redundant text source, larger than the binary. |
-| `SunOS/` | Big-endian (`xnp_*`) DE binaries; only through de423. | Excluded: big-endian (reader rejects), and no de440/de441. |
+| `SunOS/` | Big-endian (`xnp_*`) DE binaries; only through de423. | Excluded: no de440/de441 (only through de423); the reader itself supports big-endian. |
 | `bsp/deNNN.bsp` | SPK re-pack of the planetary ephemeris. Verified: `de441.bsp` is a Type-2 DAF/SPK carrying planet barycenters 1-10 vs SSB (center 0) plus 199/299/399/301 body-centers - the same bodies as the Linux binary, **SPK-reader-consumable** in principle. | Excluded as redundant: starcat's planet path uses the native DE reader, and the SPK locators only match `sb441-*`, so this `.bsp` is not located. It is a *usable alternative* format, not a missing capability. Also carries `_plus_MarsPC`, `_s` (short), `TTmTDB.*.bsp`, and many non-441 DEs - all redundant. |
 | `bpc/` | `moon_pa_de430_1550-2650.bpc` (binary PCK: lunar libration Euler angles) + `moon_190627.tf` (PA-to-ME frame) + README. Lunar **orientation**, not body position. | Excluded: orientation kernels; starcat computes positions, not lunar body-fixed frames. |
 | `nio/` | NAVIO (`.ftp`/`.nio`) DE files + `partials/` (7 `ppar_*` partial-derivative files for nav fits). | Excluded: JPL-internal NAVIO, unusable outside JPL nav software. |

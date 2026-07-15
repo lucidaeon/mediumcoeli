@@ -1,6 +1,6 @@
 [package]
 name = "blackmoon"
-version = "0.5.0"
+version = "0.6.0"
 description = "Astrology software liberty and mobility: Command-line astrology data-format converter built on astrogram"
 keywords = ["astrology", "chart", "natal", "sfcht"]
 categories = ["command-line-utilities", "encoding"]
@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 astrogram = { workspace = true, features = ["cookie-import"] }
+jzod.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true
@@ -29,3 +30,4 @@ serde_json.workspace = true
 
 [dev-dependencies]
 tempdir = "0.3"
+serde_json.workspace = true

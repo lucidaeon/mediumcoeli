@@ -84,11 +84,15 @@ pub struct Ephemeris<'a> {
     file: &'a dyn RecordSource,
     header: &'a Header,
     emrat: f64,
+    source_path: Option<std::path::PathBuf>,
 }
 
 impl<'a> Ephemeris<'a> {
     /// Bundle a source with its header. Extracts EMRAT once so each
     /// [`Ephemeris::state`] call doesn't repeat the map lookup.
+    ///
+    /// No source path is recorded; use [`Ephemeris::with_source_path`] to
+    /// attach one when the caller knows the on-disk DE binary path.
     ///
     /// # Errors
     ///
@@ -104,7 +108,25 @@ impl<'a> Ephemeris<'a> {
             file,
             header,
             emrat,
+            source_path: None,
         })
+    }
+
+    /// Attach the on-disk path of the DE binary this ephemeris was built
+    /// from, for provenance reporting. Builder-style: consumes and returns
+    /// `self` so it composes with [`Ephemeris::new`] at the call site
+    /// without disturbing existing callers that don't need it.
+    #[must_use]
+    pub fn with_source_path(mut self, path: std::path::PathBuf) -> Self {
+        self.source_path = Some(path);
+        self
+    }
+
+    /// The on-disk path of the DE binary this ephemeris was built from, if
+    /// the caller attached one via [`Ephemeris::with_source_path`].
+    #[must_use]
+    pub fn source_path(&self) -> Option<&std::path::Path> {
+        self.source_path.as_deref()
     }
 
     /// The Earth-Moon mass ratio (E/M) used by this header.
@@ -227,4 +249,71 @@ mod tests {
     // Pure unit tests live in `body.rs` and `chebyshev.rs`; the body-
     // position interpolation requires an actual ephemeris file and is
     // covered by the `ephemeris_de441.rs` integration test.
+
+    use super::Ephemeris;
+    use crate::jpl::header::{BodyLayoutTable, EpochSpan, Header};
+    use crate::jpl::reader::{OwnedRecord, RecordSource};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    /// A `RecordSource` stand-in that never actually serves a record — the
+    /// `source_path` builder test only needs a value that type-checks as
+    /// `&dyn RecordSource`, never calls `state`/`record_for_jd`.
+    struct StubSource;
+
+    impl RecordSource for StubSource {
+        fn granule_days(&self) -> f64 {
+            32.0
+        }
+        fn start_jd(&self) -> f64 {
+            0.0
+        }
+        fn end_jd(&self) -> f64 {
+            0.0
+        }
+        fn record_for_jd(
+            &self,
+            _jd_tt: f64,
+        ) -> Result<OwnedRecord, crate::error::PericynthionError> {
+            unimplemented!("stub source is never queried by this test")
+        }
+    }
+
+    /// A minimal `Header` carrying only what `Ephemeris::new` requires
+    /// (`EMRAT` in `constants`); no other field is exercised by this test.
+    fn stub_header() -> Header {
+        let mut constants = BTreeMap::new();
+        constants.insert("EMRAT".to_string(), 81.300_57);
+        Header {
+            ksize: 0,
+            ncoeff: 0,
+            title: Vec::new(),
+            epoch: EpochSpan {
+                start_jd: 0.0,
+                end_jd: 0.0,
+                granule_days: 32.0,
+            },
+            constants,
+            layout: BodyLayoutTable {
+                offsets: Vec::new(),
+                coeffs_per_axis: Vec::new(),
+                subgranules: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn with_source_path_is_none_by_default_and_settable() {
+        let source = StubSource;
+        let header = stub_header();
+        let ephem = Ephemeris::new(&source, &header).expect("build Ephemeris");
+        assert!(
+            ephem.source_path().is_none(),
+            "Ephemeris::new leaves source_path unset"
+        );
+
+        let path = PathBuf::from("/data/nasa/de441/linux_m13000p17000.441");
+        let ephem = ephem.with_source_path(path.clone());
+        assert_eq!(ephem.source_path(), Some(path.as_path()));
+    }
 }

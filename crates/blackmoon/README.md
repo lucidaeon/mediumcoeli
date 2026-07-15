@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/blackmoon.svg)](https://crates.io/crates/blackmoon)
 [![License](https://img.shields.io/crates/l/blackmoon.svg)](https://github.com/lucidaeon/mediumcoeli#license)
 
-A command-line astrology data manager — reads any supported target, writes any supported target, deduplicates everything in between.
+A command-line astrology data manager with support for astro.com, AstroDatabank, Astro Gold, Astrolog, astrotheoros.com, Jagannatha Hora, lunaastrology.com, Solar Fire, and Zeus.
 
 ## What it does
 
@@ -13,14 +13,14 @@ One CLI verb (run with no subcommand). Inputs are file paths or a web account; t
 blackmoon input.zdb --output out.SFcht
 blackmoon a.SFcht b.zdb export.xml --output merged.SFcht
 blackmoon --from luna --luna-token $BLACKMOON_LUNA_TOKEN --output charts.SFcht
-blackmoon --from astrocom --astrocom-user me@x.com --astrocom-pass ... --output charts.SFcht
-blackmoon --from astrotheoros --astrotheoros-user me@x.com --astrotheoros-pass ... --output charts.SFcht
+blackmoon --from astrocom --astrocom-user me@example.com --astrocom-pass ... --output charts.SFcht
+blackmoon --from astrotheoros --astrotheoros-user me@example.com --astrotheoros-pass ... --output charts.SFcht
 blackmoon charts.SFcht --normalize
 ```
 
 Targets currently wired up:
 
-- **File:** Solar Fire `.SFcht` binary (cp1252), Zeus `.zdb` semicolon-text, Astrodatabank `.xml`, Astrolog AAF `.aaf` (read-only), Jagannatha Hora `.jhd` (read-only).
+- **File:** Solar Fire `.SFcht` binary (cp1252), Zeus `.zdb` semicolon-text, Astrodatabank `.xml`, Astrolog AAF `.aaf` (read-only), Jagannatha Hora `.jhd` (read-only), JSON machine output (`--to json`, write-only), raw full-fidelity dump (`--to raw`, write-only).
 - **Web (authenticated):** lunaastrology.com (`--from/--to luna`), astro.com (`--from/--to astrocom`), astrotheoros.com (`--from/--to astrotheoros`) — full CRUD. `--clear` deletes every chart on a web target (after a y/N gate); `--consolidate` dedupes a web target in place.
 
 `--normalize` strips non-cp1252 characters and collapses whitespace; with no `--output`, it edits each input file in place. `--output now.SFcht` substitutes a UTC timestamp.
@@ -113,3 +113,8 @@ group whose `group_id` is already decided, so resuming is a no-op if
 everything was finished.  A partially-written trailing line (the
 "crash mid-write" case) is silently skipped on read — the user is
 re-prompted for that one record on the next run.
+
+## Disclaimer
+
+All product names, logos, and brands are property of their respective owners. All company, product and service names used in this software and documentation are for identification purposes only. Use of these names, logos, and brands does not imply endorsement.
+

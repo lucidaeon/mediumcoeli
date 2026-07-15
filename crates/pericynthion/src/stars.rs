@@ -95,6 +95,40 @@ pub const NOTABLE: &[(&str, u16)] = &[
     ("Markab", 8781),
 ];
 
+/// Expand the `notable` / `all` sentinel tokens in a star-name list to the
+/// [`NOTABLE`] common names, passing every other token through unchanged.
+///
+/// Case-insensitive: any token equal to `"notable"` or `"all"` (ignoring ASCII
+/// case) triggers expansion. De-duplicated case-insensitively, so an explicitly
+/// named notable star is not listed (or computed) twice. Order-preserving: the
+/// sentinel-expanded [`NOTABLE`] names come first in catalog order, then any
+/// remaining explicit names in input order.
+///
+/// This is the shared expansion every front-end applies before resolving stars,
+/// so a `--stars notable` request means the same set everywhere.
+#[must_use]
+pub fn expand_notable(tokens: &[String]) -> Vec<String> {
+    let wants_notable = tokens
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("notable") || t.eq_ignore_ascii_case("all"));
+    let mut out: Vec<String> = Vec::new();
+    if wants_notable {
+        for (common, _hr) in NOTABLE {
+            out.push((*common).to_string());
+        }
+    }
+    for t in tokens {
+        if t.eq_ignore_ascii_case("notable") || t.eq_ignore_ascii_case("all") {
+            continue;
+        }
+        if out.iter().any(|e| e.eq_ignore_ascii_case(t)) {
+            continue;
+        }
+        out.push(t.clone());
+    }
+    out
+}
+
 /// The embedded CDS `ReadMe` for the Bright Star Catalogue (V/50): the
 /// authoritative byte-by-byte record format and provenance for the data behind
 /// [`BSC5_CATALOG`]. Returned verbatim from the private `bsc5_catalogue` module.
@@ -839,6 +873,25 @@ fn parse_bsc5_line(line: &'static str) -> Option<BscEntry> {
 #[allow(clippy::float_cmp)]
 mod fixed_star_tests {
     use super::*;
+
+    #[test]
+    fn expand_notable_sentinels_dedupe_and_preserve_order() {
+        // Both sentinels expand to the full NOTABLE set.
+        let notable = expand_notable(&["notable".to_string()]);
+        assert_eq!(notable.len(), NOTABLE.len());
+        assert_eq!(notable[0], NOTABLE[0].0);
+        let via_all = expand_notable(&["all".to_string()]); // case-insensitive alias
+        assert_eq!(via_all, notable);
+        // Case-insensitive sentinel; explicit already-present name not duplicated.
+        let with_dup = expand_notable(&["NoTaBlE".to_string(), "Regulus".to_string()]);
+        assert_eq!(with_dup.len(), NOTABLE.len());
+        // Non-sentinel names pass through in input order after expansion.
+        let explicit = expand_notable(&["Sirius".to_string()]);
+        assert_eq!(explicit, vec!["Sirius".to_string()]);
+        let with_extra = expand_notable(&["notable".to_string(), "NotACatalogStar".to_string()]);
+        assert_eq!(with_extra.len(), NOTABLE.len() + 1);
+        assert_eq!(with_extra.last().unwrap(), "NotACatalogStar");
+    }
 
     #[test]
     fn regulus_j2000_is_late_leo() {

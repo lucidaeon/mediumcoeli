@@ -47,6 +47,48 @@ pub fn drop_summary<S: ::std::hash::BuildHasher>(
     }
 }
 
+/// Record the source `format` of each chart in `batch` into `source_of`,
+/// keeping the **first** format seen for a given [`key`] (matching
+/// [`crate::consolidate::merge`]'s keep-first dedup). Charts already present
+/// under their key are left untouched.
+///
+/// Front-ends build this provenance map as they read each input batch, so later
+/// stages ([`drop_summary`], [`fill_targets`]) can judge every chart against the
+/// capabilities of the format it actually came from.
+pub fn record_sources<S: ::std::hash::BuildHasher>(
+    source_of: &mut HashMap<DatetimeKey, Format, S>,
+    batch: &[Chart],
+    format: Format,
+) {
+    for chart in batch {
+        source_of.entry(key(chart)).or_insert(format);
+    }
+}
+
+/// The union of [`crate::capability::fill_fields`] across every distinct source
+/// format present in `source_of`, for writing to `sink`.
+///
+/// This is the set of settings fields (house system / zodiac / locus) that at
+/// least one source never carried but `sink` demands — so a mixed batch (e.g.
+/// some ADB charts, some `SFcht`) yields exactly the fields that need filling.
+/// Duplicates are removed (first occurrence wins).
+#[must_use]
+pub fn fill_fields_needed<S: ::std::hash::BuildHasher>(
+    source_of: &HashMap<DatetimeKey, Format, S>,
+    sink: Format,
+) -> Vec<ChartField> {
+    let sources: std::collections::HashSet<Format> = source_of.values().copied().collect();
+    let mut needed: Vec<ChartField> = Vec::new();
+    for src in sources {
+        for f in crate::capability::fill_fields(src, sink) {
+            if !needed.contains(&f) {
+                needed.push(f);
+            }
+        }
+    }
+    needed
+}
+
 /// A resolved fill value for a single capability field.
 #[derive(Clone, Copy)]
 pub enum FillValue {
@@ -70,6 +112,10 @@ pub struct FillSpec {
     pub flag_suffix: &'static str,
     /// Suggested default slug offered when the user gives no value.
     pub default_slug: &'static str,
+    /// Canonical slugs this field accepts — mirrors the matching enum's
+    /// `accepted_slugs()`, so prompts and non-interactive-stdin failures can
+    /// enumerate valid choices.
+    pub accepted: &'static [&'static str],
     /// Parse a slug into the typed fill value; `None` = unknown slug.
     pub parse: fn(&str) -> Option<FillValue>,
 }
@@ -93,6 +139,7 @@ pub const FILL_SPECS: &[FillSpec] = &[
         label: "house system",
         flag_suffix: "house",
         default_slug: "placidus",
+        accepted: HouseSystem::accepted_slugs(),
         parse: parse_fill_house,
     },
     FillSpec {
@@ -100,6 +147,7 @@ pub const FILL_SPECS: &[FillSpec] = &[
         label: "zodiac",
         flag_suffix: "zodiac",
         default_slug: "tropical",
+        accepted: Zodiac::accepted_slugs(),
         parse: parse_fill_zodiac,
     },
     FillSpec {
@@ -107,6 +155,7 @@ pub const FILL_SPECS: &[FillSpec] = &[
         label: "coordinate system",
         flag_suffix: "locus",
         default_slug: "geocentric",
+        accepted: CoordinateSystem::accepted_slugs(),
         parse: parse_fill_coord,
     },
 ];
@@ -261,6 +310,71 @@ mod tests {
             NON_OMITTABLE.len(),
             "FILL_SPECS and NON_OMITTABLE must have the same number of entries"
         );
+    }
+
+    /// Each `FILL_SPECS` row's `accepted` list must be non-empty and equal to
+    /// the matching enum's `accepted_slugs()`, so prompts built from
+    /// `FILL_SPECS` enumerate exactly the values `parse` will accept.
+    #[test]
+    fn fill_specs_accepted_matches_enum_accepted_slugs() {
+        for spec in FILL_SPECS {
+            assert!(
+                !spec.accepted.is_empty(),
+                "FILL_SPECS entry for {:?} has an empty accepted list",
+                spec.field
+            );
+        }
+
+        let house = fill_spec(crate::capability::ChartField::HouseSystem).unwrap();
+        assert_eq!(house.accepted, HouseSystem::accepted_slugs());
+
+        let zodiac = fill_spec(crate::capability::ChartField::Zodiac).unwrap();
+        assert_eq!(zodiac.accepted, Zodiac::accepted_slugs());
+
+        let coord = fill_spec(crate::capability::ChartField::CoordinateSystem).unwrap();
+        assert_eq!(coord.accepted, CoordinateSystem::accepted_slugs());
+    }
+
+    #[test]
+    fn record_sources_keeps_first_seen_format() {
+        let c = crate::test_support::fully_populated();
+        let mut source_of: HashMap<DatetimeKey, Format> = HashMap::new();
+        record_sources(&mut source_of, std::slice::from_ref(&c), Format::Sfcht);
+        // A later batch re-observing the same chart under a different format
+        // must NOT overwrite the first-seen source.
+        record_sources(&mut source_of, std::slice::from_ref(&c), Format::Luna);
+        assert_eq!(source_of.get(&key(&c)), Some(&Format::Sfcht));
+    }
+
+    #[test]
+    fn fill_fields_needed_unions_across_sources() {
+        // Luna source lacks house/zodiac/coord that an SFcht sink preserves;
+        // an SFcht source lacks none. The union is exactly Luna's fill set.
+        let mut luna_chart = crate::test_support::fully_populated();
+        luna_chart.name = "FromLuna".into();
+        let mut sfcht_chart = crate::test_support::fully_populated();
+        sfcht_chart.name = "FromSfcht".into();
+        let mut source_of: HashMap<DatetimeKey, Format> = HashMap::new();
+        source_of.insert(key(&luna_chart), Format::Luna);
+        source_of.insert(key(&sfcht_chart), Format::Sfcht);
+
+        let needed = fill_fields_needed(&source_of, Format::Sfcht);
+        let expected = crate::capability::fill_fields(Format::Luna, Format::Sfcht);
+        // Same membership regardless of set-iteration order.
+        for f in &needed {
+            assert!(expected.contains(f));
+        }
+        assert_eq!(needed.len(), expected.len());
+        assert!(!needed.is_empty(), "Luna→SFcht must need fills");
+    }
+
+    #[test]
+    fn fill_fields_needed_empty_when_no_loss() {
+        let c = crate::test_support::fully_populated();
+        let mut source_of: HashMap<DatetimeKey, Format> = HashMap::new();
+        source_of.insert(key(&c), Format::Sfcht);
+        // SFcht → SFcht needs no fills.
+        assert!(fill_fields_needed(&source_of, Format::Sfcht).is_empty());
     }
 
     #[test]

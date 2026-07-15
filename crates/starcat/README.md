@@ -47,12 +47,14 @@ asteroids:
   and `sb441-n373s.bsp` (the dwarf planets; the DE440-window subset of the full
   `sb441-n373.bsp`, which is a fetchable optional extra).
 
-`de441` is the **default**, but it is one of several **entourages** — a DE
-integration bundled with the asteroid perturbers that travel with it. Any series
-is selectable: `starcat data fetch <slug>` (tab-complete to see them — `de441`,
-`de431`, `de440`, `de430`, …), and `starcat data fetch --list` prints them all
-with sizes. The rest of this section describes `de441`; the others behave the
-same way.
+`de441` is one of several **entourages** — a DE integration bundled with the
+asteroid perturbers that travel with it. There is no default dataset: a bare
+`starcat data fetch` (no slug) prints the dataset list and exits rather than
+guessing one. Any series is selectable: `starcat data fetch <slug>`
+(tab-complete to see them — `de441`, `de431`, `de440`, `de430`, …), and
+`starcat data fetch --list` prints them all with sizes. `starcat data fetch
+bsc5` fetches the fixed-star catalogue instead of a DE series (see below). The
+rest of this section describes `de441`; the others behave the same way.
 
 They ship as pre-built files at fixed URLs, so a fetch is a plain mirrored
 download (resumable and self-verifying by BLAKE3). The command prints the
@@ -205,6 +207,5 @@ binary at build time, and that its source is `catalog.gz` from CDS VizieR V/50.
 
 Now enumerates the full production set at runtime: the DE441 binary,
 `sb441-n16.bsp`, `sb441-n373.bsp`, and each unbundled minor body's Horizons
-`<naif>.bsp` (resolved via `--horizons` → `$STARCAT_HORIZONS_DATA` →
-`…/starcat/horizons/`) — so KBOs, TNOs, and centaurs are included. One path per
-line, never canonicalized.
+`<naif>.bsp` (resolved via `$STARCAT_HORIZONS_DATA` → `…/starcat/horizons/`) — so
+KBOs, TNOs, and centaurs are included. One path per line, never canonicalized.

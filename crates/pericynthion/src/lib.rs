@@ -136,14 +136,17 @@ pub mod provenance;
 #[cfg(feature = "sidereal")]
 pub mod sidereal;
 pub mod spk;
-#[cfg(feature = "data-dir")]
-pub use datafetch::{Dataset, dataset_from_slug, datasets, default_data_dir};
 #[cfg(feature = "data-fetch")]
 pub use datafetch::{
-    FetchError, FetchProgress, FetchSummary, HorizonsMigrateItem, HorizonsMigratePlan,
-    HorizonsMigrateSummary, MigrateItem, MigrateMode, MigratePlan, MigrateSummary, entry_url,
-    fetch_dataset, fetch_entries, horizons_migrate_apply, horizons_migrate_scan, migrate_apply,
-    migrate_scan, part_path, probe_cow,
+    Bsc5FetchError, Bsc5FetchOutcome, FetchError, FetchProgress, FetchSummary, HorizonsMigrateItem,
+    HorizonsMigratePlan, HorizonsMigrateSummary, MigrateItem, MigrateMode, MigratePlan,
+    MigrateSummary, MirrorAttempt, entry_url, fetch_bsc5, fetch_bsc5_with, fetch_dataset,
+    fetch_entries, horizons_migrate_apply, horizons_migrate_scan, migrate_apply, migrate_scan,
+    part_path, probe_cow,
+};
+#[cfg(feature = "data-dir")]
+pub use datafetch::{
+    Dataset, DatasetKind, dataset_from_slug, datasets, default_data_dir, default_horizons_dir,
 };
 pub mod stars;
 pub mod time;
@@ -174,3 +177,15 @@ pub use chart::{
 pub use coords::topocentric::ObserverLocation;
 #[cfg(feature = "jzod")]
 pub use jzod::{ChartBirth, house_for, to_jzod_chart};
+
+/// This crate's package version (compile-time), for `generator` provenance.
+pub const PERICYNTHION_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod version_tests {
+    #[test]
+    fn exposes_crate_version() {
+        assert_eq!(crate::PERICYNTHION_VERSION, env!("CARGO_PKG_VERSION"));
+        assert!(!crate::PERICYNTHION_VERSION.is_empty());
+    }
+}

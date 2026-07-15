@@ -29,9 +29,13 @@ pub mod uid;
 /// own package version.
 pub const FORMAT_VERSION: &str = "0.0.0";
 
+/// This crate's package version (compile-time), for `generator` provenance.
+pub const JZOD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use chart::{
-    Birth, Chart, ChartType, CoordinateSystem, Datetime, DraconicNode, Ephemeris, Location,
-    LunarPhase, LunarPhaseName, Name, Sect, SiderealFrame, Tithi, Zodiac,
+    Birth, Chart, ChartType, Component, CoordinateSystem, DataSource, Datetime, DraconicNode,
+    Ephemeris, Generator, Location, LunarPhase, LunarPhaseName, Name, Sect, SiderealFrame, Tithi,
+    Zodiac,
 };
 pub use coord::{Degrees8, Position, Sign};
 pub use document::JzodDocument;
@@ -67,5 +71,11 @@ mod version_tests {
     #[test]
     fn format_version_is_pinned() {
         assert_eq!(FORMAT_VERSION, "0.0.0");
+    }
+
+    #[test]
+    fn exposes_crate_version() {
+        assert_eq!(crate::JZOD_VERSION, env!("CARGO_PKG_VERSION"));
+        assert!(!crate::JZOD_VERSION.is_empty());
     }
 }
